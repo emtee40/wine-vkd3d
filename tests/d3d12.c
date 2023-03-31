@@ -24386,7 +24386,7 @@ static void test_resolve_query_data_in_reordered_command_list(void)
     reset_command_list(command_lists[0], context.allocator);
     get_buffer_readback_with_command_list(readback_buffer, DXGI_FORMAT_UNKNOWN, &rb, queue, command_lists[0]);
     result = get_readback_uint64(&rb.rb, 0, 0);
-    todo ok(result == context.render_target_desc.Width * context.render_target_desc.Height,
+    ok(result == context.render_target_desc.Width * context.render_target_desc.Height,
             "Got unexpected result %"PRIu64".\n", result);
     release_resource_readback(&rb);
 

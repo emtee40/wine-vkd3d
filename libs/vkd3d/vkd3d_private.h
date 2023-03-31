@@ -1437,17 +1437,11 @@ struct d3d12_command_heap
     size_t data_size;
 };
 
-/* ID3D12CommandList */
-struct d3d12_command_list
+struct d3d12_command_list_state
 {
-    ID3D12GraphicsCommandList5 ID3D12GraphicsCommandList5_iface;
-    LONG refcount;
-
     D3D12_COMMAND_LIST_TYPE type;
     VkQueueFlags vk_queue_flags;
 
-    bool is_recording;
-    bool is_valid;
     VkCommandBuffer vk_command_buffer;
 
     uint32_t strides[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
@@ -1480,7 +1474,27 @@ struct d3d12_command_list
     VkBuffer so_counter_buffers[D3D12_SO_BUFFER_SLOT_COUNT];
     VkDeviceSize so_counter_buffer_offsets[D3D12_SO_BUFFER_SLOT_COUNT];
 
-    void (*update_descriptors)(struct d3d12_command_list *list, enum vkd3d_pipeline_bind_point bind_point);
+    void (*update_descriptors)(struct d3d12_command_list_state *list, enum vkd3d_pipeline_bind_point bind_point);
+};
+
+/* ID3D12CommandList */
+struct d3d12_command_list
+{
+    ID3D12GraphicsCommandList5 ID3D12GraphicsCommandList5_iface;
+    LONG refcount;
+
+    D3D12_COMMAND_LIST_TYPE type;
+    VkQueueFlags vk_queue_flags;
+
+    bool is_recording;
+    bool is_valid;
+    bool is_flushed;
+    VkCommandBuffer vk_command_buffer;
+
+    struct d3d12_command_allocator *allocator;
+    struct d3d12_device *device;
+
+    void (*update_descriptors)(struct d3d12_command_list_state *list, enum vkd3d_pipeline_bind_point bind_point);
     struct d3d12_descriptor_heap *descriptor_heaps[64];
     unsigned int descriptor_heap_count;
 
