@@ -3972,6 +3972,11 @@ struct vkd3d_resource_tile_coordinate
     unsigned int z;
 };
 
+static bool d3d12_resource_subresource_is_packed(const struct d3d12_resource *resource, unsigned int subresource)
+{
+    return subresource % resource->desc.MipLevels >= resource->tiles.standard_mip_count;
+}
+
 static inline unsigned int d3d12_tile_region_size_compute_tile_count(const D3D12_TILE_REGION_SIZE *region_size)
 {
     return region_size->Width * region_size->Height * region_size->Depth;
@@ -3991,8 +3996,22 @@ static bool resource_validate_tiled_coordinate(const struct d3d12_resource *reso
 {
     const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[coordinate->Subresource].extent;
 
+    /* The mipmap packing documentation states, "...applications are required to either map
+     * all of the tiles that are designated as packed, or none of them, at a time." */
+    if (d3d12_resource_subresource_is_packed(resource, coordinate->Subresource))
+        return !coordinate->X && !coordinate->Y && !coordinate->Z;
+
     return coordinate->Subresource < resource->tiles.subresource_count
             && coordinate->X < extent->width && coordinate->Y < extent->height && coordinate->Z < extent->depth;
+}
+
+static unsigned int d3d12_resource_get_tiled_subresource(const struct d3d12_resource *resource,
+        unsigned int subresource)
+{
+    unsigned int mip_level = subresource % resource->desc.MipLevels;
+    return (mip_level >= resource->tiles.standard_mip_count)
+        ? subresource - mip_level + resource->tiles.standard_mip_count
+        : subresource;
 }
 
 /* coordinate must already be validated.
@@ -4001,12 +4020,16 @@ static bool resource_validate_tiled_coordinate(const struct d3d12_resource *reso
 static void resource_clamp_tile_region_size(const struct d3d12_resource *resource,
         const D3D12_TILED_RESOURCE_COORDINATE *coordinate, D3D12_TILE_REGION_SIZE *size)
 {
-    const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[coordinate->Subresource].extent;
+    const struct vkd3d_tiled_region_extent *extent;
+    unsigned int subresource;
+
+    subresource = d3d12_resource_get_tiled_subresource(resource, coordinate->Subresource);
+    extent = &resource->tiles.subresources[subresource].extent;
 
     if (!size->UseBox)
     {
         unsigned int max_count = resource->tiles.total_count;
-        max_count -= resource->tiles.subresources[coordinate->Subresource].offset;
+        max_count -= resource->tiles.subresources[subresource].offset;
         max_count -= coordinate->X + coordinate->Y * extent->width + coordinate->Z * extent->width * extent->height;
         if (size->NumTiles <= max_count)
             return;
@@ -4071,6 +4094,52 @@ static bool initialise_tile_region(struct vkd3d_resource_tile_coordinate *base_c
         memset(base_coordinate, 0, sizeof(*base_coordinate));
         d3d12_tile_region_size_set_entire_subresource(region_size, resource, start_coordinate->Subresource);
     }
+
+    return true;
+}
+
+static void vk_offset_convert_tiles_to_texels(VkOffset3D *offset, const VkExtent3D *tile_extent)
+{
+    offset->x *= tile_extent->width;
+    offset->y *= tile_extent->height;
+    offset->z *= tile_extent->depth;
+}
+
+static void d3d12_resource_get_vk_subresource(const struct d3d12_resource *resource, unsigned int subresource,
+        VkImageSubresource *vk_subresource)
+{
+    const struct vkd3d_format *format = resource->format;
+    const D3D12_RESOURCE_DESC1 *desc = &resource->desc;
+
+    assert(format->plane_count == 1);
+
+    vk_subresource->mipLevel = subresource % desc->MipLevels;
+    vk_subresource->arrayLayer = subresource / desc->MipLevels;
+    vk_subresource->aspectMask = format->vk_aspect_mask;
+}
+
+static bool d3d12_tiled_resource_coordinate_normalise(const struct vkd3d_resource_tile_coordinate *base_coordinate,
+        const D3D12_TILE_REGION_SIZE *region_extent, D3D12_TILED_RESOURCE_COORDINATE *coordinate)
+{
+    unsigned int carry;
+
+    /* X and Y calculations should compile branchless on most hardware. */
+    carry = coordinate->X >= base_coordinate->x + region_extent->Width;
+    coordinate->Y += carry;
+    coordinate->X -= region_extent->Width & -carry;
+
+    carry = coordinate->Y >= base_coordinate->y + region_extent->Height;
+    coordinate->Z += carry;
+    coordinate->Y -= region_extent->Height & -carry;
+
+    if (coordinate->Z < base_coordinate->z + region_extent->Depth)
+        return false;
+
+    ++coordinate->Subresource;
+    /* Regions do not carry over to the next sub resource. */
+    coordinate->X = 0;
+    coordinate->Y = 0;
+    coordinate->Z = 0;
 
     return true;
 }
@@ -6682,6 +6751,32 @@ static void d3d12_resource_update_buffer_tile_mappings(struct d3d12_resource *re
     }
 }
 
+/* Never called for mip tails. */
+static void d3d12_resource_update_image_tile_mapping(struct d3d12_resource *resource, unsigned int subresource,
+        D3D12_TILED_RESOURCE_COORDINATE *coordinate, VkDeviceMemory vk_memory, VkDeviceSize memory_offset)
+{
+    struct vkd3d_subresource_tile_mapping *mappings = resource->tiles.subresources[subresource].mappings;
+    const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[subresource].extent;
+    unsigned int i;
+
+    i = coordinate->X + coordinate->Y * extent->width + coordinate->Z * extent->width * extent->height;
+    mappings[i].vk_memory = vk_memory;
+    mappings[i].byte_offset = memory_offset;
+    mappings[i].dirty = true;
+}
+
+static void d3d12_resource_update_mip_tail_tile_mappings(struct d3d12_resource *resource, unsigned int layer_idx,
+        VkDeviceMemory vk_memory, VkDeviceSize memory_offset)
+{
+    unsigned int subresource = layer_idx * resource->desc.MipLevels + resource->tiles.standard_mip_count;
+    struct vkd3d_subresource_tile_mapping *mapping;
+
+    mapping = &resource->tiles.subresources[subresource].mappings[0];
+    mapping->vk_memory = vk_memory;
+    mapping->byte_offset = memory_offset;
+    mapping->dirty = true;
+}
+
 static unsigned int d3d12_resource_bind_sparse_block(struct d3d12_resource *resource,
         const struct vkd3d_resource_tile_coordinate *base_coordinate,
         D3D12_TILED_RESOURCE_COORDINATE *coordinate, const D3D12_TILE_REGION_SIZE *region_size,
@@ -6704,7 +6799,55 @@ static unsigned int d3d12_resource_bind_sparse_block(struct d3d12_resource *reso
     }
     else
     {
-        vkd3d_unreachable();
+        unsigned int subresource = coordinate->Subresource;
+
+        /* The tiled resource spec for D3D11 seems to apply to D3D12 also, and states:
+         * "For mipmaps that use nonstandard tiling and/or are packed, any subresource
+         *  value that indicates any of the packed mips all refer to the same tile." */
+        if (d3d12_resource_subresource_is_packed(resource, subresource))
+        {
+            unsigned int layer_idx = subresource / resource->desc.MipLevels;
+
+            if (max_tile_count - tiles_used < resource->tiles.packed_mip_tile_count)
+            {
+                WARN("Invalid partial mip tail binding.\n");
+                return tiles_used;
+            }
+
+            if (!skip_binding)
+            {
+                /* If the Vulkan implementation uses a single mip tail, only packed_mip_tile_count
+                 * tiles are needed for all layers, while the caller will allocate tiles for each layer.
+                 * Mip tails are opaque so it doesn't matter which set of tiles are used.
+                 * There is no simple way to prevent this memory wastage. */
+                if (resource->tiles.single_mip_tail && layer_idx)
+                {
+                    FIXME_ONCE("Binding all mip tails to tiles for subresource %u.\n", subresource);
+                    layer_idx = 0;
+                }
+                d3d12_resource_update_mip_tail_tile_mappings(resource, layer_idx, vk_memory, memory_offset);
+            }
+
+            tiles_used += resource->tiles.packed_mip_tile_count;
+
+            coordinate->Subresource = (layer_idx + 1) * resource->desc.MipLevels;
+            coordinate->X = 0;
+            coordinate->Y = 0;
+            coordinate->Z = 0;
+        }
+        else while (tiles_used < max_tile_count)
+        {
+            if (!skip_binding)
+            {
+                d3d12_resource_update_image_tile_mapping(resource, subresource, coordinate, vk_memory, memory_offset);
+                memory_offset += D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+            }
+
+            ++tiles_used;
+            ++coordinate->X;
+            if (d3d12_tiled_resource_coordinate_normalise(base_coordinate, region_size, coordinate))
+                break;
+        }
     }
 
     return tiles_used;
@@ -6736,12 +6879,101 @@ static unsigned int d3d12_resource_flush_buffer_tile_mappings(struct d3d12_resou
     return count;
 }
 
+static void d3d12_resource_bind_sparse_mip_tail(struct d3d12_resource *resource,
+        VkSparseMemoryBind *memory_bind, unsigned int layer_idx)
+{
+    unsigned int subresource = layer_idx * resource->desc.MipLevels + resource->tiles.standard_mip_count;
+    struct vkd3d_subresource_tile_mapping *mapping;
+
+    mapping = &resource->tiles.subresources[subresource].mappings[0];
+    if (!mapping->dirty)
+        return;
+
+    memory_bind->resourceOffset = resource->tiles.mip_tail_offset + layer_idx * resource->tiles.mip_tail_stride;
+    memory_bind->size = resource->tiles.packed_mip_tile_count * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+    memory_bind->memory = mapping->vk_memory;
+    memory_bind->memoryOffset = mapping->byte_offset;
+    memory_bind->flags = 0;
+}
+
+static unsigned int d3d12_resource_flush_image_tile_mappings_for_subresource(struct d3d12_resource *resource,
+        unsigned int subresource, unsigned int bind_count)
+{
+    VkSparseImageMemoryBind *image_memory_binds = resource->tiles.bind_buffer;
+    const VkExtent3D *tile_extent = &resource->tiles.tile_extent;
+    struct vkd3d_subresource_tile_mapping *slice, *row, *column;
+    const struct vkd3d_tiled_region_extent *extent;
+    VkImageSubresource vk_subresource;
+    unsigned int layer_stride;
+    VkOffset3D offset;
+
+    extent = &resource->tiles.subresources[subresource].extent;
+    layer_stride = extent->width * extent->height;
+    slice = &resource->tiles.subresources[subresource].mappings[0];
+
+    d3d12_resource_get_vk_subresource(resource, subresource, &vk_subresource);
+
+    for (offset.z = 0; offset.z < extent->depth; ++offset.z, slice += layer_stride)
+    {
+        for (offset.y = 0, row = slice; offset.y < extent->height; ++offset.y, row += extent->width)
+        {
+            for (offset.x = 0, column = row; offset.x < extent->width; ++offset.x)
+            {
+                if (!column[offset.x].dirty)
+                    continue;
+                column[offset.x].dirty = false;
+                image_memory_binds[bind_count].subresource = vk_subresource;
+                image_memory_binds[bind_count].offset = offset;
+                image_memory_binds[bind_count].extent = *tile_extent;
+                vk_offset_convert_tiles_to_texels(&image_memory_binds[bind_count].offset,
+                        &image_memory_binds[bind_count].extent);
+                image_memory_binds[bind_count].memory = column[offset.x].vk_memory;
+                image_memory_binds[bind_count].memoryOffset = column[offset.x].byte_offset;
+                image_memory_binds[bind_count++].flags = 0;
+            }
+        }
+    }
+
+    return bind_count;
+}
+
+static void d3d12_resource_flush_image_tile_mappings(struct d3d12_resource *resource,
+        VkSparseImageMemoryBindInfo *image_bind_info, VkSparseImageOpaqueMemoryBindInfo *opaque_bind_info,
+        unsigned int subresource, unsigned int end_subresource)
+{
+    unsigned int i, layer_idx;
+    bool bound_mip_tail;
+
+    for (i = subresource, bound_mip_tail = false; i < end_subresource;)
+    {
+        if (d3d12_resource_subresource_is_packed(resource, i))
+        {
+            if (bound_mip_tail && resource->tiles.single_mip_tail)
+                continue;
+            bound_mip_tail = true;
+
+            layer_idx = i / resource->desc.MipLevels;
+            d3d12_resource_bind_sparse_mip_tail(resource,
+                    &resource->tiles.opaque_bind_buffer[opaque_bind_info->bindCount++], layer_idx);
+            i = (layer_idx + 1) * resource->desc.MipLevels;
+        }
+        else
+        {
+            image_bind_info->bindCount = d3d12_resource_flush_image_tile_mappings_for_subresource(resource,
+                    i, image_bind_info->bindCount);
+            ++i;
+        }
+    }
+}
+
 static void d3d12_resource_flush_tile_mappings(struct d3d12_resource *resource,
-        struct d3d12_command_queue *command_queue)
+        struct d3d12_command_queue *command_queue, unsigned int subresource, unsigned int end_subresource)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &command_queue->device->vk_procs;
     struct d3d12_device *device = command_queue->device;
+    VkSparseImageOpaqueMemoryBindInfo opaque_bind_info;
     VkSparseBufferMemoryBindInfo buffer_bind_info;
+    VkSparseImageMemoryBindInfo image_bind_info;
     struct vkd3d_queue *vkd3d_queue;
     VkBindSparseInfo sparse_info;
     VkResult vr;
@@ -6750,15 +6982,46 @@ static void d3d12_resource_flush_tile_mappings(struct d3d12_resource *resource,
     if (!(vkd3d_queue->vk_queue_flags & VK_QUEUE_SPARSE_BINDING_BIT))
         vkd3d_queue = device->tiled_binding_queue;
 
-    if (!(buffer_bind_info.bindCount = d3d12_resource_flush_buffer_tile_mappings(resource)))
-        return;
-    buffer_bind_info.pBinds = resource->tiles.bind_buffer;
-    buffer_bind_info.buffer = resource->u.vk_buffer;
-
     memset(&sparse_info, 0, sizeof(sparse_info));
     sparse_info.sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
-    sparse_info.bufferBindCount = 1;
-    sparse_info.pBufferBinds = &buffer_bind_info;
+
+    if (d3d12_resource_is_buffer(resource))
+    {
+        if (!(buffer_bind_info.bindCount = d3d12_resource_flush_buffer_tile_mappings(resource)))
+            return;
+        buffer_bind_info.pBinds = resource->tiles.bind_buffer;
+        buffer_bind_info.buffer = resource->u.vk_buffer;
+
+        sparse_info.bufferBindCount = 1;
+        sparse_info.pBufferBinds = &buffer_bind_info;
+    }
+    else
+    {
+        image_bind_info.image = resource->u.vk_image;
+        image_bind_info.bindCount = 0;
+        image_bind_info.pBinds = resource->tiles.bind_buffer;
+        opaque_bind_info.image = resource->u.vk_image;
+        opaque_bind_info.bindCount = 0;
+        opaque_bind_info.pBinds = resource->tiles.opaque_bind_buffer;
+
+        d3d12_resource_flush_image_tile_mappings(resource, &image_bind_info, &opaque_bind_info,
+                subresource, end_subresource);
+
+        if (!image_bind_info.bindCount && !opaque_bind_info.bindCount)
+            return;
+
+        if (image_bind_info.bindCount)
+        {
+            sparse_info.imageBindCount = 1;
+            sparse_info.pImageBinds = &image_bind_info;
+        }
+        if (opaque_bind_info.bindCount)
+        {
+            sparse_info.imageOpaqueBindCount = 1;
+            sparse_info.pImageOpaqueBinds = &opaque_bind_info;
+        }
+    }
+
     sparse_info.pSignalSemaphores = &device->tiled_binding_semaphore;
     sparse_info.signalSemaphoreCount = 1;
 
@@ -6787,6 +7050,7 @@ static void d3d12_resource_flush_tile_mappings(struct d3d12_resource *resource,
     vkd3d_queue_release(vkd3d_queue);
 
 }
+
 static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue *command_queue,
         struct d3d12_resource *resource, UINT region_count,
         const D3D12_TILED_RESOURCE_COORDINATE *region_start_coordinates,
@@ -6798,8 +7062,8 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
         const UINT *range_tile_counts,
         D3D12_TILE_MAPPING_FLAGS flags)
 {
+    unsigned int memory_offset, memory_tile_count, tiles_used, subresource, first_subresource, end_subresource;
     VkDeviceMemory vk_memory = heap ? heap->vk_memory : VK_NULL_HANDLE;
-    unsigned int memory_offset, memory_tile_count, tiles_used;
     struct vkd3d_resource_tile_coordinate base_coordinate;
     bool null_binding, aliased_binding, skip_binding;
     D3D12_TILED_RESOURCE_COORDINATE coordinate_zero;
@@ -6812,12 +7076,6 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
 
     if (!region_count)
         return;
-
-    if (d3d12_resource_is_texture(resource))
-    {
-        FIXME("Tiled textures are not implemented yet.\n");
-        return;
-    }
 
     if (region_count == 1)
     {
@@ -6858,6 +7116,7 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
     if (!initialise_tile_region(&base_coordinate, &region_size, &coordinate, region_sizes, resource))
         return;
 
+    first_subresource = end_subresource = subresource = coordinate.Subresource;
     region_idx = 0;
     range_idx = 0;
     null_binding = false;
@@ -6866,6 +7125,14 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
 
     do
     {
+        if (coordinate.Subresource != subresource)
+        {
+            if ((subresource = coordinate.Subresource) >= resource->tiles.subresource_count)
+                break;
+            d3d12_tile_region_size_set_entire_subresource(&region_size, resource, subresource);
+            end_subresource = max(end_subresource, subresource);
+        }
+
         if (range_flags)
         {
             cur_flags = range_flags[range_idx];
@@ -6925,7 +7192,8 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
     }
     while (region_idx < region_count && range_idx < range_count);
 
-    d3d12_resource_flush_tile_mappings(resource, command_queue);
+    end_subresource = min(end_subresource + 1, resource->tiles.subresource_count);
+    d3d12_resource_flush_tile_mappings(resource, command_queue, first_subresource, end_subresource);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_queue_CopyTileMappings(ID3D12CommandQueue *iface,

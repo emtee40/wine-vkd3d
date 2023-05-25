@@ -472,8 +472,12 @@ struct d3d12_resource_tile_info
     unsigned int standard_mip_count;
     unsigned int packed_mip_tile_count;
     unsigned int subresource_count;
+    bool single_mip_tail;
+    uint64_t mip_tail_offset;
+    uint64_t mip_tail_stride;
     struct vkd3d_subresource_tile_info *subresources;
     void *bind_buffer;
+    VkSparseMemoryBind *opaque_bind_buffer;
 };
 
 /* ID3D12Resource */
