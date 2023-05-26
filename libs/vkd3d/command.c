@@ -7196,6 +7196,82 @@ static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue 
     d3d12_resource_flush_tile_mappings(resource, command_queue, first_subresource, end_subresource);
 }
 
+static void d3d12_resource_copy_tile_mapping_region(struct d3d12_resource *dst_resource,
+        const struct vkd3d_resource_tile_coordinate *dst_base, D3D12_TILED_RESOURCE_COORDINATE *dst_loc,
+        const D3D12_TILE_REGION_SIZE *dst_size, const struct d3d12_resource *src_resource,
+        const struct vkd3d_resource_tile_coordinate *src_base, D3D12_TILED_RESOURCE_COORDINATE *src_loc,
+        const D3D12_TILE_REGION_SIZE *src_size, struct d3d12_command_queue *command_queue)
+{
+    unsigned int i, src_subresource, dst_subresource, tile_count;
+    const struct vkd3d_subresource_tile_mapping *src_mapping;
+    struct vkd3d_subresource_tile_mapping *dst_mapping;
+
+    src_subresource = d3d12_resource_get_tiled_subresource(src_resource, src_loc->Subresource);
+    src_mapping = src_resource->tiles.subresources[src_subresource].mappings;
+    dst_mapping = dst_resource->tiles.bind_buffer;
+
+    tile_count = min(src_size->NumTiles, dst_size->NumTiles);
+
+    if (d3d12_resource_is_buffer(src_resource))
+    {
+        for (i = 0; i < tile_count; ++i)
+        {
+            dst_mapping[i] = src_mapping[src_loc->X + i];
+            dst_mapping[i].dirty = true;
+        }
+    }
+    else
+    {
+        vkd3d_unreachable();
+    }
+
+    src_mapping = dst_resource->tiles.bind_buffer;
+    dst_subresource = d3d12_resource_get_tiled_subresource(dst_resource, dst_loc->Subresource);
+    dst_mapping = dst_resource->tiles.subresources[dst_subresource].mappings;
+
+    memcpy(&dst_mapping[dst_loc->X], src_mapping, tile_count * sizeof(*dst_mapping));
+
+    d3d12_resource_flush_tile_mappings(dst_resource, command_queue, 0, 1);
+}
+
+static void d3d12_command_queue_copy_tile_mappings(struct d3d12_command_queue *command_queue,
+        struct d3d12_resource *dst_resource,
+        const D3D12_TILED_RESOURCE_COORDINATE *dst_region_start_coordinate,
+        struct d3d12_resource *src_resource,
+        const D3D12_TILED_RESOURCE_COORDINATE *src_region_start_coordinate,
+        const D3D12_TILE_REGION_SIZE *region_size,
+        D3D12_TILE_MAPPING_FLAGS flags)
+{
+    struct vkd3d_resource_tile_coordinate dst_base, src_base;
+    D3D12_TILED_RESOURCE_COORDINATE dst_loc, src_loc;
+    D3D12_TILE_REGION_SIZE dst_extent, src_extent;
+
+    if (d3d12_resource_is_texture(dst_resource) || d3d12_resource_is_texture(src_resource))
+    {
+        FIXME("Not implemented for textures.\n");
+        return;
+    }
+
+    dst_loc = *dst_region_start_coordinate;
+    src_loc = *src_region_start_coordinate;
+    if (!initialise_tile_region(&dst_base, &dst_extent, &dst_loc, region_size, dst_resource)
+            || !initialise_tile_region(&src_base, &src_extent, &src_loc, region_size, src_resource))
+    {
+        WARN("Invalid tile region.\n");
+        return;
+    }
+
+    if (!src_extent.NumTiles || (dst_resource == src_resource
+            && dst_loc.Subresource == src_loc.Subresource
+            && dst_loc.X == src_loc.X
+            && dst_loc.Y == src_loc.Y
+            && dst_loc.Z == src_loc.Z))
+        return;
+
+    d3d12_resource_copy_tile_mapping_region(dst_resource, &dst_base, &dst_loc, &dst_extent, 
+            src_resource, &src_base, &src_loc, &src_extent, command_queue);
+}
+
 static void STDMETHODCALLTYPE d3d12_command_queue_CopyTileMappings(ID3D12CommandQueue *iface,
         ID3D12Resource *dst_resource,
         const D3D12_TILED_RESOURCE_COORDINATE *dst_region_start_coordinate,
@@ -7207,12 +7283,19 @@ static void STDMETHODCALLTYPE d3d12_command_queue_CopyTileMappings(ID3D12Command
     struct d3d12_resource *dst_resource_impl = impl_from_ID3D12Resource(dst_resource);
     struct d3d12_resource *src_resource_impl = impl_from_ID3D12Resource(src_resource);
     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+    struct d3d12_device *device = command_queue->device;
     struct vkd3d_cs_op_data *op;
 
     TRACE("iface %p, dst_resource %p, dst_region_start_coordinate %p, "
             "src_resource %p, src_region_start_coordinate %p, region_size %p, flags %#x.\n",
             iface, dst_resource, dst_region_start_coordinate, src_resource,
             src_region_start_coordinate, region_size, flags);
+
+    if (!device->tiled_binding_queue)
+    {
+        WARN("Device does not support tiled resources.\n");
+        return;
+    }
 
     vkd3d_mutex_lock(&command_queue->op_mutex);
 
@@ -7989,7 +8072,10 @@ static HRESULT d3d12_command_queue_flush_ops_locked(struct d3d12_command_queue *
                     break;
 
                 case VKD3D_CS_OP_COPY_MAPPINGS:
-                    FIXME("Tiled resource mapping copying is not supported yet.\n");
+                    d3d12_command_queue_copy_tile_mappings(queue, op->u.copy_mappings.dst_resource,
+                            &op->u.copy_mappings.dst_region_start_coordinate, op->u.copy_mappings.src_resource,
+                            &op->u.copy_mappings.src_region_start_coordinate, &op->u.copy_mappings.region_size,
+                            op->u.copy_mappings.flags);
                     break;
 
                 default:
