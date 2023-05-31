@@ -1293,7 +1293,8 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
         }
         resource->tiles.total_count = start_idx;
 
-        resource->tiles.bind_buffer = vkd3d_malloc(start_idx * sizeof(VkSparseImageMemoryBind));
+        resource->tiles.bind_buffer = vkd3d_malloc(start_idx * max(sizeof(VkSparseImageMemoryBind),
+                sizeof(struct vkd3d_subresource_tile_mapping)));
         resource->tiles.opaque_bind_buffer = vkd3d_malloc(d3d12_resource_desc_get_layer_count(&resource->desc)
                 * sizeof(*resource->tiles.opaque_bind_buffer));
         if (!resource->tiles.bind_buffer || !resource->tiles.opaque_bind_buffer)

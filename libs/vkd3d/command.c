@@ -7202,9 +7202,11 @@ static void d3d12_resource_copy_tile_mapping_region(struct d3d12_resource *dst_r
         const struct vkd3d_resource_tile_coordinate *src_base, D3D12_TILED_RESOURCE_COORDINATE *src_loc,
         const D3D12_TILE_REGION_SIZE *src_size, struct d3d12_command_queue *command_queue)
 {
-    unsigned int i, src_subresource, dst_subresource, tile_count;
+    unsigned int i, src_subresource, dst_subresource, first_subresource, tile_count, src_idx, dst_idx;
+    const struct vkd3d_tiled_region_extent *src_extent, *dst_extent;
     const struct vkd3d_subresource_tile_mapping *src_mapping;
     struct vkd3d_subresource_tile_mapping *dst_mapping;
+    bool is_end;
 
     src_subresource = d3d12_resource_get_tiled_subresource(src_resource, src_loc->Subresource);
     src_mapping = src_resource->tiles.subresources[src_subresource].mappings;
@@ -7222,16 +7224,63 @@ static void d3d12_resource_copy_tile_mapping_region(struct d3d12_resource *dst_r
     }
     else
     {
-        vkd3d_unreachable();
+        for (i = 0, dst_idx = 0; i < tile_count;)
+        {
+            src_extent = &src_resource->tiles.subresources[src_subresource].extent;
+            for (is_end = false; i < tile_count && !is_end; ++i)
+            {
+                src_idx = src_loc->X + src_loc->Y * src_extent->width
+                        + src_loc->Z * src_extent->width * src_extent->height;
+                dst_mapping[dst_idx] = src_mapping[src_idx];
+                dst_mapping[dst_idx++].dirty = true;
+
+                ++src_loc->X;
+                is_end = d3d12_tiled_resource_coordinate_normalise(src_base, src_size, src_loc);
+            }
+
+            if (src_loc->Subresource >= src_resource->tiles.subresource_count
+                    || dst_idx >= dst_resource->tiles.total_count)
+                break;
+
+            src_subresource = d3d12_resource_get_tiled_subresource(src_resource, src_loc->Subresource);
+            src_mapping = src_resource->tiles.subresources[src_subresource].mappings;
+        }
     }
 
     src_mapping = dst_resource->tiles.bind_buffer;
     dst_subresource = d3d12_resource_get_tiled_subresource(dst_resource, dst_loc->Subresource);
+    first_subresource = dst_subresource;
     dst_mapping = dst_resource->tiles.subresources[dst_subresource].mappings;
 
-    memcpy(&dst_mapping[dst_loc->X], src_mapping, tile_count * sizeof(*dst_mapping));
+    if (d3d12_resource_is_buffer(dst_resource))
+    {
+        memcpy(&dst_mapping[dst_loc->X], src_mapping, tile_count * sizeof(*dst_mapping));
+    }
+    else
+    {
+        for (i = 0, src_idx = 0; i < tile_count;)
+        {
+            dst_extent = &dst_resource->tiles.subresources[dst_subresource].extent;
+            for (is_end = false; i < tile_count && !is_end; ++i)
+            {
+                dst_idx = dst_loc->X + dst_loc->Y * dst_extent->width
+                        + dst_loc->Z * dst_extent->width * dst_extent->height;
+                dst_mapping[dst_idx] = src_mapping[src_idx++];
 
-    d3d12_resource_flush_tile_mappings(dst_resource, command_queue, 0, 1);
+                ++dst_loc->X;
+                is_end = d3d12_tiled_resource_coordinate_normalise(dst_base, dst_size, dst_loc);
+            }
+
+            if (dst_loc->Subresource >= dst_resource->tiles.subresource_count)
+                break;
+
+            dst_subresource = d3d12_resource_get_tiled_subresource(dst_resource, dst_loc->Subresource);
+            dst_mapping = dst_resource->tiles.subresources[dst_subresource].mappings;
+        }
+    }
+
+    dst_subresource = min(dst_subresource + 1, dst_resource->tiles.subresource_count);
+    d3d12_resource_flush_tile_mappings(dst_resource, command_queue, first_subresource, dst_subresource);
 }
 
 static void d3d12_command_queue_copy_tile_mappings(struct d3d12_command_queue *command_queue,
@@ -7245,12 +7294,6 @@ static void d3d12_command_queue_copy_tile_mappings(struct d3d12_command_queue *c
     struct vkd3d_resource_tile_coordinate dst_base, src_base;
     D3D12_TILED_RESOURCE_COORDINATE dst_loc, src_loc;
     D3D12_TILE_REGION_SIZE dst_extent, src_extent;
-
-    if (d3d12_resource_is_texture(dst_resource) || d3d12_resource_is_texture(src_resource))
-    {
-        FIXME("Not implemented for textures.\n");
-        return;
-    }
 
     dst_loc = *dst_region_start_coordinate;
     src_loc = *src_region_start_coordinate;
