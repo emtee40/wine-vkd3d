@@ -5923,12 +5923,12 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetMarker(ID3D12GraphicsCommand
 static void STDMETHODCALLTYPE d3d12_command_list_BeginEvent(ID3D12GraphicsCommandList5 *iface,
         UINT metadata, const void *data, UINT size)
 {
-    FIXME("iface %p, metadata %#x, data %p, size %u stub!\n", iface, metadata, data, size);
+    FIXME_ONCE("iface %p, metadata %#x, data %p, size %u stub!\n", iface, metadata, data, size);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_EndEvent(ID3D12GraphicsCommandList5 *iface)
 {
-    FIXME("iface %p stub!\n", iface);
+    FIXME_ONCE("iface %p stub!\n", iface);
 }
 
 STATIC_ASSERT(sizeof(VkDispatchIndirectCommand) == sizeof(D3D12_DISPATCH_ARGUMENTS));
@@ -6807,13 +6807,13 @@ static void STDMETHODCALLTYPE d3d12_command_queue_SetMarker(ID3D12CommandQueue *
 static void STDMETHODCALLTYPE d3d12_command_queue_BeginEvent(ID3D12CommandQueue *iface,
         UINT metadata, const void *data, UINT size)
 {
-    FIXME("iface %p, metadata %#x, data %p, size %u stub!\n",
+    FIXME_ONCE("iface %p, metadata %#x, data %p, size %u stub!\n",
             iface, metadata, data, size);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_queue_EndEvent(ID3D12CommandQueue *iface)
 {
-    FIXME("iface %p stub!\n", iface);
+    FIXME_ONCE("iface %p stub!\n", iface);
 }
 
 static HRESULT vkd3d_enqueue_timeline_semaphore(struct vkd3d_fence_worker *worker, VkSemaphore vk_semaphore,
