@@ -1823,6 +1823,7 @@ enum command_list_op
     CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
+    CL_OP_SET_VERTEX_BUFFERS,
     CL_OP_SET_VIEWPORTS,
 };
 
@@ -1997,6 +1998,18 @@ struct index_buffer_op
     struct resource_gpu_address location;
     unsigned int size_in_bytes;
     DXGI_FORMAT format;
+};
+
+struct vertex_buffer_op
+{
+    enum command_list_op op;
+    unsigned int start_slot;
+    unsigned int view_count;
+    struct
+    {
+        struct resource_gpu_address location;
+        unsigned int stride_in_bytes;
+    } views[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5424,24 +5437,21 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetIndexBuffer(ID3D12Graphics
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12GraphicsCommandList5 *iface,
-        UINT start_slot, UINT view_count, const D3D12_VERTEX_BUFFER_VIEW *views)
+static void d3d12_command_list_ia_set_vertex_buffers(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const struct vkd3d_null_resources *null_resources;
-    struct vkd3d_gpu_va_allocator *gpu_va_allocator;
     VkDeviceSize offsets[ARRAY_SIZE(list->strides)];
     const struct vkd3d_vk_device_procs *vk_procs;
     VkBuffer buffers[ARRAY_SIZE(list->strides)];
+    const struct vertex_buffer_op *op = data;
+    unsigned int start_slot = op->start_slot;
+    unsigned int view_count = op->view_count;
     struct d3d12_resource *resource;
     bool invalidate = false;
     unsigned int i, stride;
 
-    TRACE("iface %p, start_slot %u, view_count %u, views %p.\n", iface, start_slot, view_count, views);
-
     vk_procs = &list->device->vk_procs;
     null_resources = &list->device->null_resources;
-    gpu_va_allocator = &list->device->gpu_va_allocator;
 
     if (!vkd3d_bound_range(start_slot, view_count, ARRAY_SIZE(list->strides)))
     {
@@ -5449,20 +5459,13 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12Graphi
         return;
     }
 
-    if (!views)
-    {
-        WARN("NULL \"views\" pointer specified.\n");
-        return;
-    }
-
     for (i = 0; i < view_count; ++i)
     {
-        if (views[i].BufferLocation)
+        if ((resource = op->views[i].location.resource))
         {
-            resource = vkd3d_gpu_va_allocator_dereference(gpu_va_allocator, views[i].BufferLocation);
             buffers[i] = resource->u.vk_buffer;
-            offsets[i] = views[i].BufferLocation - resource->gpu_address;
-            stride = views[i].StrideInBytes;
+            offsets[i] = op->views[i].location.offset;
+            stride = op->views[i].stride_in_bytes;
         }
         else
         {
@@ -5480,6 +5483,37 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12Graphi
 
     if (invalidate)
         d3d12_command_list_invalidate_current_pipeline(list);
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12GraphicsCommandList5 *iface,
+        UINT start_slot, UINT view_count, const D3D12_VERTEX_BUFFER_VIEW *views)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct vertex_buffer_op *op;
+    unsigned int i;
+
+    TRACE("iface %p, start_slot %u, view_count %u, views %p.\n", iface, start_slot, view_count, views);
+
+    if (!views)
+    {
+        WARN("NULL \"views\" pointer specified.\n");
+        return;
+    }
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct vertex_buffer_op,
+            views[view_count]))))
+        return;
+
+    op->op = CL_OP_SET_VERTEX_BUFFERS;
+    op->start_slot = start_slot;
+    op->view_count = view_count;
+    for (i = 0; i < view_count; ++i)
+    {
+        resource_gpu_address_from_d3d12(&op->views[i].location, views[i].BufferLocation, list);
+        op->views[i].stride_in_bytes = views[i].StrideInBytes;
+    }
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsCommandList5 *iface,
@@ -6815,6 +6849,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_STENCIL_REF:
             d3d12_command_list_om_set_stencil_ref(list, data);
+            break;
+        case CL_OP_SET_VERTEX_BUFFERS:
+            d3d12_command_list_ia_set_vertex_buffers(list, data);
             break;
         case CL_OP_SET_VIEWPORTS:
             d3d12_command_list_rs_set_viewports(list, data);
