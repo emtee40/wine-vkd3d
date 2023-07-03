@@ -1823,6 +1823,7 @@ enum command_list_op
     CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
+    CL_OP_SET_TARGETS,
     CL_OP_SET_VERTEX_BUFFERS,
     CL_OP_SET_VIEWPORTS,
 };
@@ -2009,6 +2010,19 @@ struct vertex_buffer_op
     {
         struct resource_gpu_address location;
         unsigned int stride_in_bytes;
+    } views[];
+};
+
+struct set_targets_op
+{
+    enum command_list_op op;
+    unsigned int start_slot;
+    unsigned int view_count;
+    struct so_buffer_view
+    {
+        struct resource_gpu_address location;
+        uint64_t size_in_bytes;
+        struct resource_gpu_address filled_size_location;
     } views[];
 };
 
@@ -5516,19 +5530,20 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12Graphi
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsCommandList5 *iface,
-        UINT start_slot, UINT view_count, const D3D12_STREAM_OUTPUT_BUFFER_VIEW *views)
+static void d3d12_command_list_so_set_targets(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     VkDeviceSize offsets[ARRAY_SIZE(list->so_counter_buffers)];
     VkDeviceSize sizes[ARRAY_SIZE(list->so_counter_buffers)];
     VkBuffer buffers[ARRAY_SIZE(list->so_counter_buffers)];
-    struct vkd3d_gpu_va_allocator *gpu_va_allocator;
+    unsigned int i, first, count, start_slot, view_count;
     const struct vkd3d_vk_device_procs *vk_procs;
+    const struct set_targets_op *op = data;
+    const struct so_buffer_view *views;
     struct d3d12_resource *resource;
-    unsigned int i, first, count;
 
-    TRACE("iface %p, start_slot %u, view_count %u, views %p.\n", iface, start_slot, view_count, views);
+    start_slot = op->start_slot;
+    view_count = op->view_count;
+    views = op->views;
 
     d3d12_command_list_end_current_render_pass(list);
 
@@ -5545,22 +5560,20 @@ static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsComm
     }
 
     vk_procs = &list->device->vk_procs;
-    gpu_va_allocator = &list->device->gpu_va_allocator;
 
     count = 0;
     first = start_slot;
     for (i = 0; i < view_count; ++i)
     {
-        if (views[i].BufferLocation && views[i].SizeInBytes)
+        if ((resource = views[i].location.resource) && views[i].size_in_bytes)
         {
-            resource = vkd3d_gpu_va_allocator_dereference(gpu_va_allocator, views[i].BufferLocation);
             buffers[count] = resource->u.vk_buffer;
-            offsets[count] = views[i].BufferLocation - resource->gpu_address;
-            sizes[count] = views[i].SizeInBytes;
+            offsets[count] = views[i].location.offset;
+            sizes[count] = views[i].size_in_bytes;
 
-            resource = vkd3d_gpu_va_allocator_dereference(gpu_va_allocator, views[i].BufferFilledSizeLocation);
+            resource = views[i].filled_size_location.resource;
             list->so_counter_buffers[start_slot + i] = resource->u.vk_buffer;
-            list->so_counter_buffer_offsets[start_slot + i] = views[i].BufferFilledSizeLocation - resource->gpu_address;
+            list->so_counter_buffer_offsets[start_slot + i] = views[i].filled_size_location.offset;
             ++count;
         }
         else
@@ -5579,6 +5592,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsComm
 
     if (count)
         VK_CALL(vkCmdBindTransformFeedbackBuffersEXT(list->vk_command_buffer, first, count, buffers, offsets, sizes));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsCommandList5 *iface,
+        UINT start_slot, UINT view_count, const D3D12_STREAM_OUTPUT_BUFFER_VIEW *views)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct set_targets_op *op;
+    unsigned int i;
+
+    TRACE("iface %p, start_slot %u, view_count %u, views %p.\n", iface, start_slot, view_count, views);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct set_targets_op,
+            views[view_count]))))
+        return;
+
+    op->op = CL_OP_SET_TARGETS;
+    op->start_slot = start_slot;
+    op->view_count = view_count;
+    for (i = 0; i < view_count; ++i)
+    {
+        resource_gpu_address_from_d3d12(&op->views[i].location, views[i].BufferLocation, list);
+        op->views[i].size_in_bytes = views[i].SizeInBytes;
+        resource_gpu_address_from_d3d12(&op->views[i].filled_size_location, views[i].BufferFilledSizeLocation, list);
+    }
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12GraphicsCommandList5 *iface,
@@ -6849,6 +6888,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_STENCIL_REF:
             d3d12_command_list_om_set_stencil_ref(list, data);
+            break;
+        case CL_OP_SET_TARGETS:
+            d3d12_command_list_so_set_targets(list, data);
             break;
         case CL_OP_SET_VERTEX_BUFFERS:
             d3d12_command_list_ia_set_vertex_buffers(list, data);
