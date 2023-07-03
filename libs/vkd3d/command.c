@@ -1812,6 +1812,7 @@ enum command_list_op
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_SET_BLEND_FACTOR,
+    CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
@@ -1914,6 +1915,12 @@ struct stencil_ref_op
 {
     enum command_list_op op;
     unsigned int stencil_ref;
+};
+
+struct pipeline_state_op
+{
+    enum command_list_op op;
+    struct d3d12_pipeline_state *pipeline_state;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4508,13 +4515,12 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetStencilRef(ID3D12GraphicsC
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_SetPipelineState(ID3D12GraphicsCommandList5 *iface,
-        ID3D12PipelineState *pipeline_state)
+static void d3d12_command_list_set_pipeline_state(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_pipeline_state *state = unsafe_impl_from_ID3D12PipelineState(pipeline_state);
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    const struct pipeline_state_op *op = data;
+    struct d3d12_pipeline_state *state;
 
-    TRACE("iface %p, pipeline_state %p.\n", iface, pipeline_state);
+    state = op->pipeline_state;
 
     if (list->state == state)
         return;
@@ -4523,6 +4529,23 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetPipelineState(ID3D12Graphics
     d3d12_command_list_invalidate_current_pipeline(list);
 
     list->state = state;
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_SetPipelineState(ID3D12GraphicsCommandList5 *iface,
+        ID3D12PipelineState *pipeline_state)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct pipeline_state_op *op;
+
+    TRACE("iface %p, pipeline_state %p.\n", iface, pipeline_state);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_PIPELINE_STATE;
+    op->pipeline_state = unsafe_impl_from_ID3D12PipelineState(pipeline_state);
+
+    d3d12_command_list_flush(list);
 }
 
 static bool is_ds_multiplanar_resolvable(unsigned int first_state, unsigned int second_state)
@@ -6532,6 +6555,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_BLEND_FACTOR:
             d3d12_command_list_om_set_blend_factor(list, data);
+            break;
+        case CL_OP_SET_PIPELINE_STATE:
+            d3d12_command_list_set_pipeline_state(list, data);
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
