@@ -1812,6 +1812,7 @@ enum command_list_op
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_VIEWPORTS,
 };
 
@@ -1892,6 +1893,13 @@ struct viewport_op
     enum command_list_op op;
     unsigned int viewport_count;
     D3D12_VIEWPORT viewports[];
+};
+
+struct scissor_rect_op
+{
+    enum command_list_op op;
+    unsigned int rect_count;
+    D3D12_RECT rects[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4389,23 +4397,15 @@ static void STDMETHODCALLTYPE d3d12_command_list_RSSetViewports(ID3D12GraphicsCo
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_RSSetScissorRects(ID3D12GraphicsCommandList5 *iface,
-        UINT rect_count, const D3D12_RECT *rects)
+static void d3d12_command_list_rs_set_scissor_rects(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     VkRect2D vk_rects[D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
     const struct vkd3d_vk_device_procs *vk_procs;
-    unsigned int i;
+    const struct scissor_rect_op *op = data;
+    const D3D12_RECT *rects = op->rects;
+    unsigned int i, rect_count;
 
-    TRACE("iface %p, rect_count %u, rects %p.\n", iface, rect_count, rects);
-
-    if (rect_count > ARRAY_SIZE(vk_rects))
-    {
-        FIXME("Rect count %u > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE.\n", rect_count);
-        rect_count = ARRAY_SIZE(vk_rects);
-    }
-
-    for (i = 0; i < rect_count; ++i)
+    for (i = 0, rect_count = op->rect_count; i < rect_count; ++i)
     {
         vk_rects[i].offset.x = rects[i].left;
         vk_rects[i].offset.y = rects[i].top;
@@ -4415,6 +4415,31 @@ static void STDMETHODCALLTYPE d3d12_command_list_RSSetScissorRects(ID3D12Graphic
 
     vk_procs = &list->device->vk_procs;
     VK_CALL(vkCmdSetScissor(list->vk_command_buffer, 0, rect_count, vk_rects));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_RSSetScissorRects(ID3D12GraphicsCommandList5 *iface,
+        UINT rect_count, const D3D12_RECT *rects)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct scissor_rect_op *op;
+
+    TRACE("iface %p, rect_count %u, rects %p.\n", iface, rect_count, rects);
+
+    if (rect_count > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
+    {
+        FIXME("Rect count %u > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE.\n", rect_count);
+        rect_count = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    }
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct scissor_rect_op,
+            rects[rect_count]))))
+        return;
+
+    op->op = CL_OP_SET_SCISSOR_RECTS;
+    op->rect_count = rect_count;
+    memcpy(op->rects, rects, rect_count * sizeof(*rects));
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetBlendFactor(ID3D12GraphicsCommandList5 *iface,
@@ -6465,6 +6490,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_SCISSOR_RECTS:
+            d3d12_command_list_rs_set_scissor_rects(list, data);
             break;
         case CL_OP_SET_VIEWPORTS:
             d3d12_command_list_rs_set_viewports(list, data);
