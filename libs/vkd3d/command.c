@@ -1811,6 +1811,7 @@ enum command_list_op
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
+    CL_OP_RESOURCE_BARRIER,
     CL_OP_SET_BLEND_FACTOR,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
@@ -1921,6 +1922,13 @@ struct pipeline_state_op
 {
     enum command_list_op op;
     struct d3d12_pipeline_state *pipeline_state;
+};
+
+struct resource_barrier_op
+{
+    enum command_list_op op;
+    unsigned int barrier_count;
+    D3D12_RESOURCE_BARRIER barriers[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4586,22 +4594,23 @@ static unsigned int d3d12_find_ds_multiplanar_transition(const D3D12_RESOURCE_BA
     return 0;
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsCommandList5 *iface,
-        UINT barrier_count, const D3D12_RESOURCE_BARRIER *barriers)
+static void d3d12_command_list_resource_barrier(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     bool have_aliasing_barriers = false, have_split_barriers = false;
     const struct vkd3d_vk_device_procs *vk_procs;
+    const struct resource_barrier_op *op = data;
     const struct vkd3d_vulkan_info *vk_info;
+    const D3D12_RESOURCE_BARRIER *barriers;
     bool *multiplanar_handled = NULL;
-    unsigned int i;
-
-    TRACE("iface %p, barrier_count %u, barriers %p.\n", iface, barrier_count, barriers);
+    unsigned int i, barrier_count;
 
     vk_procs = &list->device->vk_procs;
     vk_info = &list->device->vk_info;
 
     d3d12_command_list_end_current_render_pass(list);
+
+    barriers = op->barriers;
+    barrier_count = op->barrier_count;
 
     for (i = 0; i < barrier_count; ++i)
     {
@@ -4626,24 +4635,8 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsC
                 unsigned int state_before, state_after, stencil_state_before = 0, stencil_state_after = 0;
                 const D3D12_RESOURCE_TRANSITION_BARRIER *transition = &current->u.Transition;
 
-                if (!is_valid_resource_state(transition->StateBefore))
-                {
-                    d3d12_command_list_mark_as_invalid(list,
-                            "Invalid StateBefore %#x (barrier %u).", transition->StateBefore, i);
-                    continue;
-                }
-                if (!is_valid_resource_state(transition->StateAfter))
-                {
-                    d3d12_command_list_mark_as_invalid(list,
-                            "Invalid StateAfter %#x (barrier %u).", transition->StateAfter, i);
-                    continue;
-                }
-
-                if (!(resource = unsafe_impl_from_ID3D12Resource(transition->pResource)))
-                {
-                    d3d12_command_list_mark_as_invalid(list, "A resource pointer is NULL.");
-                    continue;
-                }
+                resource = unsafe_impl_from_ID3D12Resource(transition->pResource);
+                assert(resource);
 
                 if (multiplanar_handled && multiplanar_handled[i])
                     continue;
@@ -4810,6 +4803,54 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsC
     /* Vulkan doesn't support split barriers. */
     if (have_split_barriers)
         WARN("Issuing split barrier(s) on D3D12_RESOURCE_BARRIER_FLAG_END_ONLY.\n");
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsCommandList5 *iface,
+        UINT barrier_count, const D3D12_RESOURCE_BARRIER *barriers)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct resource_barrier_op *op;
+    unsigned int i, j;
+
+    TRACE("iface %p, barrier_count %u, barriers %p.\n", iface, barrier_count, barriers);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct resource_barrier_op,
+            barriers[barrier_count]))))
+        return;
+
+    op->op = CL_OP_RESOURCE_BARRIER;
+
+    for (i = 0, j = 0; i < barrier_count; ++i)
+    {
+        if (barriers[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
+        {
+            const D3D12_RESOURCE_TRANSITION_BARRIER *transition = &barriers[i].u.Transition;
+            if (!is_valid_resource_state(transition->StateBefore))
+            {
+                d3d12_command_list_mark_as_invalid(list,
+                        "Invalid StateBefore %#x (barrier %u).", transition->StateBefore, i);
+                /* Handle any valid barriers to allow layout tracking (when it is implemented). This
+                 * will avoid spurious layout mismatch errors being emitted before Close() fails. */
+                continue;
+            }
+            if (!is_valid_resource_state(transition->StateAfter))
+            {
+                d3d12_command_list_mark_as_invalid(list,
+                        "Invalid StateAfter %#x (barrier %u).", transition->StateAfter, i);
+                continue;
+            }
+
+            if (!transition->pResource)
+            {
+                d3d12_command_list_mark_as_invalid(list, "A resource pointer is NULL.");
+                continue;
+            }
+        }
+        op->barriers[j++] = barriers[i];
+    }
+    op->barrier_count = j;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_ExecuteBundle(ID3D12GraphicsCommandList5 *iface,
@@ -6552,6 +6593,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_RESOLVE_SUBRESOURCE:
             d3d12_command_list_resolve_subresource(list, data);
+            break;
+        case CL_OP_RESOURCE_BARRIER:
+            d3d12_command_list_resource_barrier(list, data);
             break;
         case CL_OP_SET_BLEND_FACTOR:
             d3d12_command_list_om_set_blend_factor(list, data);
