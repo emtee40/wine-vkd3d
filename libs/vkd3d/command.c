@@ -1815,6 +1815,7 @@ enum command_list_op
     CL_OP_SET_BLEND_FACTOR,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
     CL_OP_SET_VIEWPORTS,
@@ -1929,6 +1930,13 @@ struct resource_barrier_op
     enum command_list_op op;
     unsigned int barrier_count;
     D3D12_RESOURCE_BARRIER barriers[];
+};
+
+struct root_signature_op
+{
+    enum command_list_op op;
+    enum vkd3d_pipeline_bind_point bind_point;
+    struct d3d12_root_signature *root_signature;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4874,20 +4882,37 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetDescriptorHeaps(ID3D12Graphi
      * equivalent of the D3D12 Debug Layer. */
 }
 
-static void d3d12_command_list_set_root_signature(struct d3d12_command_list *list,
-        enum vkd3d_pipeline_bind_point bind_point, struct d3d12_root_signature *root_signature)
+static void d3d12_command_list_op_set_root_signature(struct d3d12_command_list *list, const void *data)
 {
-    struct vkd3d_pipeline_bindings *bindings = &list->pipeline_bindings[bind_point];
+    const struct root_signature_op *op = data;
+    struct vkd3d_pipeline_bindings *bindings;
 
-    if (bindings->root_signature == root_signature)
+    bindings = &list->pipeline_bindings[op->bind_point];
+
+    if (bindings->root_signature == op->root_signature)
         return;
 
     if (bindings->root_signature)
         d3d12_root_signature_decref(bindings->root_signature);
-    bindings->root_signature = root_signature;
+    bindings->root_signature = op->root_signature;
+
+    d3d12_command_list_invalidate_root_parameters(list, op->bind_point);
+}
+
+static void d3d12_command_list_set_root_signature(struct d3d12_command_list *list,
+        enum vkd3d_pipeline_bind_point bind_point, struct d3d12_root_signature *root_signature)
+{
+    struct root_signature_op *op;
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_ROOT_SIGNATURE;
+    op->bind_point = bind_point;
+    op->root_signature = root_signature;
     d3d12_root_signature_incref(root_signature);
 
-    d3d12_command_list_invalidate_root_parameters(list, bind_point);
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetComputeRootSignature(ID3D12GraphicsCommandList5 *iface,
@@ -6610,6 +6635,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_ROOT_SIGNATURE:
+            d3d12_command_list_op_set_root_signature(list, data);
             break;
         case CL_OP_SET_SCISSOR_RECTS:
             d3d12_command_list_rs_set_scissor_rects(list, data);
