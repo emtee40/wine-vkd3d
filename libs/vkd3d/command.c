@@ -1804,6 +1804,7 @@ struct command_op_packet
 
 enum command_list_op
 {
+    CL_OP_COPY_BUFFER_REGION,
     CL_OP_DISPATCH,
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
@@ -1834,6 +1835,16 @@ struct dispatch_op
     unsigned int x;
     unsigned int y;
     unsigned int z;
+};
+
+struct copy_buffer_region_op
+{
+    enum command_list_op op;
+    struct d3d12_resource *dst;
+    uint64_t dst_offset;
+    struct d3d12_resource *src;
+    uint64_t src_offset;
+    uint64_t byte_count;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -3605,23 +3616,18 @@ static void STDMETHODCALLTYPE d3d12_command_list_Dispatch(ID3D12GraphicsCommandL
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_CopyBufferRegion(ID3D12GraphicsCommandList5 *iface,
-        ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset, UINT64 byte_count)
+static void d3d12_command_list_copy_buffer_region(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     struct d3d12_resource *dst_resource, *src_resource;
+    const struct copy_buffer_region_op *op = data;
     const struct vkd3d_vk_device_procs *vk_procs;
     VkBufferCopy buffer_copy;
 
-    TRACE("iface %p, dst_resource %p, dst_offset %#"PRIx64", src_resource %p, "
-            "src_offset %#"PRIx64", byte_count %#"PRIx64".\n",
-            iface, dst, dst_offset, src, src_offset, byte_count);
-
     vk_procs = &list->device->vk_procs;
 
-    dst_resource = unsafe_impl_from_ID3D12Resource(dst);
+    dst_resource = op->dst;
     assert(d3d12_resource_is_buffer(dst_resource));
-    src_resource = unsafe_impl_from_ID3D12Resource(src);
+    src_resource = op->src;
     assert(d3d12_resource_is_buffer(src_resource));
 
     d3d12_command_list_track_resource_usage(list, dst_resource);
@@ -3629,12 +3635,35 @@ static void STDMETHODCALLTYPE d3d12_command_list_CopyBufferRegion(ID3D12Graphics
 
     d3d12_command_list_end_current_render_pass(list);
 
-    buffer_copy.srcOffset = src_offset;
-    buffer_copy.dstOffset = dst_offset;
-    buffer_copy.size = byte_count;
+    buffer_copy.srcOffset = op->src_offset;
+    buffer_copy.dstOffset = op->dst_offset;
+    buffer_copy.size = op->byte_count;
 
     VK_CALL(vkCmdCopyBuffer(list->vk_command_buffer,
             src_resource->u.vk_buffer, dst_resource->u.vk_buffer, 1, &buffer_copy));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_CopyBufferRegion(ID3D12GraphicsCommandList5 *iface,
+        ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset, UINT64 byte_count)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct copy_buffer_region_op *op;
+
+    TRACE("iface %p, dst_resource %p, dst_offset %#"PRIx64", src_resource %p, "
+            "src_offset %#"PRIx64", byte_count %#"PRIx64".\n",
+            iface, dst, dst_offset, src, src_offset, byte_count);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_COPY_BUFFER_REGION;
+    op->dst = unsafe_impl_from_ID3D12Resource(dst);
+    op->dst_offset = dst_offset;
+    op->src = unsafe_impl_from_ID3D12Resource(src);
+    op->src_offset = src_offset;
+    op->byte_count = byte_count;
+
+    d3d12_command_list_flush(list);
 }
 
 static void vk_image_subresource_layers_from_d3d12(VkImageSubresourceLayers *subresource,
@@ -6268,6 +6297,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
 
     switch (op)
     {
+        case CL_OP_COPY_BUFFER_REGION:
+            d3d12_command_list_copy_buffer_region(list, data);
+            break;
         case CL_OP_DISPATCH:
             d3d12_command_list_dispatch(list, data);
             break;
