@@ -1816,12 +1816,34 @@ enum command_list_op
     CL_OP_SET_DESCRIPTOR_TABLE,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_ROOT_CBV,
     CL_OP_SET_ROOT_CONSTANTS,
     CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
     CL_OP_SET_VIEWPORTS,
 };
+
+struct resource_gpu_address
+{
+    struct d3d12_resource *resource;
+    uint64_t offset;
+};
+
+static void resource_gpu_address_from_d3d12(struct resource_gpu_address *dst, D3D12_GPU_VIRTUAL_ADDRESS gpu_address,
+        struct d3d12_command_list *list)
+{
+    if (gpu_address)
+    {
+        dst->resource = vkd3d_gpu_va_allocator_dereference(&list->device->gpu_va_allocator, gpu_address);
+        dst->offset = gpu_address - dst->resource->gpu_address;
+    }
+    else
+    {
+        dst->resource = NULL;
+        dst->offset = 0;
+    }
+}
 
 struct draw_instanced_op
 {
@@ -1957,6 +1979,14 @@ struct root_constants_op
     unsigned int offset;
     unsigned int count;
     uint32_t data[];
+};
+
+struct root_descriptor_op
+{
+    enum command_list_op op;
+    enum vkd3d_pipeline_bind_point bind_point;
+    unsigned int index;
+    struct resource_gpu_address gpu_address;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5114,26 +5144,29 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetGraphicsRoot32BitConstants(I
             root_parameter_index, dst_offset, constant_count, data);
 }
 
-static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
-        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_VIRTUAL_ADDRESS gpu_address)
+static void d3d12_command_list_op_set_root_cbv(struct d3d12_command_list *list, const void *data)
 {
-    struct vkd3d_pipeline_bindings *bindings = &list->pipeline_bindings[bind_point];
-    const struct d3d12_root_signature *root_signature = bindings->root_signature;
     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
     const struct vkd3d_vulkan_info *vk_info = &list->device->vk_info;
+    const struct d3d12_root_signature *root_signature;
     const struct d3d12_root_parameter *root_parameter;
     struct VkWriteDescriptorSet descriptor_write;
+    const struct root_descriptor_op *op = data;
     struct VkDescriptorBufferInfo buffer_info;
+    struct vkd3d_pipeline_bindings *bindings;
     struct d3d12_resource *resource;
+    unsigned int index = op->index;
 
+    bindings = &list->pipeline_bindings[op->bind_point];
+    root_signature = bindings->root_signature;
+    resource = op->gpu_address.resource;
     root_parameter = root_signature_get_root_descriptor(root_signature, index);
     assert(root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_CBV);
 
-    if (gpu_address)
+    if (resource)
     {
-        resource = vkd3d_gpu_va_allocator_dereference(&list->device->gpu_va_allocator, gpu_address);
         buffer_info.buffer = resource->u.vk_buffer;
-        buffer_info.offset = gpu_address - resource->gpu_address;
+        buffer_info.offset = op->gpu_address.offset;
         buffer_info.range = resource->desc.Width - buffer_info.offset;
         buffer_info.range = min(buffer_info.range, vk_info->device_limits.maxUniformBufferRange);
     }
@@ -5153,7 +5186,7 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
     }
     else
     {
-        d3d12_command_list_prepare_descriptors(list, bind_point);
+        d3d12_command_list_prepare_descriptors(list, op->bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
                 root_parameter, bindings->descriptor_sets[0], NULL, &buffer_info);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
@@ -5164,6 +5197,22 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
         bindings->push_descriptor_dirty_mask |= 1u << index;
         bindings->push_descriptor_active_mask |= 1u << index;
     }
+}
+
+static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
+        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_VIRTUAL_ADDRESS gpu_address)
+{
+    struct root_descriptor_op *op;
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_ROOT_CBV;
+    op->bind_point = bind_point;
+    op->index = index;
+    resource_gpu_address_from_d3d12(&op->gpu_address, gpu_address, list);
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetComputeRootConstantBufferView(
@@ -6699,6 +6748,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_ROOT_CBV:
+            d3d12_command_list_op_set_root_cbv(list, data);
             break;
         case CL_OP_SET_ROOT_CONSTANTS:
             d3d12_command_list_op_set_root_constants(list, data);
