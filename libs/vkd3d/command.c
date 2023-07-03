@@ -1804,6 +1804,7 @@ struct command_op_packet
 
 enum command_list_op
 {
+    CL_OP_CLEAR_DSV,
     CL_OP_COPY_BUFFER_REGION,
     CL_OP_COPY_RESOURCE,
     CL_OP_COPY_TEXTURE_REGION,
@@ -2033,6 +2034,17 @@ struct render_targets_op
     struct d3d12_dsv_desc dsv_desc;
     unsigned int render_target_descriptor_count;
     struct d3d12_rtv_desc rtv_descriptors[];
+};
+
+struct clear_dsv_op
+{
+    enum command_list_op op;
+    struct d3d12_dsv_desc dsv_desc;
+    D3D12_CLEAR_FLAGS flags;
+    float depth;
+    unsigned int stencil;
+    unsigned int rect_count;
+    D3D12_RECT rects[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5880,18 +5892,19 @@ static void d3d12_command_list_clear(struct d3d12_command_list *list,
     }
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_ClearDepthStencilView(ID3D12GraphicsCommandList5 *iface,
-        D3D12_CPU_DESCRIPTOR_HANDLE dsv, D3D12_CLEAR_FLAGS flags, float depth, UINT8 stencil,
-        UINT rect_count, const D3D12_RECT *rects)
+static void d3d12_command_list_clear_depth_stencil_view(struct d3d12_command_list *list, const void *data)
 {
-    const union VkClearValue clear_value = {.depthStencil = {depth, stencil}};
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct d3d12_dsv_desc *dsv_desc = d3d12_dsv_desc_from_cpu_handle(dsv);
     struct VkAttachmentDescription attachment_desc;
     struct VkAttachmentReference ds_reference;
+    const struct d3d12_dsv_desc *dsv_desc;
+    const struct clear_dsv_op *op = data;
+    union VkClearValue clear_value;
+    D3D12_CLEAR_FLAGS flags;
 
-    TRACE("iface %p, dsv %#lx, flags %#x, depth %.8e, stencil 0x%02x, rect_count %u, rects %p.\n",
-            iface, dsv.ptr, flags, depth, stencil, rect_count, rects);
+    clear_value.depthStencil.depth = op->depth;
+    clear_value.depthStencil.stencil = op->stencil;
+    dsv_desc = &op->dsv_desc;
+    flags = op->flags;
 
     d3d12_command_list_track_resource_usage(list, dsv_desc->resource);
 
@@ -5926,7 +5939,35 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearDepthStencilView(ID3D12Gra
 
     d3d12_command_list_clear(list, &attachment_desc, NULL, &ds_reference,
             dsv_desc->view, dsv_desc->width, dsv_desc->height, dsv_desc->layer_count,
-            &clear_value, rect_count, rects);
+            &clear_value, op->rect_count, op->rects);
+
+    vkd3d_view_decref(dsv_desc->view, list->device);
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ClearDepthStencilView(ID3D12GraphicsCommandList5 *iface,
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv, D3D12_CLEAR_FLAGS flags, float depth, UINT8 stencil,
+        UINT rect_count, const D3D12_RECT *rects)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct clear_dsv_op *op;
+
+    TRACE("iface %p, dsv %#lx, flags %#x, depth %.8e, stencil 0x%02x, rect_count %u, rects %p.\n",
+            iface, dsv.ptr, flags, depth, stencil, rect_count, rects);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct clear_dsv_op,
+            rects[rect_count]))))
+        return;
+
+    op->op = CL_OP_CLEAR_DSV;
+    op->dsv_desc = *d3d12_dsv_desc_from_cpu_handle(dsv);
+    vkd3d_view_incref(op->dsv_desc.view);
+    op->flags = flags;
+    op->depth = depth;
+    op->stencil = stencil;
+    op->rect_count = rect_count;
+    memcpy(op->rects, rects, rect_count * sizeof(*rects));
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_ClearRenderTargetView(ID3D12GraphicsCommandList5 *iface,
@@ -6887,6 +6928,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
 
     switch (op)
     {
+        case CL_OP_CLEAR_DSV:
+            d3d12_command_list_clear_depth_stencil_view(list, data);
+            break;
         case CL_OP_COPY_BUFFER_REGION:
             d3d12_command_list_copy_buffer_region(list, data);
             break;
