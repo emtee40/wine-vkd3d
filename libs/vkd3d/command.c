@@ -1816,6 +1816,7 @@ enum command_list_op
     CL_OP_SET_DESCRIPTOR_TABLE,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_ROOT_CONSTANTS,
     CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
@@ -1946,6 +1947,16 @@ struct descriptor_table_op
     enum vkd3d_pipeline_bind_point bind_point;
     unsigned int index;
     struct d3d12_desc *base_descriptor;
+};
+
+struct root_constants_op
+{
+    enum command_list_op op;
+    enum vkd3d_pipeline_bind_point bind_point;
+    unsigned int index;
+    unsigned int offset;
+    unsigned int count;
+    uint32_t data[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5022,17 +5033,37 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetGraphicsRootDescriptorTable(
             root_parameter_index, base_descriptor);
 }
 
+static void d3d12_command_list_op_set_root_constants(struct d3d12_command_list *list, const void *data)
+{
+    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
+    const struct d3d12_root_signature *root_signature;
+    const struct root_constants_op *op = data;
+    const struct d3d12_root_constant *c;
+
+    root_signature = list->pipeline_bindings[op->bind_point].root_signature;
+    c = root_signature_get_32bit_constants(root_signature, op->index);
+    VK_CALL(vkCmdPushConstants(list->vk_command_buffer, root_signature->vk_pipeline_layout,
+            c->stage_flags, c->offset + op->offset * sizeof(uint32_t), op->count * sizeof(uint32_t), op->data));
+}
+
 static void d3d12_command_list_set_root_constants(struct d3d12_command_list *list,
         enum vkd3d_pipeline_bind_point bind_point, unsigned int index, unsigned int offset,
         unsigned int count, const void *data)
 {
-    const struct d3d12_root_signature *root_signature = list->pipeline_bindings[bind_point].root_signature;
-    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
-    const struct d3d12_root_constant *c;
+    struct root_constants_op *op;
 
-    c = root_signature_get_32bit_constants(root_signature, index);
-    VK_CALL(vkCmdPushConstants(list->vk_command_buffer, root_signature->vk_pipeline_layout,
-            c->stage_flags, c->offset + offset * sizeof(uint32_t), count * sizeof(uint32_t), data));
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct root_constants_op,
+            data[count]))))
+        return;
+
+    op->op = CL_OP_SET_ROOT_CONSTANTS;
+    op->bind_point = bind_point;
+    op->index = index;
+    op->offset = offset;
+    op->count = count;
+    memcpy(op->data, data, count * sizeof(uint32_t));
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetComputeRoot32BitConstant(ID3D12GraphicsCommandList5 *iface,
@@ -6668,6 +6699,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_ROOT_CONSTANTS:
+            d3d12_command_list_op_set_root_constants(list, data);
             break;
         case CL_OP_SET_ROOT_SIGNATURE:
             d3d12_command_list_op_set_root_signature(list, data);
