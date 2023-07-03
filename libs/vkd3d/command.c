@@ -1806,6 +1806,7 @@ enum command_list_op
 {
     CL_OP_CLEAR_DSV,
     CL_OP_CLEAR_RTV,
+    CL_OP_CLEAR_UAV,
     CL_OP_COPY_BUFFER_REGION,
     CL_OP_COPY_RESOURCE,
     CL_OP_COPY_TEXTURE_REGION,
@@ -2053,6 +2054,16 @@ struct clear_rtv_op
     enum command_list_op op;
     struct d3d12_rtv_desc rtv_desc;
     float color[4];
+    unsigned int rect_count;
+    D3D12_RECT rects[];
+};
+
+struct clear_uav_op
+{
+    enum command_list_op op;
+    struct d3d12_resource *resource;
+    struct vkd3d_view *view;
+    VkClearColorValue clear_colour;
     unsigned int rect_count;
     D3D12_RECT rects[];
 };
@@ -6122,18 +6133,26 @@ static void vkd3d_uav_clear_state_get_image_pipeline(const struct vkd3d_uav_clea
     }
 }
 
-static void d3d12_command_list_clear_uav(struct d3d12_command_list *list,
-        struct d3d12_resource *resource, struct vkd3d_view *descriptor, const VkClearColorValue *clear_colour,
-        unsigned int rect_count, const D3D12_RECT *rects)
+static void d3d12_command_list_op_clear_uav(struct d3d12_command_list *list, const void *data)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
     unsigned int i, miplevel_idx, layer_count;
     struct vkd3d_uav_clear_pipeline pipeline;
     struct vkd3d_uav_clear_args clear_args;
     const struct vkd3d_resource_view *view;
+    const struct clear_uav_op *op = data;
     VkDescriptorImageInfo image_info;
     D3D12_RECT full_rect, curr_rect;
+    struct d3d12_resource *resource;
     VkWriteDescriptorSet write_set;
+    struct vkd3d_view *descriptor;
+    unsigned int rect_count;
+    const D3D12_RECT *rects;
+
+    resource = op->resource;
+    descriptor = op->view;
+    rect_count = op->rect_count;
+    rects = op->rects;
 
     d3d12_command_list_track_resource_usage(list, resource);
     d3d12_command_list_end_current_render_pass(list);
@@ -6144,9 +6163,10 @@ static void d3d12_command_list_clear_uav(struct d3d12_command_list *list,
 
     if (!d3d12_command_allocator_add_view(list->allocator, descriptor))
         WARN("Failed to add view.\n");
+    vkd3d_view_decref(descriptor, list->device);
     view = &descriptor->v;
 
-    clear_args.colour = *clear_colour;
+    clear_args.colour = op->clear_colour;
 
     write_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write_set.pNext = NULL;
@@ -6234,6 +6254,27 @@ static void d3d12_command_list_clear_uav(struct d3d12_command_list *list,
                 vkd3d_compute_workgroup_count(clear_args.extent.height, pipeline.group_size.height),
                 vkd3d_compute_workgroup_count(layer_count, pipeline.group_size.depth)));
     }
+}
+
+static void d3d12_command_list_clear_uav(struct d3d12_command_list *list,
+        struct d3d12_resource *resource, struct vkd3d_view *view, const VkClearColorValue *clear_colour,
+        unsigned int rect_count, const D3D12_RECT *rects)
+{
+    struct clear_uav_op *op;
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct clear_uav_op,
+            rects[rect_count]))))
+        return;
+
+    op->op = CL_OP_CLEAR_UAV;
+    op->resource = resource;
+    op->view = view;
+    vkd3d_view_incref(view);
+    op->clear_colour = *clear_colour;
+    op->rect_count = rect_count;
+    memcpy(op->rects, rects, rect_count * sizeof(*rects));
+
+    d3d12_command_list_flush(list);
 }
 
 static const struct vkd3d_format *vkd3d_fixup_clear_uav_uint_colour(struct d3d12_device *device,
@@ -6967,6 +7008,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_CLEAR_RTV:
             d3d12_command_list_clear_render_target_view(list, data);
+            break;
+        case CL_OP_CLEAR_UAV:
+            d3d12_command_list_op_clear_uav(list, data);
             break;
         case CL_OP_COPY_BUFFER_REGION:
             d3d12_command_list_copy_buffer_region(list, data);
