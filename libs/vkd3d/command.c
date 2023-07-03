@@ -1817,6 +1817,7 @@ enum command_list_op
     CL_OP_SET_INDEX_BUFFER,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_RENDER_TARGETS,
     CL_OP_SET_ROOT_CBV,
     CL_OP_SET_ROOT_CONSTANTS,
     CL_OP_SET_ROOT_DESCRIPTOR,
@@ -2024,6 +2025,14 @@ struct set_targets_op
         uint64_t size_in_bytes;
         struct resource_gpu_address filled_size_location;
     } views[];
+};
+
+struct render_targets_op
+{
+    enum command_list_op op;
+    struct d3d12_dsv_desc dsv_desc;
+    unsigned int render_target_descriptor_count;
+    struct d3d12_rtv_desc rtv_descriptors[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5620,22 +5629,19 @@ static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsComm
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12GraphicsCommandList5 *iface,
-        UINT render_target_descriptor_count, const D3D12_CPU_DESCRIPTOR_HANDLE *render_target_descriptors,
-        BOOL single_descriptor_handle, const D3D12_CPU_DESCRIPTOR_HANDLE *depth_stencil_descriptor)
+static void d3d12_command_list_om_set_render_targets(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct d3d12_rtv_desc *rtv_desc;
+    unsigned int render_target_descriptor_count;
+    const struct render_targets_op *op = data;
     const struct d3d12_dsv_desc *dsv_desc;
+    const struct d3d12_rtv_desc *rtv_desc;
+    struct d3d12_resource *resource;
     VkFormat prev_dsv_format;
     struct vkd3d_view *view;
     unsigned int i;
 
-    TRACE("iface %p, render_target_descriptor_count %u, render_target_descriptors %p, "
-            "single_descriptor_handle %#x, depth_stencil_descriptor %p.\n",
-            iface, render_target_descriptor_count, render_target_descriptors,
-            single_descriptor_handle, depth_stencil_descriptor);
-
+    dsv_desc = &op->dsv_desc;
+    render_target_descriptor_count = op->render_target_descriptor_count;
     if (render_target_descriptor_count > ARRAY_SIZE(list->rtvs))
     {
         WARN("Descriptor count %u > %zu, ignoring extra descriptors.\n",
@@ -5648,17 +5654,9 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12Graphi
     list->fb_layer_count = 0;
     for (i = 0; i < render_target_descriptor_count; ++i)
     {
-        if (single_descriptor_handle)
-        {
-            if ((rtv_desc = d3d12_rtv_desc_from_cpu_handle(*render_target_descriptors)))
-                rtv_desc += i;
-        }
-        else
-        {
-            rtv_desc = d3d12_rtv_desc_from_cpu_handle(render_target_descriptors[i]);
-        }
+        rtv_desc = &op->rtv_descriptors[i];
 
-        if (!rtv_desc || !rtv_desc->resource)
+        if (!rtv_desc->resource)
         {
             WARN("RTV descriptor %u is not initialized.\n", i);
             list->rtvs[i] = VK_NULL_HANDLE;
@@ -5667,12 +5665,12 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12Graphi
 
         d3d12_command_list_track_resource_usage(list, rtv_desc->resource);
 
-        /* In D3D12 CPU descriptors are consumed when a command is recorded. */
         view = rtv_desc->view;
         if (!d3d12_command_allocator_add_view(list->allocator, view))
         {
             WARN("Failed to add view.\n");
         }
+        vkd3d_view_decref(rtv_desc->view, list->device);
 
         list->rtvs[i] = view->v.u.vk_image_view;
         list->fb_width = max(list->fb_width, rtv_desc->width);
@@ -5683,31 +5681,23 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12Graphi
     prev_dsv_format = list->dsv_format;
     list->dsv = VK_NULL_HANDLE;
     list->dsv_format = VK_FORMAT_UNDEFINED;
-    if (depth_stencil_descriptor)
+    if ((resource = dsv_desc->resource))
     {
-        if ((dsv_desc = d3d12_dsv_desc_from_cpu_handle(*depth_stencil_descriptor))
-                && dsv_desc->resource)
-        {
-            d3d12_command_list_track_resource_usage(list, dsv_desc->resource);
+        d3d12_command_list_track_resource_usage(list, resource);
 
-            /* In D3D12 CPU descriptors are consumed when a command is recorded. */
-            view = dsv_desc->view;
-            if (!d3d12_command_allocator_add_view(list->allocator, view))
-            {
-                WARN("Failed to add view.\n");
-                list->dsv = VK_NULL_HANDLE;
-            }
-
-            list->dsv = view->v.u.vk_image_view;
-            list->fb_width = max(list->fb_width, dsv_desc->width);
-            list->fb_height = max(list->fb_height, dsv_desc->height);
-            list->fb_layer_count = max(list->fb_layer_count, dsv_desc->layer_count);
-            list->dsv_format = dsv_desc->format->vk_format;
-        }
-        else
+        view = dsv_desc->view;
+        if (!d3d12_command_allocator_add_view(list->allocator, view))
         {
-            WARN("DSV descriptor is not initialized.\n");
+            WARN("Failed to add view.\n");
+            list->dsv = VK_NULL_HANDLE;
         }
+        vkd3d_view_decref(view, list->device);
+
+        list->dsv = view->v.u.vk_image_view;
+        list->fb_width = max(list->fb_width, dsv_desc->width);
+        list->fb_height = max(list->fb_height, dsv_desc->height);
+        list->fb_layer_count = max(list->fb_layer_count, dsv_desc->layer_count);
+        list->dsv_format = dsv_desc->format->vk_format;
     }
 
     if (prev_dsv_format != list->dsv_format && d3d12_pipeline_state_has_unknown_dsv_format(list->state))
@@ -5715,6 +5705,71 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12Graphi
 
     d3d12_command_list_invalidate_current_framebuffer(list);
     d3d12_command_list_invalidate_current_render_pass(list);
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12GraphicsCommandList5 *iface,
+        UINT render_target_descriptor_count, const D3D12_CPU_DESCRIPTOR_HANDLE *render_target_descriptors,
+        BOOL single_descriptor_handle, const D3D12_CPU_DESCRIPTOR_HANDLE *depth_stencil_descriptor)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    const struct d3d12_dsv_desc *dsv_desc = NULL;
+    const struct d3d12_rtv_desc *src;
+    struct d3d12_rtv_desc *rtv_desc;
+    struct render_targets_op *op;
+    unsigned int i;
+
+    TRACE("iface %p, render_target_descriptor_count %u, render_target_descriptors %p, "
+            "single_descriptor_handle %#x, depth_stencil_descriptor %p.\n",
+            iface, render_target_descriptor_count, render_target_descriptors,
+            single_descriptor_handle, depth_stencil_descriptor);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct render_targets_op,
+            rtv_descriptors[render_target_descriptor_count]))))
+        return;
+
+    op->op = CL_OP_SET_RENDER_TARGETS;
+
+    /* In D3D12 CPU descriptors are consumed when a command is recorded. */
+    if (depth_stencil_descriptor)
+    {
+        if (!(dsv_desc = d3d12_dsv_desc_from_cpu_handle(*depth_stencil_descriptor)) || !dsv_desc->resource)
+            WARN("DSV descriptor is not initialized.\n");
+    }
+    if (dsv_desc && dsv_desc->resource)
+    {
+        op->dsv_desc = *dsv_desc;
+        vkd3d_view_incref(op->dsv_desc.view);
+    }
+    else
+    {
+        memset(&op->dsv_desc, 0, sizeof(op->dsv_desc));
+    }
+
+    op->render_target_descriptor_count = render_target_descriptor_count;
+    rtv_desc = op->rtv_descriptors;
+    for (i = 0; i < render_target_descriptor_count; ++i)
+    {
+        if (single_descriptor_handle)
+        {
+            if ((src = d3d12_rtv_desc_from_cpu_handle(render_target_descriptors[0])))
+                src += i;
+        }
+        else
+        {
+            src = d3d12_rtv_desc_from_cpu_handle(render_target_descriptors[i]);
+        }
+        if (src && src->resource)
+        {
+            rtv_desc[i] = *src;
+            vkd3d_view_incref(rtv_desc[i].view);
+        }
+        else
+        {
+            memset(&rtv_desc[i], 0, sizeof(rtv_desc[i]));
+        }
+    }
+
+    d3d12_command_list_flush(list);
 }
 
 static void d3d12_command_list_clear(struct d3d12_command_list *list,
@@ -6870,6 +6925,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_RENDER_TARGETS:
+            d3d12_command_list_om_set_render_targets(list, data);
             break;
         case CL_OP_SET_ROOT_CBV:
             d3d12_command_list_op_set_root_cbv(list, data);
