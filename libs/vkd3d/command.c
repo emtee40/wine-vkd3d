@@ -1814,6 +1814,7 @@ enum command_list_op
     CL_OP_RESOURCE_BARRIER,
     CL_OP_SET_BLEND_FACTOR,
     CL_OP_SET_DESCRIPTOR_TABLE,
+    CL_OP_SET_INDEX_BUFFER,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_ROOT_CBV,
@@ -1988,6 +1989,14 @@ struct root_descriptor_op
     enum vkd3d_pipeline_bind_point bind_point;
     unsigned int index;
     struct resource_gpu_address gpu_address;
+};
+
+struct index_buffer_op
+{
+    enum command_list_op op;
+    struct resource_gpu_address location;
+    unsigned int size_in_bytes;
+    DXGI_FORMAT format;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -5356,13 +5365,40 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetGraphicsRootUnorderedAccessV
             root_parameter_index, address);
 }
 
+static void d3d12_command_list_ia_set_index_buffer(struct d3d12_command_list *list, const void *data)
+{
+    const struct vkd3d_vk_device_procs *vk_procs;
+    const struct index_buffer_op *op = data;
+    DXGI_FORMAT format = op->format;
+    struct d3d12_resource *resource;
+    enum VkIndexType index_type;
+
+    vk_procs = &list->device->vk_procs;
+
+    switch (format)
+    {
+        case DXGI_FORMAT_R16_UINT:
+            index_type = VK_INDEX_TYPE_UINT16;
+            break;
+        case DXGI_FORMAT_R32_UINT:
+            index_type = VK_INDEX_TYPE_UINT32;
+            break;
+        default:
+            WARN("Invalid index format %#x.\n", format);
+            return;
+    }
+
+    list->index_buffer_format = format;
+
+    resource = op->location.resource;
+    VK_CALL(vkCmdBindIndexBuffer(list->vk_command_buffer, resource->u.vk_buffer, op->location.offset, index_type));
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_IASetIndexBuffer(ID3D12GraphicsCommandList5 *iface,
         const D3D12_INDEX_BUFFER_VIEW *view)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct vkd3d_vk_device_procs *vk_procs;
-    struct d3d12_resource *resource;
-    enum VkIndexType index_type;
+    struct index_buffer_op *op;
 
     TRACE("iface %p, view %p.\n", iface, view);
 
@@ -5377,26 +5413,15 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetIndexBuffer(ID3D12Graphics
         return;
     }
 
-    vk_procs = &list->device->vk_procs;
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
 
-    switch (view->Format)
-    {
-        case DXGI_FORMAT_R16_UINT:
-            index_type = VK_INDEX_TYPE_UINT16;
-            break;
-        case DXGI_FORMAT_R32_UINT:
-            index_type = VK_INDEX_TYPE_UINT32;
-            break;
-        default:
-            WARN("Invalid index format %#x.\n", view->Format);
-            return;
-    }
+    op->op = CL_OP_SET_INDEX_BUFFER;
+    resource_gpu_address_from_d3d12(&op->location, view->BufferLocation, list);
+    op->size_in_bytes = view->SizeInBytes;
+    op->format = view->Format;
 
-    list->index_buffer_format = view->Format;
-
-    resource = vkd3d_gpu_va_allocator_dereference(&list->device->gpu_va_allocator, view->BufferLocation);
-    VK_CALL(vkCmdBindIndexBuffer(list->vk_command_buffer, resource->u.vk_buffer,
-            view->BufferLocation - resource->gpu_address, index_type));
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_IASetVertexBuffers(ID3D12GraphicsCommandList5 *iface,
@@ -6763,6 +6788,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_DESCRIPTOR_TABLE:
             d3d12_command_list_op_set_descriptor_table(list, data);
+            break;
+        case CL_OP_SET_INDEX_BUFFER:
+            d3d12_command_list_ia_set_index_buffer(list, data);
             break;
         case CL_OP_SET_PIPELINE_STATE:
             d3d12_command_list_set_pipeline_state(list, data);
