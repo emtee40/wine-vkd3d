@@ -1822,6 +1822,7 @@ enum command_list_op
     CL_OP_SET_DESCRIPTOR_TABLE,
     CL_OP_SET_INDEX_BUFFER,
     CL_OP_SET_PIPELINE_STATE,
+    CL_OP_SET_PREDICATION,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_RENDER_TARGETS,
     CL_OP_SET_ROOT_CBV,
@@ -2088,6 +2089,14 @@ struct resolve_query_op
     unsigned int query_count;
     struct d3d12_resource *dst_buffer;
     uint64_t aligned_dst_buffer_offset;
+};
+
+struct predication_op
+{
+    enum command_list_op op;
+    struct d3d12_resource *pred_buffer;
+    uint64_t aligned_buffer_offset;
+    D3D12_PREDICATION_OP operation;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -6639,16 +6648,14 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveQueryData(ID3D12Graphics
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_SetPredication(ID3D12GraphicsCommandList5 *iface,
-        ID3D12Resource *buffer, UINT64 aligned_buffer_offset, D3D12_PREDICATION_OP operation)
+static void d3d12_command_list_set_predication(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    struct d3d12_resource *resource = unsafe_impl_from_ID3D12Resource(buffer);
     const struct vkd3d_vulkan_info *vk_info = &list->device->vk_info;
     const struct vkd3d_vk_device_procs *vk_procs;
-
-    TRACE("iface %p, buffer %p, aligned_buffer_offset %#"PRIx64", operation %#x.\n",
-            iface, buffer, aligned_buffer_offset, operation);
+    const struct predication_op *op = data;
+    struct d3d12_resource *resource;
+    uint64_t aligned_buffer_offset;
+    D3D12_PREDICATION_OP operation;
 
     if (!vk_info->EXT_conditional_rendering)
     {
@@ -6657,6 +6664,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetPredication(ID3D12GraphicsCo
     }
 
     vk_procs = &list->device->vk_procs;
+
+    aligned_buffer_offset = op->aligned_buffer_offset;
+    resource = op->pred_buffer;
+    operation = op->operation;
 
     /* FIXME: Add support for conditional rendering in render passes. */
     d3d12_command_list_end_current_render_pass(list);
@@ -6709,6 +6720,26 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetPredication(ID3D12GraphicsCo
         VK_CALL(vkCmdEndConditionalRenderingEXT(list->vk_command_buffer));
         list->is_predicated = false;
     }
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_SetPredication(ID3D12GraphicsCommandList5 *iface,
+        ID3D12Resource *pred_buffer, UINT64 aligned_buffer_offset, D3D12_PREDICATION_OP operation)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct predication_op *op;
+
+    TRACE("iface %p, buffer %p, aligned_buffer_offset %#"PRIx64", operation %#x.\n",
+            iface, pred_buffer, aligned_buffer_offset, operation);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_PREDICATION;
+    op->pred_buffer = unsafe_impl_from_ID3D12Resource(pred_buffer);
+    op->aligned_buffer_offset = aligned_buffer_offset;
+    op->operation = operation;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetMarker(ID3D12GraphicsCommandList5 *iface,
@@ -7152,6 +7183,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PIPELINE_STATE:
             d3d12_command_list_set_pipeline_state(list, data);
+            break;
+        case CL_OP_SET_PREDICATION:
+            d3d12_command_list_set_predication(list, data);
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
