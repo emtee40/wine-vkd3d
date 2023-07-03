@@ -1427,6 +1427,13 @@ enum vkd3d_pipeline_bind_point
     VKD3D_PIPELINE_BIND_POINT_COUNT = 0x2,
 };
 
+struct d3d12_command_heap
+{
+    void *data;
+    size_t data_capacity;
+    size_t data_size;
+};
+
 /* ID3D12CommandList */
 struct d3d12_command_list
 {
@@ -1473,6 +1480,8 @@ struct d3d12_command_list
     void (*update_descriptors)(struct d3d12_command_list *list, enum vkd3d_pipeline_bind_point bind_point);
     struct d3d12_descriptor_heap *descriptor_heaps[64];
     unsigned int descriptor_heap_count;
+
+    struct d3d12_command_heap command_heap;
 
     struct vkd3d_private_store private_store;
 };

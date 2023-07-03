@@ -1796,6 +1796,58 @@ static struct d3d12_command_allocator *unsafe_impl_from_ID3D12CommandAllocator(I
     return impl_from_ID3D12CommandAllocator(iface);
 }
 
+struct command_op_packet
+{
+    size_t size;
+    uint8_t data[];
+};
+
+enum command_list_op
+{
+    CL_OP_DRAW_INSTANCED,
+};
+
+struct draw_instanced_op
+{
+    enum command_list_op op;
+    unsigned int vertex_count_per_instance;
+    unsigned int instance_count;
+    unsigned int start_vertex_location;
+    unsigned int start_instance_location;
+};
+
+static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
+{
+    memset(command_heap, 0, sizeof(*command_heap));
+}
+
+static void *d3d12_command_heap_require_space(struct d3d12_command_heap *command_heap, size_t size)
+{
+    size_t header_size, packet_size, new_size;
+    struct command_op_packet *packet;
+
+    header_size = offsetof(struct command_op_packet, data[0]);
+    packet_size = offsetof(struct command_op_packet, data[size]);
+    packet_size = align(packet_size, header_size);
+
+    new_size = command_heap->data_size + packet_size;
+    if (!vkd3d_array_reserve((void **)&command_heap->data, &command_heap->data_capacity, new_size, 1))
+    {
+        ERR("Failed to allocate command array. Cannot record command.\n");
+        return NULL;
+    }
+
+    packet = (struct command_op_packet *)((uint8_t *)command_heap->data + command_heap->data_size);
+    packet->size = packet_size - header_size;
+    command_heap->data_size = new_size;
+    return &packet->data;
+}
+
+static void d3d12_command_heap_destroy(struct d3d12_command_heap *command_heap)
+{
+    vkd3d_free(command_heap->data);
+}
+
 struct vkd3d_queue *d3d12_device_get_vkd3d_queue(struct d3d12_device *device,
         D3D12_COMMAND_LIST_TYPE type)
 {
@@ -2352,6 +2404,7 @@ static ULONG STDMETHODCALLTYPE d3d12_command_list_Release(ID3D12GraphicsCommandL
         vkd3d_pipeline_bindings_cleanup(&list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_COMPUTE]);
         vkd3d_pipeline_bindings_cleanup(&list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_GRAPHICS]);
 
+        d3d12_command_heap_destroy(&list->command_heap);
         vkd3d_free(list);
 
         d3d12_device_release(device);
@@ -2500,6 +2553,25 @@ static void d3d12_command_list_reset_state(struct d3d12_command_list *list,
     list->descriptor_heap_count = 0;
 
     ID3D12GraphicsCommandList5_SetPipelineState(iface, initial_pipeline_state);
+}
+
+static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const void *data);
+
+static void d3d12_command_list_flush(struct d3d12_command_list *cmd_list)
+{
+    struct d3d12_command_heap *command_heap = &cmd_list->command_heap;
+    const uint8_t *data = command_heap->data;
+    const struct command_op_packet *packet;
+    size_t offset;
+
+    for (offset = 0; offset < command_heap->data_size; )
+    {
+        packet = (struct command_op_packet *)&data[offset];
+        offset += offsetof(struct command_op_packet, data[packet->size]);
+        d3d12_command_list_handle_op(cmd_list, packet->data);
+    }
+
+    command_heap->data_size = 0;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d12_command_list_Reset(ID3D12GraphicsCommandList5 *iface,
@@ -3392,17 +3464,10 @@ static void d3d12_command_list_check_index_buffer_strip_cut_value(struct d3d12_c
     }
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_DrawInstanced(ID3D12GraphicsCommandList5 *iface,
-        UINT vertex_count_per_instance, UINT instance_count, UINT start_vertex_location,
-        UINT start_instance_location)
+static void d3d12_command_list_draw_instanced(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const struct vkd3d_vk_device_procs *vk_procs;
-
-    TRACE("iface %p, vertex_count_per_instance %u, instance_count %u, "
-            "start_vertex_location %u, start_instance_location %u.\n",
-            iface, vertex_count_per_instance, instance_count,
-            start_vertex_location, start_instance_location);
+    const struct draw_instanced_op *op = data;
 
     vk_procs = &list->device->vk_procs;
 
@@ -3412,8 +3477,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_DrawInstanced(ID3D12GraphicsCom
         return;
     }
 
-    VK_CALL(vkCmdDraw(list->vk_command_buffer, vertex_count_per_instance,
-            instance_count, start_vertex_location, start_instance_location));
+    VK_CALL(vkCmdDraw(list->vk_command_buffer, op->vertex_count_per_instance,
+            op->instance_count, op->start_vertex_location, op->start_instance_location));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_DrawInstanced(ID3D12GraphicsCommandList5 *iface,
+        UINT vertex_count_per_instance, UINT instance_count, UINT start_vertex_location,
+        UINT start_instance_location)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct draw_instanced_op *op;
+
+    TRACE("iface %p, vertex_count_per_instance %u, instance_count %u, "
+            "start_vertex_location %u, start_instance_location %u.\n",
+            iface, vertex_count_per_instance, instance_count,
+            start_vertex_location, start_instance_location);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_DRAW_INSTANCED;
+    op->vertex_count_per_instance = vertex_count_per_instance;
+    op->instance_count = instance_count;
+    op->start_vertex_location = start_vertex_location;
+    op->start_instance_location = start_instance_location;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_DrawIndexedInstanced(ID3D12GraphicsCommandList5 *iface,
@@ -6118,6 +6207,20 @@ static struct d3d12_command_list *unsafe_impl_from_ID3D12CommandList(ID3D12Comma
     return CONTAINING_RECORD(iface, struct d3d12_command_list, ID3D12GraphicsCommandList5_iface);
 }
 
+static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const void *data)
+{
+    enum command_list_op op = *(enum command_list_op *)data;
+
+    switch (op)
+    {
+        case CL_OP_DRAW_INSTANCED:
+            d3d12_command_list_draw_instanced(list, data);
+            break;
+        default:
+            vkd3d_unreachable();
+    }
+}
+
 static HRESULT d3d12_command_list_init(struct d3d12_command_list *list, struct d3d12_device *device,
         D3D12_COMMAND_LIST_TYPE type, struct d3d12_command_allocator *allocator,
         ID3D12PipelineState *initial_pipeline_state)
@@ -6139,6 +6242,7 @@ static HRESULT d3d12_command_list_init(struct d3d12_command_list *list, struct d
     list->update_descriptors = device->use_vk_heaps ? d3d12_command_list_update_heap_descriptors
             : d3d12_command_list_update_descriptors;
     list->descriptor_heap_count = 0;
+    d3d12_command_heap_init(&list->command_heap);
 
     if (SUCCEEDED(hr = d3d12_command_allocator_allocate_command_buffer(allocator, list)))
     {
