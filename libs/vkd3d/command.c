@@ -1814,6 +1814,7 @@ enum command_list_op
     CL_OP_SET_BLEND_FACTOR,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_SCISSOR_RECTS,
+    CL_OP_SET_STENCIL_REF,
     CL_OP_SET_VIEWPORTS,
 };
 
@@ -1907,6 +1908,12 @@ struct blend_factor_op
 {
     enum command_list_op op;
     float blend_factor[4];
+};
+
+struct stencil_ref_op
+{
+    enum command_list_op op;
+    unsigned int stencil_ref;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4475,16 +4482,30 @@ static void STDMETHODCALLTYPE d3d12_command_list_OMSetBlendFactor(ID3D12Graphics
     d3d12_command_list_flush(list);
 }
 
+static void d3d12_command_list_om_set_stencil_ref(struct d3d12_command_list *list, const void *data)
+{
+    const struct vkd3d_vk_device_procs *vk_procs;
+    const struct stencil_ref_op *op = data;
+
+    vk_procs = &list->device->vk_procs;
+    VK_CALL(vkCmdSetStencilReference(list->vk_command_buffer, VK_STENCIL_FRONT_AND_BACK, op->stencil_ref));
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetStencilRef(ID3D12GraphicsCommandList5 *iface,
         UINT stencil_ref)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct vkd3d_vk_device_procs *vk_procs;
+    struct stencil_ref_op *op;
 
     TRACE("iface %p, stencil_ref %u.\n", iface, stencil_ref);
 
-    vk_procs = &list->device->vk_procs;
-    VK_CALL(vkCmdSetStencilReference(list->vk_command_buffer, VK_STENCIL_FRONT_AND_BACK, stencil_ref));
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_STENCIL_REF;
+    op->stencil_ref = stencil_ref;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetPipelineState(ID3D12GraphicsCommandList5 *iface,
@@ -6517,6 +6538,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_SCISSOR_RECTS:
             d3d12_command_list_rs_set_scissor_rects(list, data);
+            break;
+        case CL_OP_SET_STENCIL_REF:
+            d3d12_command_list_om_set_stencil_ref(list, data);
             break;
         case CL_OP_SET_VIEWPORTS:
             d3d12_command_list_rs_set_viewports(list, data);
