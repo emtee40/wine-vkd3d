@@ -1815,6 +1815,7 @@ enum command_list_op
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
     CL_OP_END_QUERY,
+    CL_OP_RESOLVE_QUERY_DATA,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_RESOURCE_BARRIER,
     CL_OP_SET_BLEND_FACTOR,
@@ -2076,6 +2077,17 @@ struct query_op
     struct d3d12_query_heap *heap;
     D3D12_QUERY_TYPE type;
     unsigned int index;
+};
+
+struct resolve_query_op
+{
+    enum command_list_op op;
+    struct d3d12_query_heap *heap;
+    D3D12_QUERY_TYPE type;
+    unsigned int start_index;
+    unsigned int query_count;
+    struct d3d12_resource *dst_buffer;
+    uint64_t aligned_dst_buffer_offset;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -6516,23 +6528,27 @@ static size_t get_query_stride(D3D12_QUERY_TYPE type)
     return sizeof(uint64_t);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_ResolveQueryData(ID3D12GraphicsCommandList5 *iface,
-        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT start_index, UINT query_count,
-        ID3D12Resource *dst_buffer, UINT64 aligned_dst_buffer_offset)
+static void d3d12_command_list_resolve_query_data(struct d3d12_command_list *list, const void *data)
 {
-    const struct d3d12_query_heap *query_heap = unsafe_impl_from_ID3D12QueryHeap(heap);
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    struct d3d12_resource *buffer = unsafe_impl_from_ID3D12Resource(dst_buffer);
     const struct vkd3d_vk_device_procs *vk_procs;
+    const struct d3d12_query_heap *query_heap;
+    const struct resolve_query_op *op = data;
+    uint64_t aligned_dst_buffer_offset;
+    struct d3d12_resource *buffer;
     unsigned int i, first, count;
     VkDeviceSize offset, stride;
-
-    TRACE("iface %p, heap %p, type %#x, start_index %u, query_count %u, "
-            "dst_buffer %p, aligned_dst_buffer_offset %#"PRIx64".\n",
-            iface, heap, type, start_index, query_count,
-            dst_buffer, aligned_dst_buffer_offset);
+    unsigned int start_index;
+    unsigned int query_count;
+    D3D12_QUERY_TYPE type;
 
     vk_procs = &list->device->vk_procs;
+
+    aligned_dst_buffer_offset = op->aligned_dst_buffer_offset;
+    query_heap = op->heap;
+    buffer = op->dst_buffer;
+    start_index = op->start_index;
+    query_count = op->query_count;
+    type = op->type;
 
     /* Vulkan is less strict than D3D12 here. Vulkan implementations are free
      * to return any non-zero result for binary occlusion with at least one
@@ -6595,6 +6611,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveQueryData(ID3D12Graphics
                 query_heap->vk_query_pool, first, count, buffer->u.vk_buffer,
                 offset, stride, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT));
     }
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ResolveQueryData(ID3D12GraphicsCommandList5 *iface,
+        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT start_index, UINT query_count,
+        ID3D12Resource *dst_buffer, UINT64 aligned_dst_buffer_offset)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct resolve_query_op *op;
+
+    TRACE("iface %p, heap %p, type %#x, start_index %u, query_count %u, "
+            "dst_buffer %p, aligned_dst_buffer_offset %#"PRIx64".\n",
+            iface, heap, type, start_index, query_count,
+            dst_buffer, aligned_dst_buffer_offset);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_RESOLVE_QUERY_DATA;
+    op->heap = unsafe_impl_from_ID3D12QueryHeap(heap);
+    op->type = type;
+    op->start_index = start_index;
+    op->query_count = query_count;
+    op->dst_buffer = unsafe_impl_from_ID3D12Resource(dst_buffer);
+    op->aligned_dst_buffer_offset = aligned_dst_buffer_offset;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetPredication(ID3D12GraphicsCommandList5 *iface,
@@ -7089,6 +7131,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_END_QUERY:
             d3d12_command_list_end_query(list, data);
+            break;
+        case CL_OP_RESOLVE_QUERY_DATA:
+            d3d12_command_list_resolve_query_data(list, data);
             break;
         case CL_OP_RESOLVE_SUBRESOURCE:
             d3d12_command_list_resolve_subresource(list, data);
