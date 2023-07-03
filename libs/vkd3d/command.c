@@ -1805,6 +1805,7 @@ struct command_op_packet
 enum command_list_op
 {
     CL_OP_CLEAR_DSV,
+    CL_OP_CLEAR_RTV,
     CL_OP_COPY_BUFFER_REGION,
     CL_OP_COPY_RESOURCE,
     CL_OP_COPY_TEXTURE_REGION,
@@ -2043,6 +2044,15 @@ struct clear_dsv_op
     D3D12_CLEAR_FLAGS flags;
     float depth;
     unsigned int stencil;
+    unsigned int rect_count;
+    D3D12_RECT rects[];
+};
+
+struct clear_rtv_op
+{
+    enum command_list_op op;
+    struct d3d12_rtv_desc rtv_desc;
+    float color[4];
     unsigned int rect_count;
     D3D12_RECT rects[];
 };
@@ -5970,17 +5980,16 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearDepthStencilView(ID3D12Gra
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_ClearRenderTargetView(ID3D12GraphicsCommandList5 *iface,
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv, const FLOAT color[4], UINT rect_count, const D3D12_RECT *rects)
+static void d3d12_command_list_clear_render_target_view(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct d3d12_rtv_desc *rtv_desc = d3d12_rtv_desc_from_cpu_handle(rtv);
     struct VkAttachmentDescription attachment_desc;
     struct VkAttachmentReference color_reference;
+    const struct d3d12_rtv_desc *rtv_desc;
+    const struct clear_rtv_op *op = data;
+    const float *color = op->color;
     VkClearValue clear_value;
 
-    TRACE("iface %p, rtv %#lx, color %p, rect_count %u, rects %p.\n",
-            iface, rtv.ptr, color, rect_count, rects);
+    rtv_desc = &op->rtv_desc;
 
     d3d12_command_list_track_resource_usage(list, rtv_desc->resource);
 
@@ -6021,7 +6030,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearRenderTargetView(ID3D12Gra
 
     d3d12_command_list_clear(list, &attachment_desc, &color_reference, NULL,
             rtv_desc->view, rtv_desc->width, rtv_desc->height, rtv_desc->layer_count,
-            &clear_value, rect_count, rects);
+            &clear_value, op->rect_count, op->rects);
+
+    vkd3d_view_decref(rtv_desc->view, list->device);
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ClearRenderTargetView(ID3D12GraphicsCommandList5 *iface,
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv, const FLOAT color[4], UINT rect_count, const D3D12_RECT *rects)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct clear_rtv_op *op;
+
+    TRACE("iface %p, rtv %#lx, color %p, rect_count %u, rects %p.\n",
+            iface, rtv.ptr, color, rect_count, rects);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct clear_rtv_op,
+            rects[rect_count]))))
+        return;
+
+    op->op = CL_OP_CLEAR_RTV;
+    op->rtv_desc = *d3d12_rtv_desc_from_cpu_handle(rtv);
+    vkd3d_view_incref(op->rtv_desc.view);
+    memcpy(op->color, color, sizeof(op->color));
+    op->rect_count = rect_count;
+    memcpy(op->rects, rects, rect_count * sizeof(*rects));
+
+    d3d12_command_list_flush(list);
 }
 
 struct vkd3d_uav_clear_pipeline
@@ -6930,6 +6964,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
     {
         case CL_OP_CLEAR_DSV:
             d3d12_command_list_clear_depth_stencil_view(list, data);
+            break;
+        case CL_OP_CLEAR_RTV:
+            d3d12_command_list_clear_render_target_view(list, data);
             break;
         case CL_OP_COPY_BUFFER_REGION:
             d3d12_command_list_copy_buffer_region(list, data);
