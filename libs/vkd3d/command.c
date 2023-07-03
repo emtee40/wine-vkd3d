@@ -1818,6 +1818,7 @@ enum command_list_op
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_ROOT_CBV,
     CL_OP_SET_ROOT_CONSTANTS,
+    CL_OP_SET_ROOT_DESCRIPTOR,
     CL_OP_SET_ROOT_SIGNATURE,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_STENCIL_REF,
@@ -5237,23 +5238,27 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetGraphicsRootConstantBufferVi
     d3d12_command_list_set_root_cbv(list, VKD3D_PIPELINE_BIND_POINT_GRAPHICS, root_parameter_index, address);
 }
 
-static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *list,
-        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_VIRTUAL_ADDRESS gpu_address)
+static void d3d12_command_list_op_set_root_descriptor(struct d3d12_command_list *list, const void *data)
 {
-    struct vkd3d_pipeline_bindings *bindings = &list->pipeline_bindings[bind_point];
-    const struct d3d12_root_signature *root_signature = bindings->root_signature;
     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
     const struct vkd3d_vulkan_info *vk_info = &list->device->vk_info;
+    const struct d3d12_root_signature *root_signature;
     const struct d3d12_root_parameter *root_parameter;
     struct VkWriteDescriptorSet descriptor_write;
     VkDevice vk_device = list->device->vk_device;
+    const struct root_descriptor_op *op = data;
+    struct vkd3d_pipeline_bindings *bindings;
+    unsigned int index = op->index;
     VkBufferView vk_buffer_view;
 
+    bindings = &list->pipeline_bindings[op->bind_point];
+    root_signature = bindings->root_signature;
     root_parameter = root_signature_get_root_descriptor(root_signature, index);
     assert(root_parameter->parameter_type != D3D12_ROOT_PARAMETER_TYPE_CBV);
 
     /* FIXME: Re-use buffer views. */
-    if (!vkd3d_create_raw_buffer_view(list->device, gpu_address, root_parameter->parameter_type, &vk_buffer_view))
+    if (!vkd3d_create_raw_buffer_view(list->device, op->gpu_address.resource, op->gpu_address.offset,
+            root_parameter->parameter_type, &vk_buffer_view))
     {
         ERR("Failed to create buffer view.\n");
         return;
@@ -5275,7 +5280,7 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     }
     else
     {
-        d3d12_command_list_prepare_descriptors(list, bind_point);
+        d3d12_command_list_prepare_descriptors(list, op->bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
                 root_parameter, bindings->descriptor_sets[0], &vk_buffer_view,  NULL);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
@@ -5285,6 +5290,22 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
         bindings->push_descriptor_dirty_mask |= 1u << index;
         bindings->push_descriptor_active_mask |= 1u << index;
     }
+}
+
+static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *list,
+        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_VIRTUAL_ADDRESS gpu_address)
+{
+    struct root_descriptor_op *op;
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_ROOT_DESCRIPTOR;
+    op->bind_point = bind_point;
+    op->index = index;
+    resource_gpu_address_from_d3d12(&op->gpu_address, gpu_address, list);
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetComputeRootShaderResourceView(
@@ -6754,6 +6775,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_ROOT_CONSTANTS:
             d3d12_command_list_op_set_root_constants(list, data);
+            break;
+        case CL_OP_SET_ROOT_DESCRIPTOR:
+            d3d12_command_list_op_set_root_descriptor(list, data);
             break;
         case CL_OP_SET_ROOT_SIGNATURE:
             d3d12_command_list_op_set_root_signature(list, data);

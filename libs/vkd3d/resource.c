@@ -3573,15 +3573,14 @@ void d3d12_desc_create_uav(struct d3d12_desc *descriptor, struct d3d12_device *d
     }
 }
 
-bool vkd3d_create_raw_buffer_view(struct d3d12_device *device,
-        D3D12_GPU_VIRTUAL_ADDRESS gpu_address, D3D12_ROOT_PARAMETER_TYPE parameter_type, VkBufferView *vk_buffer_view)
+bool vkd3d_create_raw_buffer_view(struct d3d12_device *device, struct d3d12_resource *resource,
+        uint64_t offset, D3D12_ROOT_PARAMETER_TYPE parameter_type, VkBufferView *vk_buffer_view)
 {
     const struct vkd3d_format *format;
-    struct d3d12_resource *resource;
 
     format = vkd3d_get_format(device, DXGI_FORMAT_R32_UINT, false);
 
-    if (!gpu_address)
+    if (!resource)
     {
         if (device->vk_info.EXT_robustness2)
         {
@@ -3594,10 +3593,9 @@ bool vkd3d_create_raw_buffer_view(struct d3d12_device *device,
                 format, 0, VK_WHOLE_SIZE, vk_buffer_view);
     }
 
-    resource = vkd3d_gpu_va_allocator_dereference(&device->gpu_va_allocator, gpu_address);
     assert(d3d12_resource_is_buffer(resource));
     return vkd3d_create_vk_buffer_view(device, resource->u.vk_buffer, format,
-            gpu_address - resource->gpu_address, VK_WHOLE_SIZE, vk_buffer_view);
+            offset, VK_WHOLE_SIZE, vk_buffer_view);
 }
 
 /* samplers */
