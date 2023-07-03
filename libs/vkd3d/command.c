@@ -1804,6 +1804,7 @@ struct command_op_packet
 
 enum command_list_op
 {
+    CL_OP_DISPATCH,
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
 };
@@ -1825,6 +1826,14 @@ struct draw_indexed_instanced_op
     unsigned int start_vertex_location;
     int base_vertex_location;
     unsigned int start_instance_location;
+};
+
+struct dispatch_op
+{
+    enum command_list_op op;
+    unsigned int x;
+    unsigned int y;
+    unsigned int z;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -3561,13 +3570,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_DrawIndexedInstanced(ID3D12Grap
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_Dispatch(ID3D12GraphicsCommandList5 *iface,
-        UINT x, UINT y, UINT z)
+static void d3d12_command_list_dispatch(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const struct vkd3d_vk_device_procs *vk_procs;
-
-    TRACE("iface %p, x %u, y %u, z %u.\n", iface, x, y, z);
+    const struct dispatch_op *op = data;
 
     if (!d3d12_command_list_update_compute_state(list))
     {
@@ -3577,7 +3583,26 @@ static void STDMETHODCALLTYPE d3d12_command_list_Dispatch(ID3D12GraphicsCommandL
 
     vk_procs = &list->device->vk_procs;
 
-    VK_CALL(vkCmdDispatch(list->vk_command_buffer, x, y, z));
+    VK_CALL(vkCmdDispatch(list->vk_command_buffer, op->x, op->y, op->z));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_Dispatch(ID3D12GraphicsCommandList5 *iface,
+        UINT x, UINT y, UINT z)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct dispatch_op *op;
+
+    TRACE("iface %p, x %u, y %u, z %u.\n", iface, x, y, z);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_DISPATCH;
+    op->x = x;
+    op->y = y;
+    op->z = z;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_CopyBufferRegion(ID3D12GraphicsCommandList5 *iface,
@@ -6243,6 +6268,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
 
     switch (op)
     {
+        case CL_OP_DISPATCH:
+            d3d12_command_list_dispatch(list, data);
+            break;
         case CL_OP_DRAW_INDEXED_INSTANCED:
             d3d12_command_list_draw_indexed_instanced(list, data);
             break;
