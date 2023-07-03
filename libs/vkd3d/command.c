@@ -1835,6 +1835,7 @@ enum command_list_op
     CL_OP_SET_TARGETS,
     CL_OP_SET_VERTEX_BUFFERS,
     CL_OP_SET_VIEWPORTS,
+    CL_OP_WRITE_BUFFER_IMMEDIATE,
 };
 
 struct resource_gpu_address
@@ -2109,6 +2110,18 @@ struct execute_indirect_op
     uint64_t arg_buffer_offset;
     struct d3d12_resource *count_buffer;
     uint64_t count_buffer_offset;
+};
+
+struct write_buffer_immediate_op
+{
+    enum command_list_op op;
+    unsigned int count;
+    struct
+    {
+        struct resource_gpu_address dest;
+        uint32_t value;
+        D3D12_WRITEBUFFERIMMEDIATE_MODE mode;
+    } params[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -6964,21 +6977,43 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetViewInstanceMask(ID3D12Graph
     FIXME("iface %p, mask %#x stub!\n", iface, mask);
 }
 
+static void d3d12_command_list_write_buffer_immediate(struct d3d12_command_list *list, const void *data)
+{
+    const struct write_buffer_immediate_op *op = data;
+    struct d3d12_resource *resource;
+    unsigned int i;
+
+    for (i = 0; i < op->count; ++i)
+    {
+        resource = op->params[i].dest.resource;
+        d3d12_command_list_track_resource_usage(list, resource);
+    }
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_WriteBufferImmediate(ID3D12GraphicsCommandList5 *iface,
         UINT count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *parameters,
         const D3D12_WRITEBUFFERIMMEDIATE_MODE *modes)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    struct d3d12_resource *resource;
+    struct write_buffer_immediate_op *op;
     unsigned int i;
 
     FIXME("iface %p, count %u, parameters %p, modes %p stub!\n", iface, count, parameters, modes);
 
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct write_buffer_immediate_op,
+            params[count]))))
+        return;
+
+    op->op = CL_OP_WRITE_BUFFER_IMMEDIATE;
+    op->count = count;
     for (i = 0; i < count; ++i)
     {
-        resource = vkd3d_gpu_va_allocator_dereference(&list->device->gpu_va_allocator, parameters[i].Dest);
-        d3d12_command_list_track_resource_usage(list, resource);
+        resource_gpu_address_from_d3d12(&op->params[i].dest, parameters[i].Dest, list);
+        op->params[i].value = parameters[i].Value;
+        op->params[i].mode = modes ? modes[i] : D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT;
     }
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetProtectedResourceSession(ID3D12GraphicsCommandList5 *iface,
@@ -7261,6 +7296,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_VIEWPORTS:
             d3d12_command_list_rs_set_viewports(list, data);
+            break;
+        case CL_OP_WRITE_BUFFER_IMMEDIATE:
+            d3d12_command_list_write_buffer_immediate(list, data);
             break;
         default:
             vkd3d_unreachable();
