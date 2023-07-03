@@ -1812,6 +1812,7 @@ enum command_list_op
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
+    CL_OP_SET_VIEWPORTS,
 };
 
 struct draw_instanced_op
@@ -1884,6 +1885,13 @@ struct primitive_topology_op
 {
     enum command_list_op op;
     D3D12_PRIMITIVE_TOPOLOGY topology;
+};
+
+struct viewport_op
+{
+    enum command_list_op op;
+    unsigned int viewport_count;
+    D3D12_VIEWPORT viewports[];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4323,15 +4331,16 @@ static void STDMETHODCALLTYPE d3d12_command_list_IASetPrimitiveTopology(ID3D12Gr
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_RSSetViewports(ID3D12GraphicsCommandList5 *iface,
-        UINT viewport_count, const D3D12_VIEWPORT *viewports)
+static void d3d12_command_list_rs_set_viewports(struct d3d12_command_list *list, const void *data)
 {
     VkViewport vk_viewports[D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const struct vkd3d_vk_device_procs *vk_procs;
-    unsigned int i;
+    const struct viewport_op *op = data;
+    const D3D12_VIEWPORT *viewports;
+    unsigned int i, viewport_count;
 
-    TRACE("iface %p, viewport_count %u, viewports %p.\n", iface, viewport_count, viewports);
+    viewport_count = op->viewport_count;
+    viewports = op->viewports;
 
     if (viewport_count > ARRAY_SIZE(vk_viewports))
     {
@@ -4359,6 +4368,25 @@ static void STDMETHODCALLTYPE d3d12_command_list_RSSetViewports(ID3D12GraphicsCo
 
     vk_procs = &list->device->vk_procs;
     VK_CALL(vkCmdSetViewport(list->vk_command_buffer, 0, viewport_count, vk_viewports));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_RSSetViewports(ID3D12GraphicsCommandList5 *iface,
+        UINT viewport_count, const D3D12_VIEWPORT *viewports)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct viewport_op *op;
+
+    TRACE("iface %p, viewport_count %u, viewports %p.\n", iface, viewport_count, viewports);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, offsetof(struct viewport_op,
+            viewports[viewport_count]))))
+        return;
+
+    op->op = CL_OP_SET_VIEWPORTS;
+    op->viewport_count = viewport_count;
+    memcpy(op->viewports, viewports, viewport_count * sizeof(*viewports));
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_RSSetScissorRects(ID3D12GraphicsCommandList5 *iface,
@@ -6437,6 +6465,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
+            break;
+        case CL_OP_SET_VIEWPORTS:
+            d3d12_command_list_rs_set_viewports(list, data);
             break;
         default:
             vkd3d_unreachable();
