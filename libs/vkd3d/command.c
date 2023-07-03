@@ -1804,6 +1804,7 @@ struct command_op_packet
 
 enum command_list_op
 {
+    CL_OP_BEGIN_QUERY,
     CL_OP_CLEAR_DSV,
     CL_OP_CLEAR_RTV,
     CL_OP_CLEAR_UAV,
@@ -2066,6 +2067,14 @@ struct clear_uav_op
     VkClearColorValue clear_colour;
     unsigned int rect_count;
     D3D12_RECT rects[];
+};
+
+struct query_op
+{
+    enum command_list_op op;
+    struct d3d12_query_heap *heap;
+    D3D12_QUERY_TYPE type;
+    unsigned int index;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -6387,17 +6396,20 @@ static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(ID3D12GraphicsC
     FIXME_ONCE("iface %p, resource %p, region %p stub!\n", iface, resource, region);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_BeginQuery(ID3D12GraphicsCommandList5 *iface,
-        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT index)
+static void d3d12_command_list_begin_query(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    struct d3d12_query_heap *query_heap = unsafe_impl_from_ID3D12QueryHeap(heap);
     const struct vkd3d_vk_device_procs *vk_procs;
+    struct d3d12_query_heap *query_heap;
+    const struct query_op *op = data;
     VkQueryControlFlags flags = 0;
-
-    TRACE("iface %p, heap %p, type %#x, index %u.\n", iface, heap, type, index);
+    D3D12_QUERY_TYPE type;
+    unsigned int index;
 
     vk_procs = &list->device->vk_procs;
+
+    query_heap = op->heap;
+    type = op->type;
+    index = op->index;
 
     d3d12_command_list_end_current_render_pass(list);
 
@@ -6415,6 +6427,25 @@ static void STDMETHODCALLTYPE d3d12_command_list_BeginQuery(ID3D12GraphicsComman
     }
 
     VK_CALL(vkCmdBeginQuery(list->vk_command_buffer, query_heap->vk_query_pool, index, flags));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_BeginQuery(ID3D12GraphicsCommandList5 *iface,
+        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT index)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct query_op *op;
+
+    TRACE("iface %p, heap %p, type %#x, index %u.\n", iface, heap, type, index);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_BEGIN_QUERY;
+    op->heap = unsafe_impl_from_ID3D12QueryHeap(heap);
+    op->type = type;
+    op->index = index;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_EndQuery(ID3D12GraphicsCommandList5 *iface,
@@ -7003,6 +7034,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
 
     switch (op)
     {
+        case CL_OP_BEGIN_QUERY:
+            d3d12_command_list_begin_query(list, data);
+            break;
         case CL_OP_CLEAR_DSV:
             d3d12_command_list_clear_depth_stencil_view(list, data);
             break;
