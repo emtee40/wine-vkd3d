@@ -1804,6 +1804,7 @@ struct command_op_packet
 
 enum command_list_op
 {
+    CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
 };
 
@@ -1813,6 +1814,16 @@ struct draw_instanced_op
     unsigned int vertex_count_per_instance;
     unsigned int instance_count;
     unsigned int start_vertex_location;
+    unsigned int start_instance_location;
+};
+
+struct draw_indexed_instanced_op
+{
+    enum command_list_op op;
+    unsigned int index_count_per_instance;
+    unsigned int instance_count;
+    unsigned int start_vertex_location;
+    int base_vertex_location;
     unsigned int start_instance_location;
 };
 
@@ -3505,17 +3516,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_DrawInstanced(ID3D12GraphicsCom
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_DrawIndexedInstanced(ID3D12GraphicsCommandList5 *iface,
-        UINT index_count_per_instance, UINT instance_count, UINT start_vertex_location,
-        INT base_vertex_location, UINT start_instance_location)
+static void d3d12_command_list_draw_indexed_instanced(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    const struct draw_indexed_instanced_op *op = data;
     const struct vkd3d_vk_device_procs *vk_procs;
-
-    TRACE("iface %p, index_count_per_instance %u, instance_count %u, start_vertex_location %u, "
-            "base_vertex_location %d, start_instance_location %u.\n",
-            iface, index_count_per_instance, instance_count, start_vertex_location,
-            base_vertex_location, start_instance_location);
 
     if (!d3d12_command_list_begin_render_pass(list))
     {
@@ -3527,8 +3531,34 @@ static void STDMETHODCALLTYPE d3d12_command_list_DrawIndexedInstanced(ID3D12Grap
 
     d3d12_command_list_check_index_buffer_strip_cut_value(list);
 
-    VK_CALL(vkCmdDrawIndexed(list->vk_command_buffer, index_count_per_instance,
-            instance_count, start_vertex_location, base_vertex_location, start_instance_location));
+    VK_CALL(vkCmdDrawIndexed(list->vk_command_buffer, op->index_count_per_instance,
+            op->instance_count, op->start_vertex_location, op->base_vertex_location,
+            op->start_instance_location));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_DrawIndexedInstanced(ID3D12GraphicsCommandList5 *iface,
+        UINT index_count_per_instance, UINT instance_count, UINT start_vertex_location,
+        INT base_vertex_location, UINT start_instance_location)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct draw_indexed_instanced_op *op;
+
+    TRACE("iface %p, index_count_per_instance %u, instance_count %u, start_vertex_location %u, "
+            "base_vertex_location %d, start_instance_location %u.\n",
+            iface, index_count_per_instance, instance_count, start_vertex_location,
+            base_vertex_location, start_instance_location);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_DRAW_INDEXED_INSTANCED;
+    op->index_count_per_instance = index_count_per_instance;
+    op->instance_count = instance_count;
+    op->start_vertex_location = start_vertex_location;
+    op->base_vertex_location = base_vertex_location;
+    op->start_instance_location = start_instance_location;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_Dispatch(ID3D12GraphicsCommandList5 *iface,
@@ -6213,6 +6243,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
 
     switch (op)
     {
+        case CL_OP_DRAW_INDEXED_INSTANCED:
+            d3d12_command_list_draw_indexed_instanced(list, data);
+            break;
         case CL_OP_DRAW_INSTANCED:
             d3d12_command_list_draw_instanced(list, data);
             break;
