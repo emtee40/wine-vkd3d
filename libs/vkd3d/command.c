@@ -1805,6 +1805,7 @@ struct command_op_packet
 enum command_list_op
 {
     CL_OP_COPY_BUFFER_REGION,
+    CL_OP_COPY_TEXTURE_REGION,
     CL_OP_DISPATCH,
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
@@ -1845,6 +1846,18 @@ struct copy_buffer_region_op
     struct d3d12_resource *src;
     uint64_t src_offset;
     uint64_t byte_count;
+};
+
+struct copy_texture_region_op
+{
+    enum command_list_op op;
+    D3D12_TEXTURE_COPY_LOCATION dst;
+    unsigned int dst_x;
+    unsigned int dst_y;
+    unsigned int dst_z;
+    bool has_src_box;
+    D3D12_TEXTURE_COPY_LOCATION src;
+    D3D12_BOX src_box;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -3919,20 +3932,23 @@ static bool validate_d3d12_box(const D3D12_BOX *box)
             && box->back > box->front;
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_CopyTextureRegion(ID3D12GraphicsCommandList5 *iface,
-        const D3D12_TEXTURE_COPY_LOCATION *dst, UINT dst_x, UINT dst_y, UINT dst_z,
-        const D3D12_TEXTURE_COPY_LOCATION *src, const D3D12_BOX *src_box)
+static void d3d12_command_list_copy_texture_region(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     struct d3d12_resource *dst_resource, *src_resource;
     const struct vkd3d_format *src_format, *dst_format;
+    const struct copy_texture_region_op *op = data;
+    const D3D12_TEXTURE_COPY_LOCATION *dst, *src;
     const struct vkd3d_vk_device_procs *vk_procs;
     VkBufferImageCopy buffer_image_copy;
+    unsigned int dst_x, dst_y, dst_z;
+    const D3D12_BOX *src_box;
     VkImageCopy image_copy;
 
-    TRACE("iface %p, dst %p, dst_x %u, dst_y %u, dst_z %u, src %p, src_box %p.\n",
-            iface, dst, dst_x, dst_y, dst_z, src, src_box);
+    dst_x = op->dst_x;
+    dst_y = op->dst_y;
+    dst_z = op->dst_z;
 
+    src_box = op->has_src_box ? &op->src_box : NULL;
     if (src_box && !validate_d3d12_box(src_box))
     {
         WARN("Empty box %s.\n", debug_d3d12_box(src_box));
@@ -3941,6 +3957,8 @@ static void STDMETHODCALLTYPE d3d12_command_list_CopyTextureRegion(ID3D12Graphic
 
     vk_procs = &list->device->vk_procs;
 
+    dst = &op->dst;
+    src = &op->src;
     dst_resource = unsafe_impl_from_ID3D12Resource(dst->pResource);
     src_resource = unsafe_impl_from_ID3D12Resource(src->pResource);
 
@@ -4042,6 +4060,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_CopyTextureRegion(ID3D12Graphic
     {
         FIXME("Copy type %#x -> %#x not implemented.\n", src->Type, dst->Type);
     }
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_CopyTextureRegion(ID3D12GraphicsCommandList5 *iface,
+        const D3D12_TEXTURE_COPY_LOCATION *dst, UINT dst_x, UINT dst_y, UINT dst_z,
+        const D3D12_TEXTURE_COPY_LOCATION *src, const D3D12_BOX *src_box)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct copy_texture_region_op *op;
+
+    TRACE("iface %p, dst %p, dst_x %u, dst_y %u, dst_z %u, src %p, src_box %p.\n",
+            iface, dst, dst_x, dst_y, dst_z, src, src_box);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_COPY_TEXTURE_REGION;
+    op->dst = *dst;
+    op->dst_x = dst_x;
+    op->dst_y = dst_y;
+    op->dst_z = dst_z;
+    op->has_src_box = !!src_box;
+    op->src = *src;
+    if (src_box)
+        op->src_box = *src_box;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_CopyResource(ID3D12GraphicsCommandList5 *iface,
@@ -6299,6 +6343,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
     {
         case CL_OP_COPY_BUFFER_REGION:
             d3d12_command_list_copy_buffer_region(list, data);
+            break;
+        case CL_OP_COPY_TEXTURE_REGION:
+            d3d12_command_list_copy_texture_region(list, data);
             break;
         case CL_OP_DISPATCH:
             d3d12_command_list_dispatch(list, data);
