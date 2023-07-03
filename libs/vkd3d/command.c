@@ -1811,6 +1811,7 @@ enum command_list_op
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
+    CL_OP_SET_PRIMITIVE_TOPOLOGY,
 };
 
 struct draw_instanced_op
@@ -1877,6 +1878,12 @@ struct resolve_subresource_op
     struct d3d12_resource *src;
     unsigned int src_sub_resource_idx;
     DXGI_FORMAT format;
+};
+
+struct primitive_topology_op
+{
+    enum command_list_op op;
+    D3D12_PRIMITIVE_TOPOLOGY topology;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4288,18 +4295,32 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12Graphi
     d3d12_command_list_flush(list);
 }
 
+static void d3d12_command_list_ia_set_primitive_topology(struct d3d12_command_list *list, const void *data)
+{
+    const struct primitive_topology_op *op = data;
+
+    if (list->primitive_topology == op->topology)
+        return;
+
+    list->primitive_topology = op->topology;
+    d3d12_command_list_invalidate_current_pipeline(list);
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_IASetPrimitiveTopology(ID3D12GraphicsCommandList5 *iface,
         D3D12_PRIMITIVE_TOPOLOGY topology)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct primitive_topology_op *op;
 
     TRACE("iface %p, topology %#x.\n", iface, topology);
 
-    if (list->primitive_topology == topology)
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
         return;
 
-    list->primitive_topology = topology;
-    d3d12_command_list_invalidate_current_pipeline(list);
+    op->op = CL_OP_SET_PRIMITIVE_TOPOLOGY;
+    op->topology = topology;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_RSSetViewports(ID3D12GraphicsCommandList5 *iface,
@@ -6413,6 +6434,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_RESOLVE_SUBRESOURCE:
             d3d12_command_list_resolve_subresource(list, data);
+            break;
+        case CL_OP_SET_PRIMITIVE_TOPOLOGY:
+            d3d12_command_list_ia_set_primitive_topology(list, data);
             break;
         default:
             vkd3d_unreachable();
