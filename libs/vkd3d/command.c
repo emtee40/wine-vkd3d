@@ -1814,6 +1814,7 @@ enum command_list_op
     CL_OP_DISPATCH,
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
+    CL_OP_END_QUERY,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_RESOURCE_BARRIER,
     CL_OP_SET_BLEND_FACTOR,
@@ -6448,16 +6449,19 @@ static void STDMETHODCALLTYPE d3d12_command_list_BeginQuery(ID3D12GraphicsComman
     d3d12_command_list_flush(list);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_EndQuery(ID3D12GraphicsCommandList5 *iface,
-        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT index)
+static void d3d12_command_list_end_query(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    struct d3d12_query_heap *query_heap = unsafe_impl_from_ID3D12QueryHeap(heap);
     const struct vkd3d_vk_device_procs *vk_procs;
-
-    TRACE("iface %p, heap %p, type %#x, index %u.\n", iface, heap, type, index);
+    struct d3d12_query_heap *query_heap;
+    const struct query_op *op = data;
+    D3D12_QUERY_TYPE type;
+    unsigned int index;
 
     vk_procs = &list->device->vk_procs;
+
+    query_heap = op->heap;
+    type = op->type;
+    index = op->index;
 
     d3d12_command_list_end_current_render_pass(list);
 
@@ -6480,6 +6484,25 @@ static void STDMETHODCALLTYPE d3d12_command_list_EndQuery(ID3D12GraphicsCommandL
     }
 
     VK_CALL(vkCmdEndQuery(list->vk_command_buffer, query_heap->vk_query_pool, index));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_EndQuery(ID3D12GraphicsCommandList5 *iface,
+        ID3D12QueryHeap *heap, D3D12_QUERY_TYPE type, UINT index)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct query_op *op;
+
+    TRACE("iface %p, heap %p, type %#x, index %u.\n", iface, heap, type, index);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_END_QUERY;
+    op->heap = unsafe_impl_from_ID3D12QueryHeap(heap);
+    op->type = type;
+    op->index = index;
+
+    d3d12_command_list_flush(list);
 }
 
 static size_t get_query_stride(D3D12_QUERY_TYPE type)
@@ -7063,6 +7086,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_DRAW_INSTANCED:
             d3d12_command_list_draw_instanced(list, data);
+            break;
+        case CL_OP_END_QUERY:
+            d3d12_command_list_end_query(list, data);
             break;
         case CL_OP_RESOLVE_SUBRESOURCE:
             d3d12_command_list_resolve_subresource(list, data);
