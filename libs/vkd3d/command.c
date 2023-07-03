@@ -1815,6 +1815,7 @@ enum command_list_op
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
     CL_OP_END_QUERY,
+    CL_OP_EXECUTE_INDIRECT,
     CL_OP_RESOLVE_QUERY_DATA,
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_RESOURCE_BARRIER,
@@ -2097,6 +2098,17 @@ struct predication_op
     struct d3d12_resource *pred_buffer;
     uint64_t aligned_buffer_offset;
     D3D12_PREDICATION_OP operation;
+};
+
+struct execute_indirect_op
+{
+    enum command_list_op op;
+    struct d3d12_command_signature *command_signature;
+    unsigned int max_command_count;
+    struct d3d12_resource *arg_buffer;
+    uint64_t arg_buffer_offset;
+    struct d3d12_resource *count_buffer;
+    uint64_t count_buffer_offset;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -6763,34 +6775,28 @@ STATIC_ASSERT(sizeof(VkDispatchIndirectCommand) == sizeof(D3D12_DISPATCH_ARGUMEN
 STATIC_ASSERT(sizeof(VkDrawIndexedIndirectCommand) == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
 STATIC_ASSERT(sizeof(VkDrawIndirectCommand) == sizeof(D3D12_DRAW_ARGUMENTS));
 
-static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(ID3D12GraphicsCommandList5 *iface,
-        ID3D12CommandSignature *command_signature, UINT max_command_count, ID3D12Resource *arg_buffer,
-        UINT64 arg_buffer_offset, ID3D12Resource *count_buffer, UINT64 count_buffer_offset)
+static void d3d12_command_list_execute_indirect(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_signature *sig_impl = unsafe_impl_from_ID3D12CommandSignature(command_signature);
-    struct d3d12_resource *count_impl = unsafe_impl_from_ID3D12Resource(count_buffer);
-    struct d3d12_resource *arg_impl = unsafe_impl_from_ID3D12Resource(arg_buffer);
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const D3D12_COMMAND_SIGNATURE_DESC *signature_desc;
     const struct vkd3d_vk_device_procs *vk_procs;
-    unsigned int i;
-
-    TRACE("iface %p, command_signature %p, max_command_count %u, arg_buffer %p, "
-            "arg_buffer_offset %#"PRIx64", count_buffer %p, count_buffer_offset %#"PRIx64".\n",
-            iface, command_signature, max_command_count, arg_buffer, arg_buffer_offset,
-            count_buffer, count_buffer_offset);
+    const struct execute_indirect_op *op = data;
+    struct d3d12_command_signature *sig_impl;
+    struct d3d12_resource *count_buffer;
+    unsigned int i, max_command_count;
+    struct d3d12_resource *arg_impl;
+    uint64_t count_buffer_offset;
+    uint64_t arg_buffer_offset;
 
     vk_procs = &list->device->vk_procs;
 
-    if (count_buffer && !list->device->vk_info.KHR_draw_indirect_count)
-    {
-        FIXME("Count buffers not supported by Vulkan implementation.\n");
-        return;
-    }
-
-    d3d12_command_signature_incref(sig_impl);
-
+    max_command_count = op->max_command_count;
+    count_buffer_offset = op->count_buffer_offset;
+    count_buffer = op->count_buffer;
+    arg_buffer_offset = op->arg_buffer_offset;
+    arg_impl = op->arg_buffer;
+    sig_impl = op->command_signature;
     signature_desc = &sig_impl->desc;
+
     for (i = 0; i < signature_desc->NumArgumentDescs; ++i)
     {
         const D3D12_INDIRECT_ARGUMENT_DESC *arg_desc = &signature_desc->pArgumentDescs[i];
@@ -6807,7 +6813,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(ID3D12GraphicsC
                 if (count_buffer)
                 {
                     VK_CALL(vkCmdDrawIndirectCountKHR(list->vk_command_buffer, arg_impl->u.vk_buffer,
-                            arg_buffer_offset, count_impl->u.vk_buffer, count_buffer_offset,
+                            arg_buffer_offset, count_buffer->u.vk_buffer, count_buffer_offset,
                             max_command_count, signature_desc->ByteStride));
                 }
                 else
@@ -6829,7 +6835,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(ID3D12GraphicsC
                 if (count_buffer)
                 {
                     VK_CALL(vkCmdDrawIndexedIndirectCountKHR(list->vk_command_buffer, arg_impl->u.vk_buffer,
-                            arg_buffer_offset, count_impl->u.vk_buffer, count_buffer_offset,
+                            arg_buffer_offset, count_buffer->u.vk_buffer, count_buffer_offset,
                             max_command_count, signature_desc->ByteStride));
                 }
                 else
@@ -6867,6 +6873,39 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(ID3D12GraphicsC
     }
 
     d3d12_command_signature_decref(sig_impl);
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(ID3D12GraphicsCommandList5 *iface,
+        ID3D12CommandSignature *command_signature, UINT max_command_count, ID3D12Resource *arg_buffer,
+        UINT64 arg_buffer_offset, ID3D12Resource *count_buffer, UINT64 count_buffer_offset)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct execute_indirect_op *op;
+
+    TRACE("iface %p, command_signature %p, max_command_count %u, arg_buffer %p, "
+            "arg_buffer_offset %#"PRIx64", count_buffer %p, count_buffer_offset %#"PRIx64".\n",
+            iface, command_signature, max_command_count, arg_buffer, arg_buffer_offset,
+            count_buffer, count_buffer_offset);
+
+    if (count_buffer && !list->device->vk_info.KHR_draw_indirect_count)
+    {
+        FIXME("Count buffers not supported by Vulkan implementation.\n");
+        return;
+    }
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_EXECUTE_INDIRECT;
+    op->command_signature = unsafe_impl_from_ID3D12CommandSignature(command_signature);
+    d3d12_command_signature_incref(op->command_signature);
+    op->max_command_count = max_command_count;
+    op->arg_buffer = unsafe_impl_from_ID3D12Resource(arg_buffer);
+    op->arg_buffer_offset = arg_buffer_offset;
+    op->count_buffer = unsafe_impl_from_ID3D12Resource(count_buffer);
+    op->count_buffer_offset = count_buffer_offset;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_AtomicCopyBufferUINT(ID3D12GraphicsCommandList5 *iface,
@@ -7162,6 +7201,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_END_QUERY:
             d3d12_command_list_end_query(list, data);
+            break;
+        case CL_OP_EXECUTE_INDIRECT:
+            d3d12_command_list_execute_indirect(list, data);
             break;
         case CL_OP_RESOLVE_QUERY_DATA:
             d3d12_command_list_resolve_query_data(list, data);
