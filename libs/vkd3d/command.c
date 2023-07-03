@@ -1813,6 +1813,7 @@ enum command_list_op
     CL_OP_RESOLVE_SUBRESOURCE,
     CL_OP_RESOURCE_BARRIER,
     CL_OP_SET_BLEND_FACTOR,
+    CL_OP_SET_DESCRIPTOR_TABLE,
     CL_OP_SET_PIPELINE_STATE,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_ROOT_SIGNATURE,
@@ -1937,6 +1938,14 @@ struct root_signature_op
     enum command_list_op op;
     enum vkd3d_pipeline_bind_point bind_point;
     struct d3d12_root_signature *root_signature;
+};
+
+struct descriptor_table_op
+{
+    enum command_list_op op;
+    enum vkd3d_pipeline_bind_point bind_point;
+    unsigned int index;
+    struct d3d12_desc *base_descriptor;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4937,21 +4946,36 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetGraphicsRootSignature(ID3D12
             unsafe_impl_from_ID3D12RootSignature(root_signature));
 }
 
-static void d3d12_command_list_set_descriptor_table(struct d3d12_command_list *list,
-        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_DESCRIPTOR_HANDLE base_descriptor)
+static void d3d12_command_list_op_set_descriptor_table(struct d3d12_command_list *list, const void *data)
 {
-    struct vkd3d_pipeline_bindings *bindings = &list->pipeline_bindings[bind_point];
-    const struct d3d12_root_signature *root_signature = bindings->root_signature;
-    struct d3d12_descriptor_heap *descriptor_heap;
+    const struct d3d12_root_signature *root_signature;
+    const struct descriptor_table_op *op = data;
+    struct vkd3d_pipeline_bindings *bindings;
+    unsigned int index = op->index;
     struct d3d12_desc *desc;
+
+    bindings = &list->pipeline_bindings[op->bind_point];
+    root_signature = bindings->root_signature;
+    desc = op->base_descriptor;
 
     assert(root_signature_get_descriptor_table(root_signature, index));
 
     assert(index < ARRAY_SIZE(bindings->descriptor_tables));
-    desc = d3d12_desc_from_gpu_handle(base_descriptor);
 
     if (bindings->descriptor_tables[index] == desc)
         return;
+
+    bindings->descriptor_tables[index] = desc;
+    bindings->descriptor_table_dirty_mask |= (uint64_t)1 << index;
+    bindings->descriptor_table_active_mask |= (uint64_t)1 << index;
+}
+
+static void d3d12_command_list_set_descriptor_table(struct d3d12_command_list *list,
+        enum vkd3d_pipeline_bind_point bind_point, unsigned int index, D3D12_GPU_DESCRIPTOR_HANDLE base_descriptor)
+{
+    struct d3d12_desc *desc = d3d12_desc_from_gpu_handle(base_descriptor);
+    struct d3d12_descriptor_heap *descriptor_heap;
+    struct descriptor_table_op *op;
 
     descriptor_heap = d3d12_desc_get_descriptor_heap(desc);
     if (!(descriptor_heap->desc.Flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE))
@@ -4963,9 +4987,15 @@ static void d3d12_command_list_set_descriptor_table(struct d3d12_command_list *l
     }
     command_list_add_descriptor_heap(list, descriptor_heap);
 
-    bindings->descriptor_tables[index] = desc;
-    bindings->descriptor_table_dirty_mask |= (uint64_t)1 << index;
-    bindings->descriptor_table_active_mask |= (uint64_t)1 << index;
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_DESCRIPTOR_TABLE;
+    op->bind_point = bind_point;
+    op->index = index;
+    op->base_descriptor = desc;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_SetComputeRootDescriptorTable(ID3D12GraphicsCommandList5 *iface,
@@ -6629,6 +6659,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_SET_BLEND_FACTOR:
             d3d12_command_list_om_set_blend_factor(list, data);
+            break;
+        case CL_OP_SET_DESCRIPTOR_TABLE:
+            d3d12_command_list_op_set_descriptor_table(list, data);
             break;
         case CL_OP_SET_PIPELINE_STATE:
             d3d12_command_list_set_pipeline_state(list, data);
