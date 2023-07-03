@@ -1811,6 +1811,7 @@ enum command_list_op
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
     CL_OP_RESOLVE_SUBRESOURCE,
+    CL_OP_SET_BLEND_FACTOR,
     CL_OP_SET_PRIMITIVE_TOPOLOGY,
     CL_OP_SET_SCISSOR_RECTS,
     CL_OP_SET_VIEWPORTS,
@@ -1900,6 +1901,12 @@ struct scissor_rect_op
     enum command_list_op op;
     unsigned int rect_count;
     D3D12_RECT rects[];
+};
+
+struct blend_factor_op
+{
+    enum command_list_op op;
+    float blend_factor[4];
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4442,16 +4449,30 @@ static void STDMETHODCALLTYPE d3d12_command_list_RSSetScissorRects(ID3D12Graphic
     d3d12_command_list_flush(list);
 }
 
+static void d3d12_command_list_om_set_blend_factor(struct d3d12_command_list *list, const void *data)
+{
+    const struct vkd3d_vk_device_procs *vk_procs;
+    const struct blend_factor_op *op = data;
+
+    vk_procs = &list->device->vk_procs;
+    VK_CALL(vkCmdSetBlendConstants(list->vk_command_buffer, op->blend_factor));
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetBlendFactor(ID3D12GraphicsCommandList5 *iface,
         const FLOAT blend_factor[4])
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
-    const struct vkd3d_vk_device_procs *vk_procs;
+    struct blend_factor_op *op;
 
     TRACE("iface %p, blend_factor %p.\n", iface, blend_factor);
 
-    vk_procs = &list->device->vk_procs;
-    VK_CALL(vkCmdSetBlendConstants(list->vk_command_buffer, blend_factor));
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_SET_BLEND_FACTOR;
+    memcpy(&op->blend_factor, blend_factor, sizeof(op->blend_factor));
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetStencilRef(ID3D12GraphicsCommandList5 *iface,
@@ -6487,6 +6508,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_RESOLVE_SUBRESOURCE:
             d3d12_command_list_resolve_subresource(list, data);
+            break;
+        case CL_OP_SET_BLEND_FACTOR:
+            d3d12_command_list_om_set_blend_factor(list, data);
             break;
         case CL_OP_SET_PRIMITIVE_TOPOLOGY:
             d3d12_command_list_ia_set_primitive_topology(list, data);
