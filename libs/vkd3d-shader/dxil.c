@@ -403,6 +403,7 @@ enum dx_intrinsic_opcode
     DX_DOT3                         =  55,
     DX_DOT4                         =  56,
     DX_CREATE_HANDLE                =  57,
+    DX_CBUFFER_LOAD                 =  58,
     DX_CBUFFER_LOAD_LEGACY          =  59,
     DX_SAMPLE                       =  60,
     DX_SAMPLE_B                     =  61,
@@ -889,6 +890,8 @@ struct sm6_parser
     struct sm6_descriptor_info *descriptors;
     size_t descriptor_capacity;
     size_t descriptor_count;
+    bool uses_cbuffer_load_legacy;
+    bool uses_cbuffer_load;
 
     unsigned int indexable_temp_count;
     unsigned int typed_temp_count;
@@ -4971,6 +4974,8 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
 {
     struct sm6_value *dst = sm6_parser_get_current_value(sm6);
     struct vkd3d_shader_instruction *ins = state->ins;
+    unsigned int component_count = VKD3D_VEC4_SIZE;
+    bool is_legacy = op == DX_CBUFFER_LOAD_LEGACY;
     struct vkd3d_shader_src_param *src_param;
     const struct sm6_value *buffer;
     const struct sm6_type *type;
@@ -4979,11 +4984,28 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
     if (!sm6_value_validate_is_handle(buffer, sm6))
         return;
 
+    if (is_legacy)
+        sm6->uses_cbuffer_load_legacy = true;
+    else
+        sm6->uses_cbuffer_load = true;
+
     vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_MOV);
 
     if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
         return;
     src_param_init_vector_from_reg(src_param, &buffer->u.handle.reg);
+    if (!is_legacy)
+        src_param->swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+    type = is_legacy ? sm6_type_get_scalar_type(dst->type, 0) : dst->type;
+    if (!type)
+    {
+        WARN("Failed to get result type.\n");
+    }
+    else
+    {
+        src_param->reg.data_type = vkd3d_data_type_from_sm6_type(type);
+        component_count = is_legacy ? sm6_type_max_vector_size(type) : 1;
+    }
     register_index_address_init(&src_param->reg.idx[2], operands[1], sm6);
     assert(src_param->reg.idx_count == 3);
 
@@ -4993,7 +5015,7 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
     if (data_type_is_64_bit(src_param->reg.data_type))
         src_param->swizzle = vsir_swizzle_64_from_32(src_param->swizzle);
 
-    instruction_dst_param_init_ssa_vector(ins, sm6_type_max_vector_size(type), sm6);
+    instruction_dst_param_init_ssa_vector(ins, component_count, sm6);
 }
 
 static void sm6_parser_dcl_register_builtin(struct sm6_parser *sm6, enum vkd3d_shader_opcode handler_idx,
@@ -6425,6 +6447,7 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
     [DX_BUFFER_STORE                  ] = {"v", "Hiiooooc", sm6_parser_emit_dx_buffer_store},
     [DX_BUFFER_UPDATE_COUNTER         ] = {"i", "H8",   sm6_parser_emit_dx_buffer_update_counter},
     [DX_CALCULATE_LOD                 ] = {"f", "HHfffb", sm6_parser_emit_dx_calculate_lod},
+    [DX_CBUFFER_LOAD                  ] = {"o", "Hii",  sm6_parser_emit_dx_cbuffer_load},
     [DX_CBUFFER_LOAD_LEGACY           ] = {"o", "Hi",   sm6_parser_emit_dx_cbuffer_load},
     [DX_COS                           ] = {"g", "R",    sm6_parser_emit_dx_sincos},
     [DX_COUNT_BITS                    ] = {"i", "m",    sm6_parser_emit_dx_unary},
@@ -10744,6 +10767,13 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_pro
                     "DXIL module is invalid.");
         goto fail;
     }
+
+    if (sm6->uses_cbuffer_load_legacy && sm6->uses_cbuffer_load)
+    {
+        FIXME("Combining scalar and vector cbuffers is unsupported.\n");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+    program->use_scalar_cbuffers = sm6->uses_cbuffer_load;
 
     if (!sm6_parser_require_space(sm6, output_signature->element_count + input_signature->element_count
             + patch_constant_signature->element_count))
