@@ -1387,6 +1387,7 @@ struct vsir_program
     unsigned int temp_count;
     unsigned int ssa_count;
     bool use_vocp;
+    bool use_scalar_cbuffers;
 
     const char **block_names;
     size_t block_name_count;
