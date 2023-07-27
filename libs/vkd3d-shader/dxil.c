@@ -3873,6 +3873,8 @@ static void dst_param_io_init(struct vkd3d_shader_dst_param *param,
     component_type = e->component_type == VKD3D_SHADER_COMPONENT_INT ? VKD3D_SHADER_COMPONENT_UINT : e->component_type;
     vsir_register_init(&param->reg, reg_type, vkd3d_data_type_from_component_type(component_type), 0);
     param->reg.dimension = VSIR_DIMENSION_VEC4;
+    if (e->min_precision == VKD3D_SHADER_MINIMUM_PRECISION_FLOAT_16)
+        param->reg.precision = VKD3D_SHADER_REGISTER_PRECISION_MIN_FLOAT_16;
 }
 
 static void src_params_init_from_operands(struct vkd3d_shader_src_param *src_params,
@@ -6922,8 +6924,7 @@ static void sm6_parser_emit_cast(struct sm6_parser *sm6, const struct dxil_recor
     {
         dst->u.reg = value->u.reg;
         /* Set the result type for casts from 16-bit min precision. */
-        if (type->u.width != 16)
-            dst->u.reg.data_type = vkd3d_data_type_from_sm6_type(type);
+        dst->u.reg.data_type = vkd3d_data_type_from_sm6_type(type);
         return;
     }
 
@@ -10493,6 +10494,21 @@ static struct sm6_function *sm6_parser_get_function(const struct sm6_parser *sm6
     return NULL;
 }
 
+static void register_convert_min_precision(const struct vkd3d_shader_register *const_reg)
+{
+    struct vkd3d_shader_register *reg = (struct vkd3d_shader_register *)const_reg;
+
+    if (reg->data_type == VKD3D_DATA_HALF)
+    {
+        reg->data_type = VKD3D_DATA_FLOAT;
+        reg->precision = VKD3D_SHADER_REGISTER_PRECISION_MIN_FLOAT_16;
+    }
+    else if (reg->data_type == VKD3D_DATA_UINT16)
+    {
+        reg->data_type = VKD3D_DATA_UINT;
+    }
+}
+
 static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_program *program, const char *source_name,
         struct vkd3d_shader_message_context *message_context, struct dxbc_shader_desc *dxbc_desc)
 {
@@ -10833,6 +10849,16 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_pro
     }
 
     dxil_block_destroy(&sm6->root_block);
+
+    for (i = 0; i < program->instructions.count; ++i)
+    {
+        struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
+
+        for (j = 0; j < ins->src_count; ++j)
+            register_convert_min_precision(&ins->src[j].reg);
+        for (j = 0; j < ins->dst_count; ++j)
+            register_convert_min_precision(&ins->dst[j].reg);
+    }
 
     return VKD3D_OK;
 
