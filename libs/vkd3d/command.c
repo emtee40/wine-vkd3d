@@ -6105,7 +6105,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_WriteBufferImmediate(ID3D12Grap
     struct d3d12_resource *resource;
     unsigned int i;
 
-    FIXME("iface %p, count %u, parameters %p, modes %p stub!\n", iface, count, parameters, modes);
+    FIXME_ONCE("iface %p, count %u, parameters %p, modes %p stub!\n", iface, count, parameters, modes);
 
     for (i = 0; i < count; ++i)
     {
