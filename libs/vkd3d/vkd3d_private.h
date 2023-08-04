@@ -1166,6 +1166,7 @@ struct d3d12_root_signature
 {
     ID3D12RootSignature ID3D12RootSignature_iface;
     LONG refcount;
+    unsigned int internal_refcount;
 
     VkPipelineLayout vk_pipeline_layout;
     struct d3d12_descriptor_set_layout descriptor_set_layouts[VKD3D_MAX_DESCRIPTOR_SETS];
@@ -1209,6 +1210,8 @@ struct d3d12_root_signature
 
 HRESULT d3d12_root_signature_create(struct d3d12_device *device, const void *bytecode,
         size_t bytecode_length, struct d3d12_root_signature **root_signature);
+void d3d12_root_signature_incref(struct d3d12_root_signature *root_signature);
+void d3d12_root_signature_decref(struct d3d12_root_signature *root_signature);
 struct d3d12_root_signature *unsafe_impl_from_ID3D12RootSignature(ID3D12RootSignature *iface);
 
 int vkd3d_parse_root_signature_v_1_0(const struct vkd3d_shader_code *dxbc,
@@ -1395,7 +1398,7 @@ struct vkd3d_push_descriptor
 
 struct vkd3d_pipeline_bindings
 {
-    const struct d3d12_root_signature *root_signature;
+    struct d3d12_root_signature *root_signature;
 
     VkPipelineBindPoint vk_bind_point;
     /* All descriptor sets at index > 1 are for unbounded d3d12 ranges. Set

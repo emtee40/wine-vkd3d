@@ -107,6 +107,25 @@ static void d3d12_root_signature_cleanup(struct d3d12_root_signature *root_signa
         vkd3d_free(root_signature->static_samplers);
 }
 
+/* Any object using this must also hold a ref to the device. */
+void d3d12_root_signature_incref(struct d3d12_root_signature *root_signature)
+{
+    vkd3d_atomic_increment(&root_signature->internal_refcount);
+}
+
+void d3d12_root_signature_decref(struct d3d12_root_signature *root_signature)
+{
+    unsigned int refcount = vkd3d_atomic_decrement(&root_signature->internal_refcount);
+
+    if (!refcount)
+    {
+        struct d3d12_device *device = root_signature->device;
+        vkd3d_private_store_destroy(&root_signature->private_store);
+        d3d12_root_signature_cleanup(root_signature, device);
+        vkd3d_free(root_signature);
+    }
+}
+
 static ULONG STDMETHODCALLTYPE d3d12_root_signature_Release(ID3D12RootSignature *iface)
 {
     struct d3d12_root_signature *root_signature = impl_from_ID3D12RootSignature(iface);
@@ -117,9 +136,8 @@ static ULONG STDMETHODCALLTYPE d3d12_root_signature_Release(ID3D12RootSignature 
     if (!refcount)
     {
         struct d3d12_device *device = root_signature->device;
-        vkd3d_private_store_destroy(&root_signature->private_store);
-        d3d12_root_signature_cleanup(root_signature, device);
-        vkd3d_free(root_signature);
+        d3d12_root_signature_decref(root_signature);
+        /* Internal ref holders on the root signature must hold a device ref too. */
         d3d12_device_release(device);
     }
 
@@ -1393,6 +1411,7 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
 
     root_signature->ID3D12RootSignature_iface.lpVtbl = &d3d12_root_signature_vtbl;
     root_signature->refcount = 1;
+    root_signature->internal_refcount = 1;
 
     root_signature->vk_pipeline_layout = VK_NULL_HANDLE;
     root_signature->vk_set_count = 0;

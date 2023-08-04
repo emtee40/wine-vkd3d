@@ -2496,6 +2496,8 @@ static ULONG STDMETHODCALLTYPE d3d12_command_list_AddRef(ID3D12GraphicsCommandLi
 
 static void vkd3d_pipeline_bindings_cleanup(struct vkd3d_pipeline_bindings *bindings)
 {
+    if (bindings->root_signature)
+        d3d12_root_signature_decref(bindings->root_signature);
     vkd3d_free(bindings->vk_uav_counter_views);
 }
 
@@ -4873,14 +4875,17 @@ static void STDMETHODCALLTYPE d3d12_command_list_SetDescriptorHeaps(ID3D12Graphi
 }
 
 static void d3d12_command_list_set_root_signature(struct d3d12_command_list *list,
-        enum vkd3d_pipeline_bind_point bind_point, const struct d3d12_root_signature *root_signature)
+        enum vkd3d_pipeline_bind_point bind_point, struct d3d12_root_signature *root_signature)
 {
     struct vkd3d_pipeline_bindings *bindings = &list->pipeline_bindings[bind_point];
 
     if (bindings->root_signature == root_signature)
         return;
 
+    if (bindings->root_signature)
+        d3d12_root_signature_decref(bindings->root_signature);
     bindings->root_signature = root_signature;
+    d3d12_root_signature_incref(root_signature);
 
     d3d12_command_list_invalidate_root_parameters(list, bind_point);
 }
@@ -6645,7 +6650,9 @@ static HRESULT d3d12_command_list_init(struct d3d12_command_list *list, struct d
 
     if (SUCCEEDED(hr = d3d12_command_allocator_allocate_command_buffer(allocator, list)))
     {
+        list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_GRAPHICS].root_signature = NULL;
         list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_GRAPHICS].vk_uav_counter_views = NULL;
+        list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_COMPUTE].root_signature = NULL;
         list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_COMPUTE].vk_uav_counter_views = NULL;
         d3d12_command_list_reset_state(list, initial_pipeline_state);
     }
