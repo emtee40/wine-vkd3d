@@ -669,6 +669,70 @@ static inline void vkd3d_cond_destroy(struct vkd3d_cond *cond)
 #endif
 }
 
+struct vkd3d_tls_key
+{
+#ifdef _WIN32
+    unsigned int key;
+#else
+    pthread_key_t key;
+#endif
+};
+
+#ifdef _WIN32
+typedef PFLS_CALLBACK_FUNCTION vkd3d_tls_destructor_fn;
+#else
+typedef void (*vkd3d_tls_destructor_fn)(void *);
+#endif
+
+static inline bool vkd3d_tls_key_create(struct vkd3d_tls_key *key, vkd3d_tls_destructor_fn destructor)
+{
+#ifdef _WIN32
+    if ((key->key = FlsAlloc(destructor)) == FLS_OUT_OF_INDEXES)
+    {
+        ERR("Failed to allocate key.\n.");
+        return false;
+    }
+#else
+    int rc = pthread_key_create(&key->key, destructor);
+    if (rc < 0)
+    {
+        ERR("Failed to create key, rc %d.\n.", rc);
+        return false;
+    }
+#endif
+    return true;
+}
+
+static inline bool vkd3d_tls_key_set_value(const struct vkd3d_tls_key *key, void *value)
+{
+#ifdef _WIN32
+    if (!FlsSetValue(key->key, value))
+    {
+        ERR("Failed to set value, err %lu.\n.", GetLastError());
+        return false;
+    }
+#else
+    int rc = pthread_setspecific(key->key, value);
+    if (rc < 0)
+    {
+        ERR("Failed to set value, rc %d.\n.", rc);
+        return false;
+    }
+#endif
+    return true;
+}
+
+static inline void *vkd3d_tls_key_get_value(const struct vkd3d_tls_key *key)
+{
+#ifdef _WIN32
+    /* The descriptor object cache uses this function, which means performance is too
+     * critical to allow use of SetLastError() and GetLastError(). */
+    return FlsGetValue(key->key);
+#else
+    return pthread_getspecific(key->key);
+#endif
+}
+
 static inline void vkd3d_parse_version(const char *version, int *major, int *minor)
 {
     *major = atoi(version);

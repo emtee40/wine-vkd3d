@@ -2326,72 +2326,87 @@ ULONG vkd3d_resource_decref(ID3D12Resource *resource)
     return d3d12_resource_decref(impl_from_ID3D12Resource(resource));
 }
 
-#define HEAD_INDEX_MASK (ARRAY_SIZE(cache->heads) - 1)
+static const unsigned int REBALANCE_SIZE = 64;
+/* Rebalance threshold expands by one extra REBALANCE_SIZE per (threshold / REBALANCE_DIVISOR). */
+static const unsigned int REBALANCE_DIVISOR = 512;
+/* Avoid some initial reallocations. */
+static const unsigned int REBALANCE_MIN_ALLOCATION = REBALANCE_SIZE * 16;
 
 /* Objects are cached so that vkd3d_view_incref() can safely check the refcount of an
- * object freed by another thread. This could be implemented as a single atomic linked
- * list, but it requires handling the ABA problem, which brings issues with cross-platform
- * support, compiler support, and non-universal x86-64 support for 128-bit CAS. */
+ * object freed by another thread. */
 static void *vkd3d_desc_object_cache_get(struct vkd3d_desc_object_cache *cache)
 {
-    union d3d12_desc_object u;
-    unsigned int i;
+    struct desc_rebalance *rebalance;
+    void *object;
 
-    STATIC_ASSERT(!(ARRAY_SIZE(cache->heads) & HEAD_INDEX_MASK));
+    if (cache->count)
+        return cache->data[--cache->count];
 
-    i = vkd3d_atomic_increment_u32(&cache->next_index) & HEAD_INDEX_MASK;
-    for (;;)
+    /* For performance reasons, it is critical to minimise rebalancing activity because
+     * it occurs while a single mutex is locked, and therefore can bottleneck descriptor updates.
+     * The goal is to raise rebalance_threshold until the cache no longer runs out of objects
+     * after sending a chunk to the rebalance array. If the cache is empty then a previously
+     * sent rebalance chunk should not have been sent. Raise the threshold for sending chunks. */
+    cache->rebalance_threshold += cache->threshold_expansion;
+    cache->threshold_expansion = 0;
+
+    rebalance = cache->rebalance;
+    vkd3d_mutex_lock(&rebalance->mutex);
+
+    if (rebalance->count)
     {
-        if (vkd3d_atomic_compare_exchange_u32(&cache->heads[i].spinlock, 0, 1))
-        {
-            if ((u.object = cache->heads[i].head))
-            {
-                vkd3d_atomic_decrement_u32(&cache->free_count);
-                cache->heads[i].head = u.header->next;
-                vkd3d_atomic_exchange_u32(&cache->heads[i].spinlock, 0);
-                return u.object;
-            }
-            vkd3d_atomic_exchange_u32(&cache->heads[i].spinlock, 0);
-        }
-        /* Keeping a free count avoids uncertainty over when this loop should terminate,
-         * which could result in excess allocations gradually increasing without limit. */
-        if (cache->free_count < ARRAY_SIZE(cache->heads))
-            return vkd3d_malloc(cache->size);
-
-        i = (i + 1) & HEAD_INDEX_MASK;
+        VKD3D_ASSERT(rebalance->count >= REBALANCE_SIZE);
+        rebalance->count -= REBALANCE_SIZE;
+        vkd3d_array_reserve((void **)&cache->data, &cache->capacity, REBALANCE_SIZE, sizeof(*cache->data));
+        memcpy(cache->data, &rebalance->data[rebalance->count], REBALANCE_SIZE * sizeof(*cache->data));
+        cache->count = REBALANCE_SIZE - 1;
+        object = cache->data[REBALANCE_SIZE - 1];
     }
+    else
+    {
+        object = vkd3d_malloc(cache->size);
+    }
+
+    vkd3d_mutex_unlock(&rebalance->mutex);
+    return object;
 }
 
 static void vkd3d_desc_object_cache_push(struct vkd3d_desc_object_cache *cache, void *object)
 {
-    union d3d12_desc_object u = {object};
-    unsigned int i;
-    void *head;
+    struct desc_rebalance *rebalance;
 
-    /* Using the same index as above may result in a somewhat uneven distribution,
-     * but the main objective is to avoid costly spinlock contention. */
-    i = vkd3d_atomic_increment_u32(&cache->next_index) & HEAD_INDEX_MASK;
-    for (;;)
+    if (!vkd3d_array_reserve((void **)&cache->data, &cache->capacity, max(cache->count + 1, REBALANCE_SIZE),
+            sizeof(*cache->data)))
     {
-        if (vkd3d_atomic_compare_exchange_u32(&cache->heads[i].spinlock, 0, 1))
-            break;
-        i = (i + 1) & HEAD_INDEX_MASK;
+        ERR("Failed to allocate cache array.\n");
+        vkd3d_free(object);
+        return;
     }
+    cache->data[cache->count++] = object;
 
-    head = cache->heads[i].head;
-    u.header->next = head;
-    cache->heads[i].head = u.object;
-    vkd3d_atomic_exchange_u32(&cache->heads[i].spinlock, 0);
-    vkd3d_atomic_increment_u32(&cache->free_count);
+    if (cache->count < cache->rebalance_threshold + REBALANCE_SIZE)
+        return;
+
+    cache->count -= REBALANCE_SIZE;
+    cache->threshold_expansion = REBALANCE_SIZE * (1 + cache->rebalance_threshold / REBALANCE_DIVISOR);
+
+    rebalance = cache->rebalance;
+    vkd3d_mutex_lock(&rebalance->mutex);
+
+    vkd3d_array_reserve((void **)&rebalance->data, &rebalance->capacity,
+            max(rebalance->count + REBALANCE_SIZE, REBALANCE_MIN_ALLOCATION), sizeof(*rebalance->data));
+    memcpy(&rebalance->data[rebalance->count], &cache->data[cache->count], REBALANCE_SIZE * sizeof(*rebalance->data));
+    rebalance->count += REBALANCE_SIZE;
+
+    vkd3d_mutex_unlock(&rebalance->mutex);
 }
-
-#undef HEAD_INDEX_MASK
 
 static struct vkd3d_cbuffer_desc *vkd3d_cbuffer_desc_create(struct d3d12_device *device)
 {
+    struct desc_object_caches *caches = device_get_desc_object_caches(device);
     struct vkd3d_cbuffer_desc *desc;
 
-    if (!(desc = vkd3d_desc_object_cache_get(&device->cbuffer_desc_cache)))
+    if (!(desc = vkd3d_desc_object_cache_get(&caches->cbuffer_desc_cache)))
         return NULL;
 
     desc->h.magic = VKD3D_DESCRIPTOR_MAGIC_CBV;
@@ -2404,11 +2419,12 @@ static struct vkd3d_cbuffer_desc *vkd3d_cbuffer_desc_create(struct d3d12_device 
 static struct vkd3d_view *vkd3d_view_create(uint32_t magic, VkDescriptorType vk_descriptor_type,
         enum vkd3d_view_type type, struct d3d12_device *device)
 {
+    struct desc_object_caches *caches = device_get_desc_object_caches(device);
     struct vkd3d_view *view;
 
     VKD3D_ASSERT(magic);
 
-    if (!(view = vkd3d_desc_object_cache_get(&device->view_desc_cache)))
+    if (!(view = vkd3d_desc_object_cache_get(&caches->view_desc_cache)))
     {
         ERR("Failed to allocate descriptor object.\n");
         return NULL;
@@ -2426,6 +2442,7 @@ static struct vkd3d_view *vkd3d_view_create(uint32_t magic, VkDescriptorType vk_
 static void vkd3d_view_destroy(struct vkd3d_view *view, struct d3d12_device *device)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    struct desc_object_caches *caches = device_get_desc_object_caches(device);
 
     TRACE("Destroying view %p.\n", view);
 
@@ -2447,7 +2464,7 @@ static void vkd3d_view_destroy(struct vkd3d_view *view, struct d3d12_device *dev
     if (view->v.vk_counter_view)
         VK_CALL(vkDestroyBufferView(device->vk_device, view->v.vk_counter_view, NULL));
 
-    vkd3d_desc_object_cache_push(&device->view_desc_cache, view);
+    vkd3d_desc_object_cache_push(&caches->view_desc_cache, view);
 }
 
 void vkd3d_view_decref(void *view, struct d3d12_device *device)
@@ -2458,9 +2475,14 @@ void vkd3d_view_decref(void *view, struct d3d12_device *device)
         return;
 
     if (u.header->magic != VKD3D_DESCRIPTOR_MAGIC_CBV)
+    {
         vkd3d_view_destroy(u.view, device);
+    }
     else
-        vkd3d_desc_object_cache_push(&device->cbuffer_desc_cache, u.object);
+    {
+        struct desc_object_caches *caches = device_get_desc_object_caches(device);
+        vkd3d_desc_object_cache_push(&caches->cbuffer_desc_cache, u.object);
+    }
 }
 
 static inline void d3d12_desc_replace(struct d3d12_desc *dst, void *view, struct d3d12_device *device)

@@ -1495,18 +1495,29 @@ struct vkd3d_uav_clear_state
 HRESULT vkd3d_uav_clear_state_init(struct vkd3d_uav_clear_state *state, struct d3d12_device *device);
 void vkd3d_uav_clear_state_cleanup(struct vkd3d_uav_clear_state *state, struct d3d12_device *device);
 
-struct desc_object_cache_head
+struct desc_rebalance
 {
-    void *head;
-    unsigned int spinlock;
+    void **data;
+    size_t capacity;
+    size_t count;
+    struct vkd3d_mutex mutex;
 };
 
 struct vkd3d_desc_object_cache
 {
-    struct desc_object_cache_head heads[16];
-    unsigned int next_index;
-    unsigned int free_count;
+    void **data;
+    size_t capacity;
+    size_t count;
+    size_t rebalance_threshold;
+    size_t threshold_expansion;
+    struct desc_rebalance *rebalance;
     size_t size;
+};
+
+struct desc_object_caches
+{
+    struct vkd3d_desc_object_cache view_desc_cache;
+    struct vkd3d_desc_object_cache cbuffer_desc_cache;
 };
 
 #define VKD3D_DESCRIPTOR_POOL_COUNT 6
@@ -1524,10 +1535,9 @@ struct d3d12_device
     size_t wchar_size;
     enum vkd3d_shader_spirv_environment environment;
 
-    struct vkd3d_gpu_va_allocator gpu_va_allocator;
+    struct vkd3d_tls_key tls_key;
 
-    struct vkd3d_desc_object_cache view_desc_cache;
-    struct vkd3d_desc_object_cache cbuffer_desc_cache;
+    struct vkd3d_gpu_va_allocator gpu_va_allocator;
 
     VkDescriptorPoolSize vk_pool_sizes[VKD3D_DESCRIPTOR_POOL_COUNT];
     unsigned int vk_pool_count;
@@ -1590,6 +1600,7 @@ struct vkd3d_queue *d3d12_device_get_vkd3d_queue(struct d3d12_device *device, D3
 bool d3d12_device_is_uma(struct d3d12_device *device, bool *coherent);
 void d3d12_device_mark_as_removed(struct d3d12_device *device, HRESULT reason,
         const char *message, ...) VKD3D_PRINTF_FUNC(3, 4);
+struct desc_object_caches *device_get_desc_object_caches(struct d3d12_device *device);
 struct d3d12_device *unsafe_impl_from_ID3D12Device9(ID3D12Device9 *iface);
 HRESULT d3d12_device_add_descriptor_heap(struct d3d12_device *device, struct d3d12_descriptor_heap *heap);
 void d3d12_device_remove_descriptor_heap(struct d3d12_device *device, struct d3d12_descriptor_heap *heap);

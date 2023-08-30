@@ -2568,26 +2568,94 @@ static void device_init_descriptor_pool_sizes(struct d3d12_device *device)
     device->vk_pool_count = 6;
 };
 
-static void vkd3d_desc_object_cache_init(struct vkd3d_desc_object_cache *cache, size_t size)
+static void vkd3d_desc_object_cache_init(struct vkd3d_desc_object_cache *cache, size_t size,
+        struct desc_rebalance *rebalance)
 {
-    memset(cache, 0, sizeof(*cache));
     cache->size = size;
+    cache->rebalance = rebalance;
 }
 
 static void vkd3d_desc_object_cache_cleanup(struct vkd3d_desc_object_cache *cache)
 {
-    union d3d12_desc_object u;
-    unsigned int i;
-    void *next;
+    size_t i;
 
-    for (i = 0; i < ARRAY_SIZE(cache->heads); ++i)
+    for (i = 0; i < cache->count; ++i)
+        vkd3d_free(cache->data[i]);
+    vkd3d_free(cache->data);
+}
+
+static void desc_rebalance_init(struct desc_rebalance *rebalance)
+{
+    vkd3d_mutex_init(&rebalance->mutex);
+}
+
+static
+#ifdef _WIN32
+CALLBACK
+#endif
+void global_tls_key_destroy(void *value)
+{
+    struct desc_object_caches *caches = value;
+
+    if (caches)
     {
-        for (u.object = cache->heads[i].head; u.object; u.object = next)
-        {
-            next = u.header->next;
-            vkd3d_free(u.object);
-        }
+        vkd3d_desc_object_cache_cleanup(&caches->view_desc_cache);
+        vkd3d_desc_object_cache_cleanup(&caches->cbuffer_desc_cache);
+        vkd3d_free(caches);
     }
+}
+
+static struct desc_rebalance view_desc_rebalance;
+static struct desc_rebalance cbuffer_desc_rebalance;
+
+static bool global_tls_key_get(struct vkd3d_tls_key *key)
+{
+    static struct vkd3d_mutex key_cache_mutex = VKD3D_MUTEX_INITIALIZER;
+    static struct vkd3d_tls_key tls_key;
+    static bool tls_initialised;
+    bool ret = true;
+
+    vkd3d_mutex_lock(&key_cache_mutex);
+
+    if (!tls_initialised)
+    {
+        ret = vkd3d_tls_key_create(&tls_key, global_tls_key_destroy);
+        desc_rebalance_init(&view_desc_rebalance);
+        desc_rebalance_init(&cbuffer_desc_rebalance);
+        tls_initialised = true;
+    }
+
+    vkd3d_mutex_unlock(&key_cache_mutex);
+
+    *key = tls_key;
+    return ret;
+}
+
+struct desc_object_caches *device_get_desc_object_caches(struct d3d12_device *device)
+{
+    struct desc_object_caches *caches = vkd3d_tls_key_get_value(&device->tls_key);
+
+    if (caches)
+        return caches;
+
+    if (!(caches = vkd3d_calloc(1, sizeof(*caches))))
+    {
+        ERR("Failed to allocate caches.\n");
+        /* Returning null here is not worth the cost of handling it in callers. */
+        abort();
+    }
+
+    vkd3d_desc_object_cache_init(&caches->view_desc_cache, sizeof(struct vkd3d_view), &view_desc_rebalance);
+    vkd3d_desc_object_cache_init(&caches->cbuffer_desc_cache, sizeof(struct vkd3d_cbuffer_desc),
+            &cbuffer_desc_rebalance);
+
+    if (!vkd3d_tls_key_set_value(&device->tls_key, caches))
+    {
+        ERR("Failed to store descriptor object cache pointer.\n");
+        abort();
+    }
+
+    return caches;
 }
 
 /* ID3D12ShaderCacheSession */
@@ -2970,8 +3038,6 @@ static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device9 *iface)
         vkd3d_render_pass_cache_cleanup(&device->render_pass_cache, device);
         d3d12_device_destroy_pipeline_cache(device);
         d3d12_device_destroy_vkd3d_queues(device);
-        vkd3d_desc_object_cache_cleanup(&device->view_desc_cache);
-        vkd3d_desc_object_cache_cleanup(&device->cbuffer_desc_cache);
         if (device->use_vk_heaps)
             device_worker_stop(device);
         vkd3d_free(device->heaps);
@@ -5357,8 +5423,14 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     device->blocked_queue_count = 0;
     vkd3d_mutex_init(&device->blocked_queues_mutex);
 
-    vkd3d_desc_object_cache_init(&device->view_desc_cache, sizeof(struct vkd3d_view));
-    vkd3d_desc_object_cache_init(&device->cbuffer_desc_cache, sizeof(struct vkd3d_cbuffer_desc));
+    /* Store a copy of the TLS key in the device object. The object is often accessed
+     * for other reasons after the key is read, so reading it is less likely to cause
+     * an additional cache miss than reading the global value would be. */
+    if (!global_tls_key_get(&device->tls_key))
+    {
+        hr = E_FAIL;
+        goto out_cleanup_descriptor_heap_layouts;
+    }
 
     device_init_descriptor_pool_sizes(device);
 
