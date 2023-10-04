@@ -73,6 +73,9 @@ source_type_info[] =
         "d3dbc",        "Legacy Direct3D byte-code.\n"
         "                This is the format used for Direct3D shader model 1, 2, and 3 shaders.\n",
         true, VKD3D_SHADER_TARGET_SPIRV_BINARY},
+    {VKD3D_SHADER_SOURCE_TX_BYTECODE,
+        "tx",           "Texture shader byte-code.\n",
+        true, VKD3D_SHADER_TARGET_D3D_ASM},
     {VKD3D_SHADER_SOURCE_DXBC_DXIL,
         "dxbc-dxil",    "A 'DirectX Intermediate Language' shader embedded in a DXBC container.\n"
         "                This is the format used for Direct3D shader model 6 shaders.\n",
@@ -728,6 +731,8 @@ int main(int argc, char **argv)
             }
             else if ((token & 0xfffe0000) == 0xfffe0000)
                 options.source_type = VKD3D_SHADER_SOURCE_D3D_BYTECODE;
+            else if (token == 0x54580100)
+                options.source_type = VKD3D_SHADER_SOURCE_TX_BYTECODE;
             else
                 options.source_type = VKD3D_SHADER_SOURCE_HLSL;
         }
