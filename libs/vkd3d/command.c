@@ -1810,6 +1810,7 @@ enum command_list_op
     CL_OP_DISPATCH,
     CL_OP_DRAW_INDEXED_INSTANCED,
     CL_OP_DRAW_INSTANCED,
+    CL_OP_RESOLVE_SUBRESOURCE,
 };
 
 struct draw_instanced_op
@@ -1866,6 +1867,16 @@ struct copy_resource_op
     enum command_list_op op;
     struct d3d12_resource *dst;
     struct d3d12_resource *src;
+};
+
+struct resolve_subresource_op
+{
+    enum command_list_op op;
+    struct d3d12_resource *dst;
+    unsigned int dst_sub_resource_idx;
+    struct d3d12_resource *src;
+    unsigned int src_sub_resource_idx;
+    DXGI_FORMAT format;
 };
 
 static void d3d12_command_heap_init(struct d3d12_command_heap *command_heap)
@@ -4192,25 +4203,20 @@ static void STDMETHODCALLTYPE d3d12_command_list_CopyTiles(ID3D12GraphicsCommand
             buffer, buffer_offset, flags);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12GraphicsCommandList5 *iface,
-        ID3D12Resource *dst, UINT dst_sub_resource_idx,
-        ID3D12Resource *src, UINT src_sub_resource_idx, DXGI_FORMAT format)
+static void d3d12_command_list_resolve_subresource(struct d3d12_command_list *list, const void *data)
 {
-    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     const struct vkd3d_format *src_format, *dst_format, *vk_format;
     struct d3d12_resource *dst_resource, *src_resource;
+    const struct resolve_subresource_op *op = data;
     const struct vkd3d_vk_device_procs *vk_procs;
     const struct d3d12_device *device;
     VkImageResolve vk_image_resolve;
 
-    TRACE("iface %p, dst_resource %p, dst_sub_resource_idx %u, src_resource %p, src_sub_resource_idx %u, "
-            "format %#x.\n", iface, dst, dst_sub_resource_idx, src, src_sub_resource_idx, format);
-
     device = list->device;
     vk_procs = &device->vk_procs;
 
-    dst_resource = unsafe_impl_from_ID3D12Resource(dst);
-    src_resource = unsafe_impl_from_ID3D12Resource(src);
+    dst_resource = op->dst;
+    src_resource = op->src;
 
     assert(d3d12_resource_is_texture(dst_resource));
     assert(d3d12_resource_is_texture(src_resource));
@@ -4225,9 +4231,9 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12Graphi
 
     if (dst_format->type == VKD3D_FORMAT_TYPE_TYPELESS || src_format->type == VKD3D_FORMAT_TYPE_TYPELESS)
     {
-        if (!(vk_format = vkd3d_format_from_d3d12_resource_desc(device, &dst_resource->desc, format)))
+        if (!(vk_format = vkd3d_format_from_d3d12_resource_desc(device, &dst_resource->desc, op->format)))
         {
-            WARN("Invalid format %#x.\n", format);
+            WARN("Invalid format %#x.\n", op->format);
             return;
         }
         if (dst_format->vk_format != src_format->vk_format || dst_format->vk_format != vk_format->vk_format)
@@ -4246,10 +4252,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12Graphi
     }
 
     vk_image_subresource_layers_from_d3d12(&vk_image_resolve.srcSubresource,
-            src_format, src_sub_resource_idx, src_resource->desc.MipLevels);
+            src_format, op->src_sub_resource_idx, src_resource->desc.MipLevels);
     memset(&vk_image_resolve.srcOffset, 0, sizeof(vk_image_resolve.srcOffset));
     vk_image_subresource_layers_from_d3d12(&vk_image_resolve.dstSubresource,
-            dst_format, dst_sub_resource_idx, dst_resource->desc.MipLevels);
+            dst_format, op->dst_sub_resource_idx, dst_resource->desc.MipLevels);
     memset(&vk_image_resolve.dstOffset, 0, sizeof(vk_image_resolve.dstOffset));
     vk_extent_3d_from_d3d12_miplevel(&vk_image_resolve.extent,
             &dst_resource->desc, vk_image_resolve.dstSubresource.mipLevel);
@@ -4257,6 +4263,29 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12Graphi
     VK_CALL(vkCmdResolveImage(list->vk_command_buffer, src_resource->u.vk_image,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_resource->u.vk_image,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &vk_image_resolve));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_ResolveSubresource(ID3D12GraphicsCommandList5 *iface,
+        ID3D12Resource *dst, UINT dst_sub_resource_idx,
+        ID3D12Resource *src, UINT src_sub_resource_idx, DXGI_FORMAT format)
+{
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct resolve_subresource_op *op;
+
+    TRACE("iface %p, dst_resource %p, dst_sub_resource_idx %u, src_resource %p, src_sub_resource_idx %u, "
+            "format %#x.\n", iface, dst, dst_sub_resource_idx, src, src_sub_resource_idx, format);
+
+    if (!(op = d3d12_command_heap_require_space(&list->command_heap, sizeof(*op))))
+        return;
+
+    op->op = CL_OP_RESOLVE_SUBRESOURCE;
+    op->dst = unsafe_impl_from_ID3D12Resource(dst);
+    op->dst_sub_resource_idx = dst_sub_resource_idx;
+    op->src = unsafe_impl_from_ID3D12Resource(src);
+    op->src_sub_resource_idx = src_sub_resource_idx;
+    op->format = format;
+
+    d3d12_command_list_flush(list);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_IASetPrimitiveTopology(ID3D12GraphicsCommandList5 *iface,
@@ -6381,6 +6410,9 @@ static void d3d12_command_list_handle_op(struct d3d12_command_list *list, const 
             break;
         case CL_OP_DRAW_INSTANCED:
             d3d12_command_list_draw_instanced(list, data);
+            break;
+        case CL_OP_RESOLVE_SUBRESOURCE:
+            d3d12_command_list_resolve_subresource(list, data);
             break;
         default:
             vkd3d_unreachable();
