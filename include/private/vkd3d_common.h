@@ -50,8 +50,10 @@
         | ((uint32_t)(ch2) << 16) | ((uint32_t)(ch3) << 24))
 
 #define TAG_AON9 VKD3D_MAKE_TAG('A', 'o', 'n', '9')
+#define TAG_CLIT VKD3D_MAKE_TAG('C', 'L', 'I', 'T')
 #define TAG_DXBC VKD3D_MAKE_TAG('D', 'X', 'B', 'C')
 #define TAG_DXIL VKD3D_MAKE_TAG('D', 'X', 'I', 'L')
+#define TAG_FXLC VKD3D_MAKE_TAG('F', 'X', 'L', 'C')
 #define TAG_ISG1 VKD3D_MAKE_TAG('I', 'S', 'G', '1')
 #define TAG_ISGN VKD3D_MAKE_TAG('I', 'S', 'G', 'N')
 #define TAG_OSG1 VKD3D_MAKE_TAG('O', 'S', 'G', '1')

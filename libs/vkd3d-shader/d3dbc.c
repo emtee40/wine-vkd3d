@@ -29,6 +29,7 @@
 
 #define VKD3D_SM1_VS  0xfffeu
 #define VKD3D_SM1_PS  0xffffu
+#define VKD3D_SM1_TX  0x5458u
 
 #define VKD3D_SM1_DCL_USAGE_SHIFT              0u
 #define VKD3D_SM1_DCL_USAGE_MASK               (0xfu << VKD3D_SM1_DCL_USAGE_SHIFT)
@@ -218,6 +219,94 @@ struct vkd3d_shader_sm1_parser
 #define MAX_CONSTANT_COUNT 8192
     uint32_t constant_def_mask[3][MAX_CONSTANT_COUNT / 32];
 };
+
+enum vkd3d_fxlc_opcode
+{
+    VKD3D_FXLC_OP_NOP        = 0x000,
+    VKD3D_FXLC_OP_MOV        = 0x100,
+    VKD3D_FXLC_OP_NEG        = 0x101,
+    VKD3D_FXLC_OP_RCP        = 0x103,
+    VKD3D_FXLC_OP_FRC        = 0x104,
+    VKD3D_FXLC_OP_EXP        = 0x105,
+    VKD3D_FXLC_OP_LOG        = 0x106,
+    VKD3D_FXLC_OP_RSQ        = 0x107,
+    VKD3D_FXLC_OP_SIN        = 0x108,
+    VKD3D_FXLC_OP_COS        = 0x109,
+    VKD3D_FXLC_OP_ASIN       = 0x10a,
+    VKD3D_FXLC_OP_ACOS       = 0x10b,
+    VKD3D_FXLC_OP_ATAN       = 0x10c,
+    VKD3D_FXLC_OP_MIN        = 0x200,
+    VKD3D_FXLC_OP_MAX        = 0x201,
+    VKD3D_FXLC_OP_LT         = 0x202,
+    VKD3D_FXLC_OP_GE         = 0x203,
+    VKD3D_FXLC_OP_ADD        = 0x204,
+    VKD3D_FXLC_OP_MUL        = 0x205,
+    VKD3D_FXLC_OP_ATAN2      = 0x206,
+    VKD3D_FXLC_OP_DIV        = 0x208,
+    VKD3D_FXLC_OP_CMP        = 0x300,
+    VKD3D_FXLC_OP_DOT        = 0x500,
+    VKD3D_FXLC_OP_NOISE      = 0x502,
+    VKD3D_FXLC_OP_DOT_SWIZ   = 0x70e,
+    VKD3D_FXLC_OP_NOISE_SWIZ = 0x711,
+};
+
+struct vkd3d_fxlc_opcode_info
+{
+    enum vkd3d_fxlc_opcode fxlc_opcode;
+    enum vkd3d_shader_opcode vkd3d_opcode;
+};
+
+static const struct vkd3d_fxlc_opcode_info tx_opcode_table[] =
+{
+    {VKD3D_FXLC_OP_NOP,        VKD3DSIH_NOP},
+    {VKD3D_FXLC_OP_MOV,        VKD3DSIH_MOV},
+    {VKD3D_FXLC_OP_NEG,        VKD3DSIH_NEG},
+    {VKD3D_FXLC_OP_RCP,        VKD3DSIH_RCP},
+    {VKD3D_FXLC_OP_FRC,        VKD3DSIH_FRC},
+    {VKD3D_FXLC_OP_EXP,        VKD3DSIH_EXP},
+    {VKD3D_FXLC_OP_LOG,        VKD3DSIH_LOG},
+    {VKD3D_FXLC_OP_RSQ,        VKD3DSIH_RSQ},
+    {VKD3D_FXLC_OP_SIN,        VKD3DSIH_SIN},
+    {VKD3D_FXLC_OP_COS,        VKD3DSIH_COS},
+    {VKD3D_FXLC_OP_ASIN,       VKD3DSIH_ASIN},
+    {VKD3D_FXLC_OP_ACOS,       VKD3DSIH_ACOS},
+    {VKD3D_FXLC_OP_ATAN,       VKD3DSIH_ATAN},
+    {VKD3D_FXLC_OP_MIN,        VKD3DSIH_MIN},
+    {VKD3D_FXLC_OP_MAX,        VKD3DSIH_MAX},
+    {VKD3D_FXLC_OP_LT,         VKD3DSIH_LT},
+    {VKD3D_FXLC_OP_GE,         VKD3DSIH_GE},
+    {VKD3D_FXLC_OP_ADD,        VKD3DSIH_ADD},
+    {VKD3D_FXLC_OP_MUL,        VKD3DSIH_MUL},
+    {VKD3D_FXLC_OP_ATAN2,      VKD3DSIH_ATAN2},
+    {VKD3D_FXLC_OP_DIV,        VKD3DSIH_DIV},
+    {VKD3D_FXLC_OP_CMP,        VKD3DSIH_CMP},
+    {VKD3D_FXLC_OP_DOT,        VKD3DSIH_DOT},
+    {VKD3D_FXLC_OP_NOISE,      VKD3DSIH_NOISE},
+    {VKD3D_FXLC_OP_DOT_SWIZ,   VKD3DSIH_DOT_SWIZ},
+    {VKD3D_FXLC_OP_NOISE_SWIZ, VKD3DSIH_NOISE_SWIZ},
+    {0,                        VKD3DSIH_INVALID},
+};
+
+struct vkd3d_shader_tx_parser
+{
+    const struct vkd3d_fxlc_opcode_info *opcode_table;
+    const uint32_t *start, *end, *ptr;
+    struct
+    {
+        const uint32_t *start, *end;
+    } fxlc;
+    struct
+    {
+        const double *table;
+        unsigned int size;
+    } clit;
+    struct vkd3d_shader_parser p;
+};
+
+static struct vkd3d_shader_tx_parser *vkd3d_shader_tx_parser(struct vkd3d_shader_parser *parser)
+{
+    return CONTAINING_RECORD(parser, struct vkd3d_shader_tx_parser, p);
+}
 
 /* This table is not order or position dependent. */
 static const struct vkd3d_sm1_opcode_info vs_opcode_table[] =
@@ -1284,6 +1373,135 @@ static enum vkd3d_result shader_sm1_init(struct vkd3d_shader_sm1_parser *sm1,
     return VKD3D_OK;
 }
 
+static void shader_tx_read_sections(struct vkd3d_shader_tx_parser *tx)
+{
+    const uint32_t **ptr = &tx->ptr, *section;
+    unsigned int size;
+    size_t remaining;
+    uint32_t token;
+
+    if (*ptr >= tx->end)
+        return;
+
+    remaining = tx->end - *ptr;
+
+    token = **ptr;
+
+    while ((token & VKD3D_SM1_OPCODE_MASK) == VKD3D_SM1_OP_COMMENT)
+    {
+        size = (token & VKD3D_SM1_COMMENT_SIZE_MASK) >> VKD3D_SM1_COMMENT_SIZE_SHIFT;
+
+        if (size > --remaining)
+        {
+            vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_UNEXPECTED_EOF,
+                    "Encountered a %u token comment, but only %zu token(s) is/are remaining.",
+                    size, remaining);
+            return;
+        }
+
+        section = ++(*ptr);
+        remaining -= size;
+        *ptr += size;
+
+        if (*section == TAG_FXLC)
+        {
+            tx->fxlc.start = section + 1;
+            tx->fxlc.end = section + size;
+        }
+        else if (*section == TAG_CLIT)
+        {
+            ++section;
+
+            tx->clit.size = *section++;
+            tx->clit.table = (double *)section;
+        }
+
+        if (!remaining)
+            break;
+        token = **ptr;
+    }
+}
+
+static void shader_tx_destroy(struct vkd3d_shader_parser *parser)
+{
+    struct vkd3d_shader_tx_parser *tx = vkd3d_shader_tx_parser(parser);
+
+    shader_instruction_array_destroy(&parser->instructions);
+    vkd3d_free(tx);
+}
+
+const struct vkd3d_shader_parser_ops shader_tx_parser_ops =
+{
+    .parser_destroy = shader_tx_destroy,
+};
+
+static enum vkd3d_result shader_tx_init(struct vkd3d_shader_tx_parser *tx,
+        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context)
+{
+    const struct vkd3d_shader_location location = {.source_name = compile_info->source_name};
+    const uint32_t *code = compile_info->source.code;
+    size_t code_size = compile_info->source.size;
+    struct vkd3d_shader_desc *shader_desc;
+    struct vkd3d_shader_version version;
+    size_t token_count;
+    uint16_t magic;
+
+    token_count = code_size / sizeof(*tx->start);
+
+    if (token_count < 1)
+    {
+        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_D3DBC_UNEXPECTED_EOF,
+                "Invalid shader size %zu (token count %zu). At least 2 tokens are required.",
+                code_size, token_count);
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    TRACE("Version: 0x%08x.\n", code[0]);
+
+    magic = code[0] >> 16;
+    version.type = VKD3D_SHADER_TYPE_TEXTURE;
+    version.major = VKD3D_SM1_VERSION_MAJOR(code[0]);
+    version.minor = VKD3D_SM1_VERSION_MINOR(code[0]);
+
+    if (magic != VKD3D_SM1_TX)
+    {
+        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_D3DBC_INVALID_VERSION_TOKEN,
+                "Invalid shader magic %#x (token 0x%08x).", magic, code[0]);
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    if (version.major != 1 || version.minor != 0)
+    {
+        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_D3DBC_INVALID_VERSION_TOKEN,
+                "Invalid shader version %u.%u (token 0x%08x).", version.major, version.minor, code[0]);
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    tx->start = &code[1];
+    tx->end = &code[token_count];
+    tx->ptr = tx->start;
+
+    shader_tx_read_sections(tx);
+
+    tx->opcode_table = tx_opcode_table;
+    /* FXLC section */
+    tx->start = tx->fxlc.start;
+    tx->end = tx->fxlc.end;
+
+    token_count = tx->end - tx->start;
+
+    /* Estimate instruction count to avoid reallocation in most shaders. */
+    if (!vkd3d_shader_parser_init(&tx->p, message_context, compile_info->source_name, &version, &shader_tx_parser_ops,
+            code_size != ~(size_t)0 ? token_count / 4u + 4 : 16))
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+    shader_desc = &tx->p.shader_desc;
+    shader_desc->byte_code = code;
+    shader_desc->byte_code_size = code_size;
+    tx->ptr = tx->start;
+
+    return VKD3D_OK;
+}
+
 static uint32_t get_external_constant_count(struct vkd3d_shader_sm1_parser *sm1,
         enum vkd3d_shader_d3dbc_constant_register set)
 {
@@ -1359,6 +1577,247 @@ int vkd3d_shader_sm1_parser_create(const struct vkd3d_shader_compile_info *compi
     }
 
     *parser = &sm1->p;
+
+    return VKD3D_OK;
+}
+
+struct fxlc_instruction
+{
+    uint32_t num_comp : 16;
+    uint32_t unused : 4;
+    uint32_t opcode : 11;
+    uint32_t scalar : 1;
+};
+
+static const struct vkd3d_fxlc_opcode_info *shader_tx_get_opcode_info(
+        const struct vkd3d_shader_tx_parser *tx, enum vkd3d_fxlc_opcode opcode)
+{
+    const struct vkd3d_fxlc_opcode_info *info;
+    unsigned int i = 0;
+
+    for (;;)
+    {
+        info = &tx->opcode_table[i++];
+        if (info->vkd3d_opcode == VKD3DSIH_INVALID)
+            return NULL;
+
+        if (opcode == info->fxlc_opcode)
+            return info;
+    }
+}
+
+enum fxlc_register_type
+{
+    VKD3DSPR_FXLC_IMMCONST = 1,
+    VKD3DSPR_FXLC_INPUT = 3,
+    VKD3DSPR_FXLC_RESULT = 4,
+    VKD3DSPR_FXLC_TEMP = 7,
+};
+
+static enum vkd3d_shader_register_type fxlc_get_register_type(uint32_t fxlc_regtable)
+{
+    static const enum vkd3d_shader_register_type map[] =
+    {
+        [VKD3DSPR_FXLC_INPUT   ] = VKD3DSPR_INPUT,
+        [VKD3DSPR_FXLC_TEMP    ] = VKD3DSPR_TEMP,
+        [VKD3DSPR_FXLC_RESULT  ] = VKD3DSPR_COLOROUT,
+        [VKD3DSPR_FXLC_IMMCONST] = VKD3DSPR_IMMCONST,
+    };
+    if (fxlc_regtable < ARRAY_SIZE(map)) return map[fxlc_regtable];
+    FIXME("Unrecognized register table %u.\n", fxlc_regtable);
+    return VKD3DSPR_TEMP;
+}
+
+static void shader_fxlc_read_src_param(struct vkd3d_shader_tx_parser *tx,
+        const struct fxlc_instruction *fxlc_ins, bool first_source, struct vkd3d_shader_src_param *src)
+{
+    bool scalar = first_source && fxlc_ins->scalar;
+    enum vkd3d_shader_register_type reg_type;
+    uint32_t flags, table, offset, swizzle;
+    const uint32_t **ptr = &tx->ptr;
+    unsigned int i;
+
+    flags = read_u32(ptr);
+    if (flags)
+    {
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_INVALID_REGISTER_INDEX,
+               "Relative addressing is not implemented for FXLC.");
+        return;
+    }
+
+    table = read_u32(ptr);
+    offset = read_u32(ptr);
+
+    reg_type = fxlc_get_register_type(table);
+
+    vsir_register_init(&src->reg, reg_type, VKD3D_DATA_FLOAT, 1);
+    src->reg.idx[0].offset = offset / 4;
+
+    if (src->reg.type == VKD3DSPR_IMMCONST)
+    {
+        for (i = 0; i < fxlc_ins->num_comp; ++i)
+            src->reg.u.immconst_float[i] = tx->clit.table[offset + (scalar ? 0 : i)];
+    }
+    src->reg.dimension = VSIR_DIMENSION_VEC4;
+
+    /* Components could only be specified consecutively. */
+    swizzle = VKD3D_SHADER_NO_SWIZZLE;
+    swizzle >>= 8 * (offset % 4);
+    swizzle &= ~0u >> (8 * (4 - (scalar ? 1 : fxlc_ins->num_comp)));
+
+    src->swizzle = swizzle;
+    src->modifiers = 0;
+}
+
+static void shader_fxlc_read_dst_param(struct vkd3d_shader_tx_parser *tx, const struct fxlc_instruction *fxlc_ins,
+        struct vkd3d_shader_dst_param *dst)
+{
+    enum vkd3d_shader_register_type reg_type;
+    const uint32_t **ptr = &tx->ptr;
+    uint32_t flags, table, offset;
+
+    flags = read_u32(ptr);
+    if (flags)
+    {
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_INVALID_REGISTER_INDEX,
+               "Relative addressing is not implemented for FXLC.");
+        return;
+    }
+    table = read_u32(ptr);
+    offset = read_u32(ptr);
+
+    reg_type = fxlc_get_register_type(table);
+
+    vsir_register_init(&dst->reg, reg_type, VKD3D_DATA_FLOAT, 1);
+    dst->reg.idx[0].offset = offset / 4;
+    dst->reg.dimension = VSIR_DIMENSION_VEC4;
+
+    dst->write_mask = ~0u >> (32 - fxlc_ins->num_comp);
+    dst->write_mask <<= offset % 4;
+    dst->modifiers = 0;
+    dst->shift = 0;
+}
+
+static void shader_tx_read_instruction(struct vkd3d_shader_tx_parser *tx, struct vkd3d_shader_instruction *ins)
+{
+    const struct vkd3d_fxlc_opcode_info *opcode_info;
+    struct vkd3d_shader_src_param *src_params;
+    struct vkd3d_shader_dst_param *dst_param;
+    struct fxlc_instruction fxlc_ins;
+    const uint32_t **ptr = &tx->ptr;
+    uint32_t opcode_token;
+    unsigned int i;
+
+    if (*ptr >= tx->end)
+    {
+        WARN("End of byte-code, failed to read opcode.\n");
+        goto fail;
+    }
+
+    ++tx->p.location.line;
+    opcode_token = read_u32(ptr);
+    memcpy(&fxlc_ins, &opcode_token, sizeof(opcode_token));
+
+    if (!(opcode_info = shader_tx_get_opcode_info(tx, fxlc_ins.opcode)))
+    {
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_INVALID_OPCODE,
+                "Invalid opcode %#x (token 0x%08x).", fxlc_ins.opcode, opcode_token);
+        goto fail;
+    }
+
+    if (fxlc_ins.num_comp < 1 || fxlc_ins.num_comp > 4)
+    {
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_INVALID_OPCODE,
+                "Invalid component count %u (token 0x%08x).", fxlc_ins.num_comp, opcode_token);
+        goto fail;
+    }
+
+    vsir_instruction_init(ins, &tx->p.location, opcode_info->vkd3d_opcode);
+
+    ins->dst_count = 1;
+    ins->dst = dst_param = shader_parser_get_dst_params(&tx->p, ins->dst_count);
+
+    ins->src_count = read_u32(ptr);
+    ins->src = src_params = shader_parser_get_src_params(&tx->p, ins->src_count);
+
+    for (i = 0; i < ins->src_count; ++i)
+        shader_fxlc_read_src_param(tx, &fxlc_ins, i == 0, &src_params[i]);
+
+    ins->dst_count = 1;
+    shader_fxlc_read_dst_param(tx, &fxlc_ins, dst_param);
+
+    if (*ptr > tx->end)
+    {
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_UNEXPECTED_EOF,
+                "The current instruction ends %zu token(s) past the end of the shader.",
+                *ptr - tx->end);
+        goto fail;
+    }
+
+    return;
+
+fail:
+    ins->handler_idx = VKD3DSIH_INVALID;
+    *ptr = tx->end;
+}
+
+int vkd3d_shader_tx_parser_create(const struct vkd3d_shader_compile_info *compile_info,
+        struct vkd3d_shader_message_context *message_context, struct vkd3d_shader_parser **parser)
+{
+    struct vkd3d_shader_instruction_array *instructions;
+    struct vkd3d_shader_instruction *ins;
+    struct vkd3d_shader_tx_parser *tx;
+    uint32_t count;
+    unsigned int i;
+    int ret;
+
+    if (!(tx = vkd3d_calloc(1, sizeof(*tx))))
+    {
+        ERR("Failed to allocate parser.\n");
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+    }
+
+    if ((ret = shader_tx_init(tx, compile_info, message_context)) < 0)
+    {
+        WARN("Failed to initialise shader parser, ret %d.\n", ret);
+        vkd3d_free(tx);
+        return ret;
+    }
+
+    count = read_u32(&tx->ptr);
+
+    instructions = &tx->p.instructions;
+
+    if (!shader_instruction_array_reserve(instructions, count))
+    {
+        ERR("Failed to allocate instructions.\n");
+        vkd3d_shader_parser_error(&tx->p, VKD3D_SHADER_ERROR_D3DBC_OUT_OF_MEMORY, "Out of memory.");
+        shader_tx_destroy(&tx->p);
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+    }
+
+    for (i = 0; i < count; ++i)
+    {
+        ins = &instructions->elements[instructions->count];
+        shader_tx_read_instruction(tx, ins);
+
+        if (ins->handler_idx == VKD3DSIH_INVALID)
+        {
+            WARN("Encountered unrecognized or invalid instruction.\n");
+            shader_tx_destroy(&tx->p);
+            return VKD3D_ERROR_INVALID_SHADER;
+        }
+        ++instructions->count;
+    }
+
+    if (tx->p.failed)
+    {
+        WARN("Failed to parse shader.\n");
+        shader_tx_destroy(&tx->p);
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    *parser = &tx->p;
 
     return VKD3D_OK;
 }

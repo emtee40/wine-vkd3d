@@ -202,8 +202,12 @@ enum vkd3d_shader_error
 enum vkd3d_shader_opcode
 {
     VKD3DSIH_ABS,
+    VKD3DSIH_ACOS,
     VKD3DSIH_ADD,
     VKD3DSIH_AND,
+    VKD3DSIH_ASIN,
+    VKD3DSIH_ATAN,
+    VKD3DSIH_ATAN2,
     VKD3DSIH_ATOMIC_AND,
     VKD3DSIH_ATOMIC_CMP_STORE,
     VKD3DSIH_ATOMIC_IADD,
@@ -228,6 +232,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_CND,
     VKD3DSIH_CONTINUE,
     VKD3DSIH_CONTINUEP,
+    VKD3DSIH_COS,
     VKD3DSIH_COUNTBITS,
     VKD3DSIH_CRS,
     VKD3DSIH_CUT,
@@ -290,6 +295,8 @@ enum vkd3d_shader_opcode
     VKD3DSIH_DMOVC,
     VKD3DSIH_DMUL,
     VKD3DSIH_DNE,
+    VKD3DSIH_DOT,
+    VKD3DSIH_DOT_SWIZ,
     VKD3DSIH_DP2,
     VKD3DSIH_DP2ADD,
     VKD3DSIH_DP3,
@@ -401,6 +408,9 @@ enum vkd3d_shader_opcode
     VKD3DSIH_MSAD,
     VKD3DSIH_MUL,
     VKD3DSIH_NE,
+    VKD3DSIH_NEG,
+    VKD3DSIH_NOISE,
+    VKD3DSIH_NOISE_SWIZ,
     VKD3DSIH_NOP,
     VKD3DSIH_NOT,
     VKD3DSIH_NRM,
@@ -434,6 +444,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_SETP,
     VKD3DSIH_SGE,
     VKD3DSIH_SGN,
+    VKD3DSIH_SIN,
     VKD3DSIH_SINCOS,
     VKD3DSIH_SLT,
     VKD3DSIH_SQRT,
@@ -1319,6 +1330,8 @@ void vkd3d_shader_trace_text_(const char *text, size_t size, const char *functio
 #define vkd3d_shader_trace_text(text, size) \
         vkd3d_shader_trace_text_(text, size, __FUNCTION__)
 
+int vkd3d_shader_tx_parser_create(const struct vkd3d_shader_compile_info *compile_info,
+        struct vkd3d_shader_message_context *message_context, struct vkd3d_shader_parser **parser);
 int vkd3d_shader_sm1_parser_create(const struct vkd3d_shader_compile_info *compile_info,
         struct vkd3d_shader_message_context *message_context, struct vkd3d_shader_parser **parser);
 int vkd3d_shader_sm4_parser_create(const struct vkd3d_shader_compile_info *compile_info,
