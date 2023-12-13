@@ -959,8 +959,8 @@ void d3d12_desc_create_uav(struct d3d12_desc *descriptor, struct d3d12_device *d
 void d3d12_desc_create_sampler(struct d3d12_desc *sampler, struct d3d12_device *device, const D3D12_SAMPLER_DESC *desc);
 void d3d12_desc_write_atomic(struct d3d12_desc *dst, const struct d3d12_desc *src, struct d3d12_device *device);
 
-bool vkd3d_create_raw_buffer_view(struct d3d12_device *device,
-        D3D12_GPU_VIRTUAL_ADDRESS gpu_address, D3D12_ROOT_PARAMETER_TYPE parameter_type, VkBufferView *vk_buffer_view);
+bool vkd3d_create_raw_buffer_view(struct d3d12_device *device, struct d3d12_resource *resource,
+        uint64_t offset, D3D12_ROOT_PARAMETER_TYPE parameter_type, VkBufferView *vk_buffer_view);
 HRESULT vkd3d_create_static_sampler(struct d3d12_device *device,
         const D3D12_STATIC_SAMPLER_DESC *desc, VkSampler *vk_sampler);
 
@@ -1171,6 +1171,7 @@ struct d3d12_root_signature
 {
     ID3D12RootSignature ID3D12RootSignature_iface;
     LONG refcount;
+    unsigned int internal_refcount;
 
     VkPipelineLayout vk_pipeline_layout;
     struct d3d12_descriptor_set_layout descriptor_set_layouts[VKD3D_MAX_DESCRIPTOR_SETS];
@@ -1214,6 +1215,8 @@ struct d3d12_root_signature
 
 HRESULT d3d12_root_signature_create(struct d3d12_device *device, const void *bytecode,
         size_t bytecode_length, struct d3d12_root_signature **root_signature);
+void d3d12_root_signature_incref(struct d3d12_root_signature *root_signature);
+void d3d12_root_signature_decref(struct d3d12_root_signature *root_signature);
 struct d3d12_root_signature *unsafe_impl_from_ID3D12RootSignature(ID3D12RootSignature *iface);
 
 int vkd3d_parse_root_signature_v_1_0(const struct vkd3d_shader_code *dxbc,
@@ -1428,7 +1431,7 @@ struct vkd3d_push_descriptor
 
 struct vkd3d_pipeline_bindings
 {
-    const struct d3d12_root_signature *root_signature;
+    struct d3d12_root_signature *root_signature;
 
     VkPipelineBindPoint vk_bind_point;
     /* All descriptor sets at index > 1 are for unbounded d3d12 ranges. Set
@@ -1460,17 +1463,18 @@ enum vkd3d_pipeline_bind_point
     VKD3D_PIPELINE_BIND_POINT_COUNT = 0x2,
 };
 
-/* ID3D12CommandList */
-struct d3d12_command_list
+struct d3d12_command_heap
 {
-    ID3D12GraphicsCommandList5 ID3D12GraphicsCommandList5_iface;
-    LONG refcount;
+    void *data;
+    size_t data_capacity;
+    size_t data_size;
+};
 
+struct d3d12_command_list_state
+{
     D3D12_COMMAND_LIST_TYPE type;
     VkQueueFlags vk_queue_flags;
 
-    bool is_recording;
-    bool is_valid;
     VkCommandBuffer vk_command_buffer;
 
     uint32_t strides[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
@@ -1503,9 +1507,31 @@ struct d3d12_command_list
     VkBuffer so_counter_buffers[D3D12_SO_BUFFER_SLOT_COUNT];
     VkDeviceSize so_counter_buffer_offsets[D3D12_SO_BUFFER_SLOT_COUNT];
 
-    void (*update_descriptors)(struct d3d12_command_list *list, enum vkd3d_pipeline_bind_point bind_point);
+    void (*update_descriptors)(struct d3d12_command_list_state *list, enum vkd3d_pipeline_bind_point bind_point);
+};
+
+/* ID3D12CommandList */
+struct d3d12_command_list
+{
+    ID3D12GraphicsCommandList5 ID3D12GraphicsCommandList5_iface;
+    LONG refcount;
+
+    D3D12_COMMAND_LIST_TYPE type;
+    VkQueueFlags vk_queue_flags;
+
+    bool is_recording;
+    bool is_valid;
+    bool is_flushed;
+    VkCommandBuffer vk_command_buffer;
+
+    struct d3d12_command_allocator *allocator;
+    struct d3d12_device *device;
+
+    void (*update_descriptors)(struct d3d12_command_list_state *list, enum vkd3d_pipeline_bind_point bind_point);
     struct d3d12_descriptor_heap *descriptor_heaps[64];
     unsigned int descriptor_heap_count;
+
+    struct d3d12_command_heap command_heap;
 
     struct vkd3d_private_store private_store;
 };
