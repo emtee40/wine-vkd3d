@@ -284,9 +284,7 @@ struct vkd3d_render_pass_entry;
 
 struct vkd3d_render_pass_cache
 {
-    struct vkd3d_render_pass_entry *render_passes;
-    size_t render_pass_count;
-    size_t render_passes_size;
+    struct vkd3d_shader_cache *cache;
 };
 
 void vkd3d_render_pass_cache_cleanup(struct vkd3d_render_pass_cache *cache, struct d3d12_device *device);
