@@ -1775,7 +1775,14 @@ static inline void vkd3d_prepend_struct(void *header, void *structure)
 
 struct vkd3d_shader_cache;
 
-int vkd3d_shader_open_cache(struct vkd3d_shader_cache **cache);
+struct vkd3d_shader_cache_info
+{
+    const char *filename;
+    uint64_t version;
+};
+
+int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
+        struct vkd3d_shader_cache **cache);
 unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
 unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache);
 int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
