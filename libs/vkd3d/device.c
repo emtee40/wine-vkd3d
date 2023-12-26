@@ -2827,6 +2827,7 @@ static const struct ID3D12ShaderCacheSessionVtbl d3d12_cache_session_vtbl =
 static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
         struct d3d12_device *device, const D3D12_SHADER_CACHE_SESSION_DESC *desc)
 {
+    struct vkd3d_shader_cache_info info = {0};
     struct d3d12_cache_session *i;
     enum vkd3d_result ret;
     HRESULT hr;
@@ -2872,10 +2873,11 @@ static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
 
     if (!session->cache)
     {
+        info.version = desc->Version;
         if (session->desc.Mode == D3D12_SHADER_CACHE_MODE_DISK)
             FIXME("Disk caches are not yet implemented.\n");
 
-        ret = vkd3d_shader_open_cache(&session->cache);
+        ret = vkd3d_shader_open_cache(&info, &session->cache);
         if (ret)
         {
             WARN("Failed to open shader cache.\n");
