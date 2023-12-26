@@ -19,6 +19,10 @@
 #include "vkd3d_private.h"
 #include "vkd3d_version.h"
 
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
 #define VKD3D_MAX_UAV_CLEAR_DESCRIPTORS_PER_TYPE 256u
 
 struct vkd3d_struct
@@ -2808,7 +2812,9 @@ static const struct ID3D12ShaderCacheSessionVtbl d3d12_cache_session_vtbl =
 static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
         struct d3d12_device *device, const D3D12_SHADER_CACHE_SESSION_DESC *desc)
 {
+    struct vkd3d_shader_cache_info info = {0};
     struct d3d12_cache_session *i;
+    char *name = NULL, *cwd;
     enum vkd3d_result ret;
     HRESULT hr;
 
@@ -2853,16 +2859,47 @@ static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
 
     if (!session->cache)
     {
+        info.version = desc->Version;
         if (session->desc.Mode == D3D12_SHADER_CACHE_MODE_DISK)
-            FIXME("Disk caches are not yet implemented.\n");
+        {
+            if (!(session->desc.Flags & D3D12_SHADER_CACHE_FLAG_USE_WORKING_DIR))
+                FIXME("Always using the working directory for now.\n");
 
-        ret = vkd3d_shader_open_cache(&session->cache);
+            cwd = getcwd(NULL, 0);
+            if (!cwd)
+            {
+                FIXME("Cannot get current working directory.\n");
+                hr = E_OUTOFMEMORY;
+                goto error;
+            }
+            name = vkd3d_malloc(strlen(cwd) + 64);
+            if (!name)
+            {
+                hr = E_OUTOFMEMORY;
+                goto error;
+            }
+
+            sprintf(name, "%s/%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x.vkd3d-cache", cwd,
+                    (unsigned long)session->desc.Identifier.Data1, session->desc.Identifier.Data2,
+                    session->desc.Identifier.Data3, session->desc.Identifier.Data4[0],
+                    session->desc.Identifier.Data4[1], session->desc.Identifier.Data4[2],
+                    session->desc.Identifier.Data4[3], session->desc.Identifier.Data4[4],
+                    session->desc.Identifier.Data4[5], session->desc.Identifier.Data4[6],
+                    session->desc.Identifier.Data4[7]);
+            free(cwd); /* Allocated by getcwd, don't use vkd3d_free. */
+
+            TRACE("Using cache file %s.\n", name);
+            info.filename = name;
+        }
+
+        ret = vkd3d_shader_open_cache(&info, &session->cache);
         if (ret)
         {
             WARN("Failed to open shader cache.\n");
             hr = hresult_from_vkd3d_result(ret);
             goto error;
         }
+        vkd3d_free(name);
     }
 
     /* Add it to the list even if we reused an existing cache. The other session might be destroyed,
