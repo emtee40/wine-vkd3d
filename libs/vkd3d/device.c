@@ -621,7 +621,7 @@ static HRESULT vkd3d_instance_init(struct vkd3d_instance *instance,
 
     application_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     application_info.pNext = NULL;
-    application_info.pApplicationName = NULL;
+    application_info.pApplicationName = "";
     application_info.applicationVersion = 0;
     application_info.pEngineName = PACKAGE_NAME;
     application_info.engineVersion = vkd3d_get_vk_version();
@@ -657,6 +657,9 @@ static HRESULT vkd3d_instance_init(struct vkd3d_instance *instance,
         application_info.pApplicationName = application_name;
     }
 
+    strncpy(instance->application_name, application_info.pApplicationName,
+            ARRAY_SIZE(instance->application_name));
+    instance->application_name[ARRAY_SIZE(instance->application_name) - 1] = '\0';
     TRACE("Application: %s.\n", debugstr_a(application_info.pApplicationName));
     TRACE("vkd3d API version: %u.\n", instance->api_version);
 
