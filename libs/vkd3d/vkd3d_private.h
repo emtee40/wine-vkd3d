@@ -198,6 +198,7 @@ struct vkd3d_instance
     uint64_t host_ticks_per_second;
 
     unsigned int refcount;
+    char application_name[PATH_MAX];
 };
 
 union vkd3d_thread_handle
