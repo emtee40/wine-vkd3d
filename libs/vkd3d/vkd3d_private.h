@@ -42,6 +42,19 @@
 #include <limits.h>
 #include <stdbool.h>
 
+/* The following structures define data structures that are stored in vkd3d's
+ * cache. It doesn't define the cache format itself, those details are found
+ * in cache.c.
+ *
+ * Changing the structures will break compatibility with existing cache files.
+ * In this case bump VKD3D_SHADER_CACHE_OBJ_VERSION.
+ *
+ * The structs aren't meant to be read by external code, consider them a vkd3d
+ * implementation detail. */
+#define VKD3D_SHADER_CACHE_OBJ_VERSION 1ull
+
+/* End shader data structures */
+
 #define VK_CALL(f) (vk_procs->f)
 
 #define VKD3D_DESCRIPTOR_MAGIC_FREE    0x00000000u
@@ -1795,9 +1808,18 @@ static inline void vkd3d_prepend_struct(void *header, void *structure)
 
 struct vkd3d_shader_cache;
 
+enum vkd3d_shader_cache_flags
+{
+    VKD3D_SHADER_CACHE_FLAGS_NONE =             0x00000000,
+    VKD3D_SHADER_CACHE_FLAGS_NO_SERIALIZE =     0x00000001,
+
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_CACHE_FLAGS),
+};
+
 struct vkd3d_shader_cache_info
 {
     const char *filename;
+    enum vkd3d_shader_cache_flags flags;
     uint64_t version;
 };
 
@@ -1817,5 +1839,19 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
 void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache);
+
+struct vkd3d_cache_struct
+{
+    struct vkd3d_mutex mutex;
+    struct vkd3d_shader_cache *cache;
+};
+
+/* FIXME: Write accessory functions
+ *
+ * TODO2: struct vkd3d_instance might be a better place than global. */
+extern struct vkd3d_cache_struct persistent_cache;
+
+HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance);
+void vkd3d_persistent_cache_close(void);
 
 #endif  /* __VKD3D_PRIVATE_H */
