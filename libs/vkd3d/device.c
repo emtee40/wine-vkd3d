@@ -21,6 +21,11 @@
 
 #define VKD3D_MAX_UAV_CLEAR_DESCRIPTORS_PER_TYPE 256u
 
+/* FIXME: We may want to put the GPU and driver identities in there,
+ * although under which conditions the pipeline cache can be transfered
+ * from one GPU/driver to another is a Vulkan implementation detail. */
+static const char vk_pipeline_cache_key[] = "vk_pipeline_cache";
+
 struct vkd3d_struct
 {
     enum vkd3d_structure_type type;
@@ -2211,15 +2216,25 @@ static HRESULT d3d12_device_init_pipeline_cache(struct d3d12_device *device)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     VkPipelineCacheCreateInfo cache_info;
+    void *cache_data = NULL;
+    size_t cache_size = 0;
     VkResult vr;
 
     vkd3d_mutex_init(&device->pipeline_cache_mutex);
 
+    if (!vkd3d_shader_cache_get(persistent_cache.cache, vk_pipeline_cache_key,
+            sizeof(vk_pipeline_cache_key), NULL, &cache_size))
+    {
+        cache_data = vkd3d_malloc(cache_size);
+        vkd3d_shader_cache_get(persistent_cache.cache, vk_pipeline_cache_key,
+                sizeof(vk_pipeline_cache_key), cache_data, &cache_size);
+    }
+
     cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
     cache_info.pNext = NULL;
     cache_info.flags = 0;
-    cache_info.initialDataSize = 0;
-    cache_info.pInitialData = NULL;
+    cache_info.initialDataSize = cache_size;
+    cache_info.pInitialData = cache_data;
     if ((vr = VK_CALL(vkCreatePipelineCache(device->vk_device, &cache_info, NULL,
             &device->vk_pipeline_cache))) < 0)
     {
@@ -2227,15 +2242,37 @@ static HRESULT d3d12_device_init_pipeline_cache(struct d3d12_device *device)
         device->vk_pipeline_cache = VK_NULL_HANDLE;
     }
 
+    vkd3d_free(cache_data);
+
     return S_OK;
 }
 
 static void d3d12_device_destroy_pipeline_cache(struct d3d12_device *device)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    void *cache_data = NULL;
+    size_t cache_size = 0;
+    VkResult vr;
 
     if (device->vk_pipeline_cache)
+    {
+        vr = VK_CALL(vkGetPipelineCacheData(device->vk_device, device->vk_pipeline_cache, &cache_size, NULL));
+        if (vr == VK_SUCCESS && cache_size)
+            cache_data = vkd3d_malloc(cache_size);
+        if (cache_data)
+        {
+            vr = VK_CALL(vkGetPipelineCacheData(device->vk_device, device->vk_pipeline_cache,
+                    &cache_size, cache_data));
+            if (vr == VK_SUCCESS)
+            {
+                vkd3d_shader_cache_put(persistent_cache.cache, vk_pipeline_cache_key,
+                        sizeof(vk_pipeline_cache_key), cache_data, cache_size, VKD3D_PUT_REPLACE);
+            }
+            vkd3d_free(cache_data);
+        }
+
         VK_CALL(vkDestroyPipelineCache(device->vk_device, device->vk_pipeline_cache, NULL));
+    }
 
     vkd3d_mutex_destroy(&device->pipeline_cache_mutex);
 }
@@ -3005,6 +3042,14 @@ static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device9 *iface)
         vkd3d_instance_decref(device->vkd3d_instance);
 
         vkd3d_free(device);
+
+        /* We don't necessarily have to destroy the cache when the device
+         * is destroyed and could just keep it around until process exit.
+         *
+         * Release it for now though because the cache only writes to disk
+         * when it is destroyed and we don't have a DllMain to clean up
+         * when the library is unloaded in a running process. */
+        vkd3d_persistent_cache_close();
     }
 
     return refcount;
@@ -5349,8 +5394,11 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     if (FAILED(hr = vkd3d_create_vk_device(device, create_info)))
         goto out_free_instance;
 
-    if (FAILED(hr = d3d12_device_init_pipeline_cache(device)))
+    if (FAILED(hr = vkd3d_persistent_cache_open(instance)))
         goto out_free_vk_resources;
+
+    if (FAILED(hr = d3d12_device_init_pipeline_cache(device)))
+        goto out_free_cache;
 
     if (FAILED(hr = vkd3d_private_store_init(&device->private_store)))
         goto out_free_pipeline_cache;
@@ -5404,6 +5452,11 @@ out_free_private_store:
     vkd3d_private_store_destroy(&device->private_store);
 out_free_pipeline_cache:
     d3d12_device_destroy_pipeline_cache(device);
+out_free_cache:
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+    if (!vkd3d_shader_cache_decref(persistent_cache.cache))
+        persistent_cache.cache = NULL;
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
 out_free_vk_resources:
     vk_procs = &device->vk_procs;
     VK_CALL(vkDestroyDevice(device->vk_device, NULL));

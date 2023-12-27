@@ -581,3 +581,61 @@ done:
     vkd3d_shader_cache_unlock(cache);
     return ret;
 }
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+/* If a process creates multiple devices they share the disk cache. */
+struct vkd3d_cache_struct persistent_cache =
+{
+    VKD3D_MUTEX_INITIALIZER, NULL,
+};
+
+HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
+{
+    struct vkd3d_shader_cache_info cache_info = {0};
+    char *cache_name, *cwd;
+
+    /* FIXME: Does this use of getcwd work on Unix too? */
+    cwd = getcwd(NULL, 0);
+    cache_name = vkd3d_malloc(strlen(cwd) + strlen(instance->application_name) + 8);
+    sprintf(cache_name, "%s/%s.cache", cwd, instance->application_name);
+    free(cwd); /* Use libc's free() because it is malloc'ed by getcwd. */
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+    cache_info.version = VKD3D_SHADER_CACHE_OBJ_VERSION;
+    cache_info.filename = cache_name;
+    cache_info.flags = VKD3D_SHADER_CACHE_FLAGS_NO_SERIALIZE;
+    if (persistent_cache.cache)
+    {
+        vkd3d_shader_cache_incref(persistent_cache.cache);
+    }
+    else if (vkd3d_shader_open_cache(&cache_info, &persistent_cache.cache))
+    {
+        /* FIXME, I think the cache code does that automagically. */
+        FIXME("Failed to open shader cache %s\n", debugstr_a(cache_name));
+        cache_info.filename = NULL;
+        if (vkd3d_shader_open_cache(&cache_info, &persistent_cache.cache))
+        {
+            vkd3d_free(cache_name);
+            vkd3d_mutex_unlock(&persistent_cache.mutex);
+            return E_FAIL;
+        }
+    }
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+    vkd3d_free(cache_name);
+
+    return S_OK;
+}
+
+void vkd3d_persistent_cache_close(void)
+{
+    unsigned int cache_ref;
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+    cache_ref = vkd3d_shader_cache_decref(persistent_cache.cache);
+    if (!cache_ref)
+        persistent_cache.cache = NULL;
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+}
