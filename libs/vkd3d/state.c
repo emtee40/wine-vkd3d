@@ -4154,7 +4154,7 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
 
         if (device->cache_ready)
         {
-            TRACE("runtime: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
+            ERR("runtime: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
                     ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
         }
     }

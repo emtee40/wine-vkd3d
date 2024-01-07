@@ -2214,11 +2214,17 @@ static HRESULT d3d12_device_init_pipeline_cache(struct d3d12_device *device)
                 sizeof(vk_pipeline_cache_key), cache_data, &cache_size);
     }
 
+    /* We need a pipeline cache to get useful information from VK_EXT_pipeline_creation_feedback
+     * on mesa. To test the efficiency of our own cache supply no data to the vk pipeline
+     * cache to make it start out empty and seed it with our own cached objects.
+     *
+     * Note that Mesa's cache in ~/.cache/mesa_shader_cache/ works regardless of using a
+     * vk pipeline cache, but it won't factor into reports from the feedback extension. */
     cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
     cache_info.pNext = NULL;
     cache_info.flags = 0;
-    cache_info.initialDataSize = cache_size;
-    cache_info.pInitialData = cache_data;
+    cache_info.initialDataSize = 0;
+    cache_info.pInitialData = NULL;
     if ((vr = VK_CALL(vkCreatePipelineCache(device->vk_device, &cache_info, NULL,
             &device->vk_pipeline_cache))) < 0)
     {
@@ -5635,7 +5641,7 @@ static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_c
     device_load_cache_rs(device, cache);
     device_load_cache_gfx(device, cache);
 
-    TRACE("Creation time: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
+    ERR("Creation time: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
             ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
     device->cache_hit = device->cache_miss = 0;
     device->cache_ready = true;
