@@ -4912,7 +4912,7 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
     array_sizes[0] = signature_element->register_count;
     array_sizes[1] = (reg_type == VKD3DSPR_PATCHCONST ? 0 : compiler->input_control_point_count);
     if (array_sizes[0] == 1 && !vsir_sysval_semantic_is_tess_factor(signature_element->sysval_semantic)
-            && (!vsir_sysval_semantic_is_clip_cull(signature_element->sysval_semantic) || array_sizes[1]))
+            && (!vsir_sysval_semantic_is_clip_cull(sysval) || array_sizes[1]))
     {
         array_sizes[0] = 0;
     }
