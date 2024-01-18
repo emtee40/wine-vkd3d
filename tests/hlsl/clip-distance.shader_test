@@ -1,0 +1,67 @@
+[require]
+shader model >= 4.0
+
+[input layout]
+0 r32g32 float POSITION 0
+0 r32 float CLIP_DISTANCE 0
+0 r32 float CLIP_DISTANCE 1
+
+[vertex buffer 0]
+-1.0 -1.0   0.25   0.5
+-1.0  1.0   0.25   0.5
+ 1.0 -1.0   0.25   0.5
+ 1.0  1.0   0.25   0.5
+
+
+[vertex shader fail(sm<6)]
+uint4 u;
+
+struct input
+{
+    float4 position : POSITION;
+    float distance[2] : CLIP_DISTANCE;
+};
+
+struct vertex
+{
+    float4 position : SV_Position;
+    // dxcompiler supports dynamic indexing of SV_ClipDistance arrays, but version 1.7.0.4006
+    // crashes on array size > 2, maybe because it exceeds the semantic index limit of 2.
+    float clip[2] : SV_ClipDistance;
+};
+
+void main(input vin, out vertex vertex)
+{
+    vertex.position = vin.position;
+    vertex.clip[0] = 0;
+    vertex.clip[1] = 0;
+    vertex.clip[u.x] = vin.distance[u.y];
+    vertex.clip[u.z] = vin.distance[u.w];
+}
+
+
+[pixel shader fail(sm<6)]
+uint4 u;
+
+struct vertex
+{
+    float4 position : SV_Position;
+    float clip[2] : SV_ClipDistance;
+};
+
+float4 main(vertex input) : SV_Target
+{
+    return float4(input.clip[0], input.clip[1], input.clip[u.x], input.clip[u.z]);
+}
+
+
+[test]
+uniform 0 uint4 0 1 1 0
+draw triangle strip 4
+probe all rgba (0.5, 0.25, 0.5, 0.25)
+uniform 0 uint4 1 0 0 1
+draw triangle strip 4
+probe all rgba (0.5, 0.25, 0.25, 0.5)
+uniform 0 uint4 0 0 1 1
+draw triangle strip 4
+probe all rgba (0.25, 0.5, 0.25, 0.5)
