@@ -2097,6 +2097,9 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
     buffer = &compiler.buffer;
     vkd3d_string_buffer_init(buffer);
 
+    if (formatting & VKD3D_SHADER_COMPILE_OPTION_FORMATTING_NUMBERS)
+            vkd3d_string_buffer_printf(buffer, "      ");
+
     compiler.shader_version = *shader_version;
     shader_version = &compiler.shader_version;
     vkd3d_string_buffer_printf(buffer, "%s%s_%u_%u%s\n", compiler.colours.version,
@@ -2107,6 +2110,9 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
     for (i = 0; i < program->instructions.count; ++i)
     {
         struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
+
+        if (formatting & VKD3D_SHADER_COMPILE_OPTION_FORMATTING_NUMBERS)
+            vkd3d_string_buffer_printf(buffer, "%4u: ", i + 1);
 
         switch (ins->handler_idx)
         {
