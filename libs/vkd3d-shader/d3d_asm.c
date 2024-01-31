@@ -2074,6 +2074,8 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
 
     formatting = VKD3D_SHADER_COMPILE_OPTION_FORMATTING_INDENT
             | VKD3D_SHADER_COMPILE_OPTION_FORMATTING_HEADER;
+    if (dialect == VSIR_ASM_VSIR)
+        formatting |= VKD3D_SHADER_COMPILE_OPTION_FORMATTING_NUMBERS;
     if (compile_info)
     {
         for (i = 0; i < compile_info->option_count; ++i)
