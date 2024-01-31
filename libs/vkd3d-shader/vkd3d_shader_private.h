@@ -1189,6 +1189,13 @@ static inline bool vkd3d_shader_instruction_has_texel_offset(const struct vkd3d_
     return ins->texel_offset.u || ins->texel_offset.v || ins->texel_offset.w;
 }
 
+static inline bool vsir_instruction_is_dcl(const struct vkd3d_shader_instruction *instruction)
+{
+    enum vkd3d_shader_opcode handler_idx = instruction->handler_idx;
+    return (VKD3DSIH_DCL <= handler_idx && handler_idx <= VKD3DSIH_DCL_VERTICES_OUT)
+            || handler_idx == VKD3DSIH_HS_DECLS;
+}
+
 static inline bool register_is_constant(const struct vkd3d_shader_register *reg)
 {
     return (reg->type == VKD3DSPR_IMMCONST || reg->type == VKD3DSPR_IMMCONST64);
