@@ -1724,7 +1724,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_resource_GetHeapProperties(ID3D12Resource
 static HRESULT STDMETHODCALLTYPE d3d12_resource_GetProtectedResourceSession(ID3D12Resource2 *iface,
         REFIID iid, void **session)
 {
-    FIXME("iface %p, iid %s, session %p stub!\n", iface, debugstr_guid(iid), session);
+    TRACE("iface %p, iid %s, session %p.\n", iface, debugstr_guid(iid), session);
 
     return DXGI_ERROR_NOT_FOUND;
 }
