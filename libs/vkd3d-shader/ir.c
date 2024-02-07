@@ -1495,14 +1495,14 @@ struct clip_cull_normaliser
 static bool normaliser_signature_transform_clip_or_cull(struct clip_cull_normaliser_signature *signature,
         enum vkd3d_shader_sysval_semantic target_sysval, struct clip_cull_normaliser *normaliser)
 {
+    unsigned int i, j, base, array_size, reg_mask, count, arrayed_count;
     struct vkd3d_shader_parser *parser = normaliser->parser;
-    unsigned int i, j, base, array_size, reg_mask;
     struct shader_signature *s = signature->s;
     struct signature_element *e;
 
     /* Up to two vec4 clip/cull elements are allowed. Merge these into an array,
      * and track the location and array offset of the second one. */
-    for (i = 0, array_size = 0, reg_mask = 0, base = 0; i < s->element_count; ++i)
+    for (i = 0, array_size = 0, reg_mask = 0, base = 0, count = 0, arrayed_count = 0; i < s->element_count; ++i)
     {
         e = &s->elements[i];
 
@@ -1525,10 +1525,25 @@ static bool normaliser_signature_transform_clip_or_cull(struct clip_cull_normali
 
         signature->scan[i].offset = array_size;
         array_size += vsir_write_mask_component_count(e->mask);
+        ++count;
+        arrayed_count += e->register_count > 1;
     }
 
     if (!array_size)
         return false;
+    /* DXIL supports clip/cull arrays of size 2, and a single array requires no modification. Larger
+     * arrays exceed the semantic index limit (and cause dxcompiler version 1.7.0.4006 to crash). */
+    if (arrayed_count == 1 && count == 1)
+        return false;
+    /* TODO: combining an array with another clip/cull element should be rare, and requires special handling. */
+    if (arrayed_count)
+    {
+        WARN("Unsupported multiple elements with at least one array.\n");
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                "Multiple clip or cull signature elements are not supported if at least one is an array.");
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return false;
+    }
 
     if (array_size > D3D12_CLIP_OR_CULL_DISTANCE_COUNT)
     {
@@ -1695,7 +1710,8 @@ static void shader_src_param_clip_cull_normalise(struct vkd3d_shader_src_param *
         normaliser->result = VKD3D_ERROR_INVALID_SHADER;
         return;
     }
-    /* Dynamic array addressing of clip/cull inputs is not supported. */
+    /* Dynamic array addressing of clip/cull inputs is not supported, except for DXIL arrayed inputs,
+     * which are filtered out above by 'need_normalisation'. */
     if (reg->idx_count >= ARRAY_SIZE(reg->idx))
     {
         WARN("Unexpected index count %u.\n", reg->idx_count);
@@ -1814,7 +1830,8 @@ static void shader_dst_param_clip_cull_normalise(struct vkd3d_shader_dst_param *
 
     write_mask = dst_param->write_mask;
 
-    /* Dynamic array addressing of clip/cull outputs is not supported. */
+    /* Dynamic array addressing of clip/cull outputs is not supported, except for DXIL arrayed outputs,
+     * which are filtered out above by 'need_normalisation'. */
     if (reg->idx_count >= ARRAY_SIZE(reg->idx))
     {
         WARN("Unexpected index count %u.\n", reg->idx_count);
@@ -3528,6 +3545,9 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
 
     if (parser->shader_desc.is_dxil)
     {
+        if ((result = normalise_clip_cull(parser)) < 0)
+            return result;
+
         if ((result = lower_switch_to_if_ladder(&parser->program)) < 0)
             return result;
 
