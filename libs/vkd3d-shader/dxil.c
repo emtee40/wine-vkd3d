@@ -668,7 +668,7 @@ struct sm6_value
     enum sm6_value_type value_type;
     unsigned int structure_stride;
     bool is_undefined;
-    bool is_back_ref;
+    bool is_fwd_gep;
     union
     {
         struct sm6_function_data function;
@@ -841,6 +841,15 @@ struct sm6_descriptor_info
     enum vkd3d_data_type reg_data_type;
 };
 
+struct sm6_gep_forward_fixup
+{
+    const struct dxil_record *record;
+    struct sm6_block *code_block;
+    size_t ins_idx;
+    size_t value_count;
+    struct sm6_value *dst;
+};
+
 struct sm6_parser
 {
     const uint32_t *ptr, *start, *end;
@@ -891,6 +900,10 @@ struct sm6_parser
     size_t value_capacity;
     size_t cur_max_value;
     unsigned int ssa_next_id;
+
+    struct sm6_gep_forward_fixup *fwd_fixups;
+    size_t fwd_fixup_capacity;
+    size_t fwd_fixup_count;
 
     struct vkd3d_shader_parser p;
 };
@@ -2722,18 +2735,6 @@ static bool sm6_value_validate_is_pointer(const struct sm6_value *value, struct 
     return true;
 }
 
-static bool sm6_value_validate_is_backward_ref(const struct sm6_value *value, struct sm6_parser *sm6)
-{
-    if (!value->is_back_ref)
-    {
-        FIXME("Forward-referenced pointers are not supported.\n");
-        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
-                "Forward-referenced pointer declarations are not supported.");
-        return false;
-    }
-    return true;
-}
-
 static bool sm6_value_validate_is_numeric(const struct sm6_value *value, struct sm6_parser *sm6)
 {
     if (!sm6_type_is_numeric(value->type))
@@ -2838,10 +2839,17 @@ static size_t sm6_parser_get_value_idx_by_ref(struct sm6_parser *sm6, const stru
         {
             value->type = fwd_type;
             value->value_type = VALUE_TYPE_REG;
-            register_init_with_id(&value->u.reg, VKD3DSPR_SSA, vkd3d_data_type_from_sm6_type(
-                    sm6_type_get_scalar_type(fwd_type, 0)), sm6_parser_alloc_ssa_id(sm6));
-            value->u.reg.dimension = sm6_type_is_scalar(fwd_type) ? VSIR_DIMENSION_SCALAR
-                    : VSIR_DIMENSION_VEC4;
+            if (sm6_type_is_pointer(fwd_type))
+            {
+                value->is_fwd_gep = true;
+            }
+            else
+            {
+                register_init_with_id(&value->u.reg, VKD3DSPR_SSA, vkd3d_data_type_from_sm6_type(
+                        sm6_type_get_scalar_type(fwd_type, 0)), sm6_parser_alloc_ssa_id(sm6));
+                value->u.reg.dimension = sm6_type_is_scalar(fwd_type) ? VSIR_DIMENSION_SCALAR
+                        : VSIR_DIMENSION_VEC4;
+            }
         }
     }
 
@@ -3212,7 +3220,6 @@ static enum vkd3d_result sm6_parser_constants_init(struct sm6_parser *sm6, const
         dst = sm6_parser_get_current_value(sm6);
         dst->type = type;
         dst->value_type = VALUE_TYPE_REG;
-        dst->is_back_ref = true;
         vsir_register_init(&dst->u.reg, reg_type, reg_data_type, 0);
 
         switch (record->code)
@@ -3630,7 +3637,6 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
     dst = sm6_parser_get_current_value(sm6);
     dst->type = type;
     dst->value_type = VALUE_TYPE_REG;
-    dst->is_back_ref = true;
 
     if (is_constant && !init)
     {
@@ -4155,6 +4161,34 @@ static enum vkd3d_shader_opcode map_dx_atomicrmw_op(uint64_t code)
     }
 }
 
+static void sm6_parser_add_gep_forward_fixup(struct sm6_parser *sm6, const struct dxil_record *record,
+        const struct sm6_value *ptr, struct sm6_block *code_block, struct sm6_value *dst)
+{
+    struct sm6_gep_forward_fixup *fixup;
+
+    if (!vkd3d_array_reserve((void **)&sm6->fwd_fixups, &sm6->fwd_fixup_capacity, sm6->fwd_fixup_count + 1,
+            sizeof(*sm6->fwd_fixups)))
+    {
+        ERR("Failed to allocate forward fixup.\n");
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
+                "Out of memory allocating a GEP forward fixup.");
+        return;
+    }
+    fixup = &sm6->fwd_fixups[sm6->fwd_fixup_count++];
+    fixup->record = record;
+    fixup->code_block = code_block;
+    fixup->ins_idx = code_block->instruction_count;
+    fixup->value_count = sm6->value_count;
+    fixup->dst = dst;
+    if (dst)
+    {
+        dst->type = ptr->type->u.pointer.type;
+        register_init_ssa_scalar(&dst->u.reg, ptr->type->u.pointer.type, dst, sm6);
+    }
+
+    code_block->instructions[code_block->instruction_count].opcode = VKD3DSIH_MOV;
+}
+
 static void sm6_parser_emit_atomicrmw(struct sm6_parser *sm6, const struct dxil_record *record,
         struct function_emission_state *state, struct sm6_value *dst)
 {
@@ -4170,9 +4204,14 @@ static void sm6_parser_emit_atomicrmw(struct sm6_parser *sm6, const struct dxil_
     uint64_t code;
 
     if (!(ptr = sm6_parser_get_value_by_ref(sm6, record, NULL, &i))
-            || !sm6_value_validate_is_pointer_to_i32(ptr, sm6)
-            || !sm6_value_validate_is_backward_ref(ptr, sm6))
+            || !sm6_value_validate_is_pointer_to_i32(ptr, sm6))
         return;
+
+    if (ptr->is_fwd_gep)
+    {
+        sm6_parser_add_gep_forward_fixup(sm6, record, ptr, state->code_block, dst);
+        return;
+    }
 
     if (ptr->u.reg.type != VKD3DSPR_GROUPSHAREDMEM)
     {
@@ -7020,7 +7059,7 @@ static void sm6_parser_emit_cmp2(struct sm6_parser *sm6, const struct dxil_recor
 }
 
 static void sm6_parser_emit_cmpxchg(struct sm6_parser *sm6, const struct dxil_record *record,
-        struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
+        struct sm6_block *code_block, struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
 {
     uint64_t success_ordering, failure_ordering;
     struct vkd3d_shader_dst_param *dst_params;
@@ -7032,9 +7071,14 @@ static void sm6_parser_emit_cmpxchg(struct sm6_parser *sm6, const struct dxil_re
     uint64_t code;
 
     if (!(ptr = sm6_parser_get_value_by_ref(sm6, record, NULL, &i))
-            || !sm6_value_validate_is_pointer_to_i32(ptr, sm6)
-            || !sm6_value_validate_is_backward_ref(ptr, sm6))
+            || !sm6_value_validate_is_pointer_to_i32(ptr, sm6))
         return;
+
+    if (ptr->is_fwd_gep)
+    {
+        sm6_parser_add_gep_forward_fixup(sm6, record, ptr, code_block, dst);
+        return;
+    }
 
     if (ptr->u.reg.type != VKD3DSPR_GROUPSHAREDMEM)
     {
@@ -7257,12 +7301,13 @@ static void sm6_parser_emit_gep(struct sm6_parser *sm6, const struct dxil_record
     reg->idx[1].is_in_bounds = is_in_bounds;
     reg->idx_count = 2;
     dst->structure_stride = src->structure_stride;
+    dst->is_fwd_gep = false;
 
     ins->opcode = VKD3DSIH_NOP;
 }
 
 static void sm6_parser_emit_load(struct sm6_parser *sm6, const struct dxil_record *record,
-        struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
+        struct sm6_block *code_block, struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
 {
     const struct sm6_type *elem_type = NULL, *pointee_type;
     unsigned int alignment, operand_count, i = 0;
@@ -7272,9 +7317,15 @@ static void sm6_parser_emit_load(struct sm6_parser *sm6, const struct dxil_recor
 
     if (!(ptr = sm6_parser_get_value_by_ref(sm6, record, NULL, &i)))
         return;
+
+    if (ptr->is_fwd_gep)
+    {
+        sm6_parser_add_gep_forward_fixup(sm6, record, ptr, code_block, dst);
+        return;
+    }
+
     if (!sm6_value_validate_is_register(ptr, sm6)
             || !sm6_value_validate_is_pointer(ptr, sm6)
-            || !sm6_value_validate_is_backward_ref(ptr, sm6)
             || !dxil_record_validate_operand_count(record, i + 2, i + 3, sm6))
         return;
 
@@ -7447,7 +7498,7 @@ static void sm6_parser_emit_ret(struct sm6_parser *sm6, const struct dxil_record
 }
 
 static void sm6_parser_emit_store(struct sm6_parser *sm6, const struct dxil_record *record,
-        struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
+        struct sm6_block *code_block, struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
 {
     unsigned int i = 0, alignment, operand_count;
     struct vkd3d_shader_src_param *src_params;
@@ -7458,9 +7509,14 @@ static void sm6_parser_emit_store(struct sm6_parser *sm6, const struct dxil_reco
 
     if (!(ptr = sm6_parser_get_value_by_ref(sm6, record, NULL, &i))
             || !sm6_value_validate_is_register(ptr, sm6)
-            || !sm6_value_validate_is_pointer(ptr, sm6)
-            || !sm6_value_validate_is_backward_ref(ptr, sm6))
+            || !sm6_value_validate_is_pointer(ptr, sm6))
     {
+        return;
+    }
+
+    if (ptr->is_fwd_gep)
+    {
+        sm6_parser_add_gep_forward_fixup(sm6, record, ptr, code_block, NULL);
         return;
     }
 
@@ -7989,9 +8045,9 @@ static enum vkd3d_result sm6_function_resolve_phi_incomings(const struct sm6_fun
 static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const struct dxil_block *block,
         struct sm6_function *function)
 {
+    size_t i, block_idx, block_count, value_count, fwd_fixup_count;
     struct vsir_program *program = sm6->p.program;
     struct vkd3d_shader_instruction *ins;
-    size_t i, block_idx, block_count;
     const struct dxil_record *record;
     const struct sm6_type *fwd_type;
     bool ret_found, is_terminator;
@@ -8068,7 +8124,6 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
         fwd_type = dst->type;
         dst->type = NULL;
         dst->value_type = VALUE_TYPE_REG;
-        dst->is_back_ref = true;
         is_terminator = false;
 
         record = block->records[i];
@@ -8105,7 +8160,7 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
                 sm6_parser_emit_cmp2(sm6, record, ins, dst);
                 break;
             case FUNC_CODE_INST_CMPXCHG:
-                sm6_parser_emit_cmpxchg(sm6, record, ins, dst);
+                sm6_parser_emit_cmpxchg(sm6, record, code_block, ins, dst);
                 break;
             case FUNC_CODE_INST_EXTRACTVAL:
                 sm6_parser_emit_extractval(sm6, record, ins, dst);
@@ -8114,7 +8169,7 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
                 sm6_parser_emit_gep(sm6, record, ins, dst);
                 break;
             case FUNC_CODE_INST_LOAD:
-                sm6_parser_emit_load(sm6, record, ins, dst);
+                sm6_parser_emit_load(sm6, record, code_block, ins, dst);
                 break;
             case FUNC_CODE_INST_PHI:
                 sm6_parser_emit_phi(sm6, record, function, code_block, ins, dst);
@@ -8125,7 +8180,7 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
                 ret_found = true;
                 break;
             case FUNC_CODE_INST_STORE:
-                sm6_parser_emit_store(sm6, record, ins, dst);
+                sm6_parser_emit_store(sm6, record, code_block, ins, dst);
                 break;
             case FUNC_CODE_INST_SWITCH:
                 sm6_parser_emit_switch(sm6, record, function, code_block, ins);
@@ -8162,6 +8217,47 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
 
         sm6->value_count += !!dst->type;
     }
+
+    value_count = sm6->value_count;
+    fwd_fixup_count = sm6->fwd_fixup_count;
+    for (i = 0; i < fwd_fixup_count; ++i)
+    {
+        const struct sm6_gep_forward_fixup *fixup = &sm6->fwd_fixups[i];
+
+        code_block = fixup->code_block;
+        ins = &code_block->instructions[fixup->ins_idx];
+        ins->opcode = VKD3DSIH_INVALID;
+        dst = fixup->dst;
+        record = fixup->record;
+        sm6->value_count = fixup->value_count;
+
+        switch (record->code)
+        {
+            case FUNC_CODE_INST_ATOMICRMW:
+            {
+                struct function_emission_state state = {code_block, ins};
+                sm6_parser_emit_atomicrmw(sm6, record, &state, dst);
+                program->temp_count = max(program->temp_count, state.temp_idx);
+                break;
+            }
+            case FUNC_CODE_INST_CMPXCHG:
+                sm6_parser_emit_cmpxchg(sm6, record, code_block, ins, dst);
+                break;
+            case FUNC_CODE_INST_LOAD:
+                sm6_parser_emit_load(sm6, record, code_block, ins, dst);
+                break;
+            case FUNC_CODE_INST_STORE:
+                sm6_parser_emit_store(sm6, record, code_block, ins, dst);
+                break;
+            default:
+                vkd3d_unreachable();
+        }
+
+        if (sm6->fwd_fixup_count > fwd_fixup_count)
+            FIXME("Unresolved fixups.\n");
+    }
+    sm6->value_count = value_count;
+    vkd3d_free(sm6->fwd_fixups);
 
     if (!ret_found)
     {
