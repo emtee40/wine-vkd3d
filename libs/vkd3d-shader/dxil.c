@@ -10398,6 +10398,21 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_pro
                 "Unknown shader type %#x.", version.type);
     }
 
+    if (version.type == VKD3D_SHADER_TYPE_MESH || version.type == VKD3D_SHADER_TYPE_AMPLIFICATION)
+    {
+        FIXME("Mesh and amplification shaders are not supported.\n");
+        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_WARNING_DXIL_UNKNOWN_SHADER_TYPE,
+                "Mesh and amplification shaders are not supported.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+    if (version.type == VKD3D_SHADER_TYPE_LIBRARY)
+    {
+        FIXME("Library shaders are not supported.\n");
+        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_WARNING_DXIL_UNKNOWN_SHADER_TYPE,
+                "Library shaders are not supported.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
     version.major = VKD3D_SM6_VERSION_MAJOR(version_token);
     version.minor = VKD3D_SM6_VERSION_MINOR(version_token);
 
