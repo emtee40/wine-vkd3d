@@ -6626,6 +6626,14 @@ static void sm6_parser_emit_call(struct sm6_parser *sm6, const struct dxil_recor
                 "Call to a local function is unsupported.");
         return;
     }
+
+    if (!strncmp(fn_value->u.function.name, "llvm.lifetime.", 14))
+    {
+        /* Ignore. */
+        state->ins->opcode = VKD3DSIH_NOP;
+        return;
+    }
+
     if (!sm6_value_is_dx_intrinsic_dcl(fn_value))
         WARN("External function is not a dx intrinsic.\n");
 
