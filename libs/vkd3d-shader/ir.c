@@ -18,6 +18,8 @@
 
 #include "vkd3d_shader_private.h"
 
+static const unsigned int D3D12_CLIP_OR_CULL_DISTANCE_COUNT = 8;
+
 bool vsir_program_init(struct vsir_program *program, const struct vkd3d_shader_version *version, unsigned int reserve)
 {
     program->shader_version = *version;
@@ -1454,6 +1456,527 @@ static enum vkd3d_result shader_normalise_io_registers(struct vkd3d_shader_parse
     program->instructions = normaliser.instructions;
     program->use_vocp = normaliser.use_vocp;
     return VKD3D_OK;
+}
+
+struct clip_cull_normaliser_scan
+{
+    bool need_normalisation;
+    unsigned int offset;
+    unsigned int remap;
+};
+
+struct clip_cull_normaliser_signature
+{
+    struct shader_signature *s;
+    struct clip_cull_normaliser_scan scan[MAX_REG_OUTPUT];
+};
+
+struct clip_cull_normaliser
+{
+    struct vkd3d_shader_parser *parser;
+
+    struct vkd3d_shader_location location;
+    bool has_normalised_clip_cull;
+    enum vkd3d_result result;
+
+    struct vkd3d_shader_instruction *instructions;
+    size_t instruction_capacity;
+    size_t instruction_count;
+
+    struct clip_cull_normaliser_signature input_signature;
+    struct clip_cull_normaliser_signature output_signature;
+    struct clip_cull_normaliser_signature patch_constant_signature;
+
+    unsigned int temp_count;
+
+    enum vkd3d_shader_opcode phase;
+};
+
+static bool normaliser_signature_transform_clip_or_cull(struct clip_cull_normaliser_signature *signature,
+        enum vkd3d_shader_sysval_semantic target_sysval, struct clip_cull_normaliser *normaliser)
+{
+    unsigned int i, j, base, array_size, reg_mask, count, arrayed_count;
+    struct vkd3d_shader_parser *parser = normaliser->parser;
+    struct shader_signature *s = signature->s;
+    struct signature_element *e;
+
+    /* Up to two vec4 clip/cull elements are allowed. Merge these into an array,
+     * and track the location and array offset of the second one. */
+    for (i = 0, array_size = 0, reg_mask = 0, base = 0, count = 0, arrayed_count = 0; i < s->element_count; ++i)
+    {
+        e = &s->elements[i];
+
+        if (e->sysval_semantic != target_sysval)
+        {
+            /* Compile a map of used registers. */
+            reg_mask |= ((1u << e->register_count) - 1) << e->register_index;
+            continue;
+        }
+
+        if (!array_size)
+        {
+            base = i;
+        }
+        else
+        {
+            signature->scan[i].remap = base;
+            signature->scan[i].need_normalisation = true;
+        }
+
+        signature->scan[i].offset = array_size;
+        array_size += vsir_write_mask_component_count(e->mask);
+        ++count;
+        arrayed_count += e->register_count > 1;
+    }
+
+    if (!array_size)
+        return false;
+    /* DXIL supports clip/cull arrays of size 2, and a single array requires no modification. Larger
+     * arrays exceed the semantic index limit (and cause dxcompiler version 1.7.0.4006 to crash). */
+    if (arrayed_count == 1 && count == 1)
+        return false;
+    /* TODO: combining an array with another clip/cull element should be rare, and requires special handling. */
+    if (arrayed_count)
+    {
+        WARN("Unsupported multiple elements with at least one array.\n");
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                "Multiple clip or cull signature elements are not supported if at least one is an array.");
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return false;
+    }
+
+    if (array_size > D3D12_CLIP_OR_CULL_DISTANCE_COUNT)
+    {
+        WARN("Invalid array size %u.\n", array_size);
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                "Clip or cull array size %u exceeds the D3D12 limit of 8.", array_size);
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return false;
+    }
+
+    signature->scan[base].need_normalisation = true;
+    e = &s->elements[base];
+
+    /* Find the lowest register with at least array_size free above. */
+    for (i = base, j = ((1u << array_size) - 1) << base; i < MAX_REG_OUTPUT; ++i, j <<= 1)
+    {
+        if (!(reg_mask & j))
+            break;
+    }
+
+    /* Signature locations are not used for sysvals, so if it proves necessary, it should be
+     * ok to raise MAX_REG_OUTPUT to 40 and validate that non-sysval register indices are < 32. */
+    if (array_size > MAX_REG_OUTPUT - i)
+    {
+        FIXME("Too many registers; register index %u, array size %u.\n", i, array_size);
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                "Clip or cull base register index %u + array size %u exceeds limit of 32 registers.", i, array_size);
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return false;
+    }
+
+    e->register_index = i;
+    e->register_count = array_size;
+    e->mask = 1;
+    e->used_mask = 1;
+
+    normaliser->has_normalised_clip_cull = true;
+
+    return true;
+}
+
+static void normaliser_signature_transform_clip_cull(struct clip_cull_normaliser_signature *signature,
+        struct clip_cull_normaliser *normaliser)
+{
+    struct shader_signature *s = signature->s;
+    unsigned int i, j;
+
+    /* Logical OR to avoid short-circuit. */
+    if (!(normaliser_signature_transform_clip_or_cull(signature, VKD3D_SHADER_SV_CLIP_DISTANCE, normaliser)
+            | normaliser_signature_transform_clip_or_cull(signature, VKD3D_SHADER_SV_CULL_DISTANCE, normaliser)))
+    {
+        return;
+    }
+
+    /* Delete the remapped clip/cull elements. */
+    for (i = 0, j = 0; i < s->element_count; ++i)
+    {
+        struct signature_element *e = &s->elements[i];
+
+        if (signature->scan[i].offset)
+            continue;
+        signature->scan[i].remap = j;
+        s->elements[j++] = *e;
+    }
+    s->element_count = j;
+}
+
+static struct vkd3d_shader_instruction *clip_cull_normaliser_require_space(struct clip_cull_normaliser *normaliser,
+        size_t count)
+{
+    if (!vkd3d_array_reserve((void **)&normaliser->instructions, &normaliser->instruction_capacity,
+            normaliser->instruction_count + count, sizeof(*normaliser->instructions)))
+    {
+        ERR("Failed to allocate instructions.\n");
+        normaliser->result = VKD3D_ERROR_OUT_OF_MEMORY;
+        return NULL;
+    }
+    return &normaliser->instructions[normaliser->instruction_count];
+}
+
+static struct vkd3d_shader_dst_param *clip_cull_normaliser_emit_mov(struct clip_cull_normaliser *normaliser,
+        struct vkd3d_shader_src_param *src_param)
+{
+    struct vkd3d_shader_instruction *ins;
+
+    if (!(ins = clip_cull_normaliser_require_space(normaliser, 1)))
+        return NULL;
+    vsir_instruction_init(ins, &normaliser->location, VKD3DSIH_MOV);
+
+    ins->src = src_param;
+    ins->src_count = 1;
+
+    if (!(ins->dst = vsir_program_get_dst_params(&normaliser->parser->program, 1)))
+    {
+        ERR("Failed to allocate instruction dst param.\n");
+        normaliser->result = VKD3D_ERROR_OUT_OF_MEMORY;
+        return NULL;
+    }
+    ins->dst_count = 1;
+
+    ++normaliser->instruction_count;
+    return ins->dst;
+}
+
+static void clip_cull_normaliser_copy_instruction(struct clip_cull_normaliser *normaliser,
+        struct vkd3d_shader_instruction *ins)
+{
+    struct vkd3d_shader_instruction *dst_ins;
+
+    if (!(dst_ins = clip_cull_normaliser_require_space(normaliser, 1)))
+        return;
+    *dst_ins = *ins;
+    ++normaliser->instruction_count;
+}
+
+static void shader_src_param_clip_cull_normalise(struct vkd3d_shader_src_param *src_param,
+        unsigned int write_mask, struct clip_cull_normaliser *normaliser)
+{
+    unsigned int i, element_idx, component_idx, array_offset, handled_mask, mask_bit;
+    struct vkd3d_shader_parser *parser = normaliser->parser;
+    const struct clip_cull_normaliser_signature *signature;
+    struct vkd3d_shader_register *reg = &src_param->reg;
+    struct vsir_program *program = &parser->program;
+    struct vkd3d_shader_dst_param *dst_param;
+    struct vkd3d_shader_src_param *mov_src;
+
+    switch (reg->type)
+    {
+        case VKD3DSPR_INPUT:
+            /* Sysvals are not needed for domain shader inputs. */
+            if (parser->program.shader_version.type == VKD3D_SHADER_TYPE_DOMAIN)
+                return;
+            signature = &normaliser->input_signature;
+            break;
+        case VKD3DSPR_OUTPUT:
+            /* Sysvals are not needed for hull shader outputs. */
+            if (parser->program.shader_version.type == VKD3D_SHADER_TYPE_HULL)
+                return;
+            signature = &normaliser->output_signature;
+            break;
+        case VKD3DSPR_PATCHCONST:
+            signature = &normaliser->patch_constant_signature;
+            break;
+        default:
+            return;
+    }
+
+    element_idx = reg->idx[reg->idx_count - 1].offset;
+
+    if (!signature->scan[element_idx].need_normalisation)
+        return;
+
+    if ((array_offset = signature->scan[element_idx].offset))
+        element_idx = signature->scan[element_idx].remap;
+
+    element_idx = signature->scan[element_idx].remap;
+    reg->idx[reg->idx_count - 1].offset = element_idx;
+
+    if (!write_mask)
+    {
+        WARN("Unexpected zero write mask.\n");
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK,
+                "Write mask for a clip/cull load is zero.");
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return;
+    }
+    /* Dynamic array addressing of clip/cull inputs is not supported, except for DXIL arrayed inputs,
+     * which are filtered out above by 'need_normalisation'. */
+    if (reg->idx_count >= ARRAY_SIZE(reg->idx))
+    {
+        WARN("Unexpected index count %u.\n", reg->idx_count);
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX_COUNT,
+                "Invalid register index count %u for a clip/cull load.", reg->idx_count);
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return;
+    }
+
+    /* Move the indices up so the array index can be placed in idx[0]. */
+    memmove(&reg->idx[1], &reg->idx[0], reg->idx_count * sizeof(reg->idx[0]));
+    memset(&reg->idx[0], 0, sizeof(reg->idx[0]));
+    ++reg->idx_count;
+
+    if (vsir_write_mask_component_count(write_mask) == 1)
+    {
+        reg->idx[0].offset = array_offset + vsir_swizzle_get_component(src_param->swizzle,
+                vsir_write_mask_get_component_idx(write_mask));
+        src_param->swizzle = 0;
+        return;
+    }
+
+    for (i = 0, handled_mask = 0; i < VKD3D_VEC4_SIZE; ++i)
+    {
+        if (!(write_mask & (1u << i)))
+            continue;
+
+        /* For each component accessed by the write mask + swizzle, emit a MOV from the clip/cull array to a temp.
+         * The original instruction will still apply the swizzle, so the temp is a direct reflection of the source. */
+
+        component_idx = vsir_swizzle_get_component(src_param->swizzle, i);
+        mask_bit = 1u << component_idx;
+
+        if (handled_mask & mask_bit)
+            continue;
+        handled_mask |= mask_bit;
+
+        if (!(mov_src = vsir_program_get_src_params(program, 1)))
+        {
+            ERR("Failed to allocate instruction src param.\n");
+            normaliser->result = VKD3D_ERROR_OUT_OF_MEMORY;
+            return;
+        }
+        mov_src->reg = *reg;
+        mov_src->reg.idx[0].offset = array_offset + component_idx;
+        mov_src->swizzle = 0;
+        mov_src->modifiers = 0;
+
+        if (!(dst_param = clip_cull_normaliser_emit_mov(normaliser, mov_src)))
+            return;
+        vsir_register_init(&dst_param->reg, VKD3DSPR_TEMP, reg->data_type, 1);
+        dst_param->reg.dimension = reg->dimension;
+        dst_param->reg.idx[0].offset = parser->program.temp_count;
+        normaliser->temp_count = 1;
+        dst_param->write_mask = mask_bit;
+        dst_param->modifiers = 0;
+        dst_param->shift = 0;
+    }
+
+    /* Substitute the temp for the vector clip/cull source. */
+    vsir_register_init(reg, VKD3DSPR_TEMP, reg->data_type, 1);
+    reg->dimension = VSIR_DIMENSION_VEC4;
+    reg->idx[0].offset = parser->program.temp_count;
+}
+
+static void shader_dst_param_clip_cull_normalise(struct vkd3d_shader_dst_param *dst_param,
+         struct clip_cull_normaliser *normaliser)
+ {
+    struct vkd3d_shader_parser *parser = normaliser->parser;
+    const struct clip_cull_normaliser_signature *signature;
+    unsigned int i, element_idx, write_mask, array_offset;
+    struct vkd3d_shader_register *reg = &dst_param->reg;
+    struct vsir_program *program = &parser->program;
+    struct vkd3d_shader_src_param *src_param;
+    struct vkd3d_shader_dst_param *mov_dst;
+
+    if (!reg->idx_count)
+        return;
+
+    switch (reg->type)
+    {
+        /* VKD3DSPR_INPUT must not occur in a dst param. */
+
+        case VKD3DSPR_OUTPUT:
+            if (normaliser->phase == VKD3DSIH_HS_FORK_PHASE || normaliser->phase == VKD3DSIH_HS_JOIN_PHASE)
+            {
+                signature = &normaliser->patch_constant_signature;
+            }
+            else
+            {
+                /* Sysvals are not needed for hull shader outputs. */
+                if (parser->program.shader_version.type == VKD3D_SHADER_TYPE_HULL)
+                    return;
+                signature = &normaliser->output_signature;
+            }
+            break;
+
+        case VKD3DSPR_PATCHCONST:
+            signature = &normaliser->patch_constant_signature;
+            break;
+
+        default:
+            return;
+    }
+
+    element_idx = reg->idx[reg->idx_count - 1].offset;
+
+    if (!signature->scan[element_idx].need_normalisation)
+        return;
+
+    if ((array_offset = signature->scan[element_idx].offset))
+        element_idx = signature->scan[element_idx].remap;
+
+    element_idx = signature->scan[element_idx].remap;
+    reg->idx[reg->idx_count - 1].offset = element_idx;
+
+    write_mask = dst_param->write_mask;
+
+    /* Dynamic array addressing of clip/cull outputs is not supported, except for DXIL arrayed outputs,
+     * which are filtered out above by 'need_normalisation'. */
+    if (reg->idx_count >= ARRAY_SIZE(reg->idx))
+    {
+        WARN("Unexpected index count %u.\n", reg->idx_count);
+        vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX_COUNT,
+                "Invalid register index count %u for a clip/cull store.", reg->idx_count);
+        normaliser->result = VKD3D_ERROR_INVALID_SHADER;
+        return;
+    }
+
+    /* Move the indices up so the array index can be placed in idx[0]. */
+    memmove(&reg->idx[1], &reg->idx[0], reg->idx_count * sizeof(reg->idx[0]));
+    memset(&reg->idx[0], 0, sizeof(reg->idx[0]));
+    ++reg->idx_count;
+
+    if (vsir_write_mask_component_count(write_mask) == 1)
+    {
+        reg->idx[0].offset = array_offset + vsir_write_mask_get_component_idx(write_mask);
+        dst_param->write_mask = VKD3DSP_WRITEMASK_0;
+        return;
+    }
+
+    for (i = 0; i < VKD3D_VEC4_SIZE; ++i)
+    {
+        if (!(write_mask & (1u << i)))
+            continue;
+
+        /* For each component, emit a MOV from a temp to the clip/cull array. */
+
+        if (!(src_param = vsir_program_get_src_params(program, 1)))
+        {
+            ERR("Failed to allocate instruction dst param.\n");
+            normaliser->result = VKD3D_ERROR_OUT_OF_MEMORY;
+            return;
+        }
+        src_param->swizzle = vkd3d_shader_create_swizzle(i, i, i, i);
+        src_param->modifiers = 0;
+        vsir_register_init(&src_param->reg, VKD3DSPR_TEMP, reg->data_type, 1);
+        src_param->reg.dimension = reg->dimension;
+        src_param->reg.idx[0].offset = parser->program.temp_count;
+        normaliser->temp_count = 1;
+
+        if (!(mov_dst = clip_cull_normaliser_emit_mov(normaliser, src_param)))
+            return;
+        mov_dst->reg = *reg;
+        mov_dst->reg.idx[0].offset = array_offset + i;
+        mov_dst->write_mask = VKD3DSP_WRITEMASK_0;
+        mov_dst->modifiers = 0;
+        mov_dst->shift = 0;
+    }
+
+    /* Substitute the temp for the vector clip/cull destination. If this is for a MOV instruction with
+     * clip/cull source, it results in a harmless no-op MOV, because shader_src_param_clip_cull_normalise()
+     * has already written the clip/cull source to the temp. */
+    vsir_register_init(reg, VKD3DSPR_TEMP, reg->data_type, 1);
+    reg->dimension = VSIR_DIMENSION_VEC4;
+    reg->idx[0].offset = parser->program.temp_count;
+}
+
+static void shader_instruction_normalise_clip_cull_params(struct vkd3d_shader_instruction *ins,
+        struct clip_cull_normaliser *normaliser)
+{
+    unsigned int i, write_mask;
+
+    if (ins->handler_idx == VKD3DSIH_NOP)
+        return;
+
+    normaliser->location = ins->location;
+
+    if (vsir_instruction_is_dcl(ins))
+    {
+        clip_cull_normaliser_copy_instruction(normaliser, ins);
+        return;
+    }
+
+    if (ins->handler_idx == VKD3DSIH_HS_CONTROL_POINT_PHASE || ins->handler_idx == VKD3DSIH_HS_FORK_PHASE
+            || ins->handler_idx == VKD3DSIH_HS_JOIN_PHASE)
+    {
+        normaliser->phase = ins->handler_idx;
+        clip_cull_normaliser_copy_instruction(normaliser, ins);
+        return;
+    }
+
+    for (i = 0, write_mask = 0; i < ins->dst_count; ++i)
+        if (ins->dst[i].reg.type != VKD3DSPR_NULL)
+            write_mask |= ins->dst[i].write_mask;
+
+    for (i = 0; i < ins->src_count; ++i)
+        shader_src_param_clip_cull_normalise(&ins->src[i], write_mask, normaliser);
+
+    clip_cull_normaliser_copy_instruction(normaliser, ins);
+
+    for (i = 0; i < ins->dst_count; ++i)
+        shader_dst_param_clip_cull_normalise(&ins->dst[i], normaliser);
+}
+
+static enum vkd3d_result normalise_clip_cull(struct vkd3d_shader_parser *parser)
+{
+    struct clip_cull_normaliser normaliser = {0};
+    unsigned int i;
+
+    normaliser.parser = parser;
+    normaliser.input_signature.s = &parser->shader_desc.input_signature;
+    normaliser.output_signature.s = &parser->shader_desc.output_signature;
+    normaliser.patch_constant_signature.s = &parser->shader_desc.patch_constant_signature;
+    normaliser.phase = VKD3DSIH_INVALID;
+
+    if (parser->program.shader_version.type != VKD3D_SHADER_TYPE_DOMAIN)
+        normaliser_signature_transform_clip_cull(&normaliser.input_signature, &normaliser);
+    if (parser->program.shader_version.type != VKD3D_SHADER_TYPE_HULL)
+        normaliser_signature_transform_clip_cull(&normaliser.output_signature, &normaliser);
+    normaliser_signature_transform_clip_cull(&normaliser.patch_constant_signature, &normaliser);
+
+    if (parser->failed)
+        return VKD3D_ERROR_INVALID_SHADER;
+
+    if (!normaliser.has_normalised_clip_cull)
+        return VKD3D_OK;
+
+    if (!clip_cull_normaliser_require_space(&normaliser, parser->program.instructions.count))
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+
+    for (i = 0; i < parser->program.instructions.count; ++i)
+        shader_instruction_normalise_clip_cull_params(&parser->program.instructions.elements[i], &normaliser);
+
+    if (normaliser.result >= 0)
+    {
+        vkd3d_free(parser->program.instructions.elements);
+        parser->program.instructions.elements = normaliser.instructions;
+        parser->program.instructions.capacity = normaliser.instruction_capacity;
+        parser->program.instructions.count = normaliser.instruction_count;
+
+        parser->program.temp_count += normaliser.temp_count;
+
+        return VKD3D_OK;
+    }
+    else
+    {
+        if (normaliser.result == VKD3D_ERROR_OUT_OF_MEMORY)
+        {
+            vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_OUT_OF_MEMORY,
+                    "Out of memory allocating clip/cull normalization instructions.\n");
+        }
+        vkd3d_free(normaliser.instructions);
+        return normaliser.result;
+    }
 }
 
 struct flat_constant_def
@@ -3022,6 +3545,9 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
 
     if (parser->shader_desc.is_dxil)
     {
+        if ((result = normalise_clip_cull(parser)) < 0)
+            return result;
+
         if ((result = lower_switch_to_if_ladder(&parser->program)) < 0)
             return result;
 
@@ -3050,6 +3576,9 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
         }
 
         if ((result = shader_normalise_io_registers(parser)) < 0)
+            return result;
+
+        if ((result = normalise_clip_cull(parser)) < 0)
             return result;
 
         if ((result = instruction_array_normalise_flat_constants(&parser->program)) < 0)
