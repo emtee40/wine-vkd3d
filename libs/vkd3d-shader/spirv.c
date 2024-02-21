@@ -6725,11 +6725,22 @@ static void spirv_compiler_emit_dcl_typed_temp(struct spirv_compiler *compiler,
     struct vkd3d_shader_register reg;
     struct vkd3d_symbol reg_symbol;
     SpvStorageClass storage_class;
+    size_t function_location;
 
     /* Typed temps may be used by more than one function in hull shaders, so they should
-     * default to global scope. */
-    storage_class = SpvStorageClassPrivate;
-    stream = &builder->global_stream;
+     * default to global scope unless function scope is specified, e.g. by DXIL alloca. */
+    if (temp->has_function_scope)
+    {
+        storage_class = SpvStorageClassFunction;
+        stream = &builder->function_stream;
+        function_location = spirv_compiler_get_current_function_location(compiler);
+        vkd3d_spirv_begin_function_stream_insertion(builder, function_location);
+    }
+    else
+    {
+        storage_class = SpvStorageClassPrivate;
+        stream = &builder->global_stream;
+    }
 
     vsir_register_init(&reg, VKD3DSPR_TYPEDTEMP, temp->data_type, 1);
     reg.idx[0].offset = temp->register_idx;
@@ -6747,6 +6758,9 @@ static void spirv_compiler_emit_dcl_typed_temp(struct spirv_compiler *compiler,
 
     id = vkd3d_spirv_build_op_variable(builder, stream, ptr_type_id, storage_class, init_id);
     spirv_compiler_emit_register_debug_name(builder, id, &reg);
+
+    if (temp->has_function_scope)
+        vkd3d_spirv_end_function_stream_insertion(builder);
 
     vkd3d_symbol_make_register(&reg_symbol, &reg);
     vkd3d_symbol_set_register_info(&reg_symbol, id, storage_class, component_type, VKD3DSP_WRITEMASK_0);
