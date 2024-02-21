@@ -3449,16 +3449,20 @@ static void sm6_parser_declare_indexable_temp(struct sm6_parser *sm6, const stru
 }
 
 static void sm6_parser_declare_typed_temp(struct sm6_parser *sm6, const struct sm6_type *elem_type,
-        unsigned int alignment, unsigned int init,
+        unsigned int alignment, bool has_function_scope, unsigned int init, struct vkd3d_shader_instruction *ins,
         struct sm6_value *dst)
 {
     enum vkd3d_data_type data_type = vkd3d_data_type_from_sm6_type(elem_type);
-    struct vkd3d_shader_instruction *ins;
 
-    ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_TYPED_TEMP);
+    if (ins)
+        vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_DCL_TYPED_TEMP);
+    else
+        ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_TYPED_TEMP);
+
     ins->declaration.typed_temp.register_idx = sm6->typed_temp_count++;
     ins->declaration.typed_temp.alignment = alignment;
     ins->declaration.typed_temp.data_type = data_type;
+    ins->declaration.typed_temp.has_function_scope = has_function_scope;
     vsir_register_init(&ins->declaration.typed_temp.initialiser, VKD3DSPR_NULL, VKD3D_DATA_UNUSED, 0);
     /* The initialiser value index will be resolved later so forward references can be handled. */
     ins->declaration.typed_temp.initialiser.u.immconst_u32[0] = init;
@@ -3641,7 +3645,7 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
         if (is_constant)
             sm6_parser_declare_icb(sm6, scalar_type, count, alignment, init, dst);
         else if (is_scalar)
-            sm6_parser_declare_typed_temp(sm6, scalar_type, alignment, init, dst);
+            sm6_parser_declare_typed_temp(sm6, scalar_type, alignment, false, init, NULL, dst);
         else
             sm6_parser_declare_indexable_temp(sm6, scalar_type, count, alignment, false, init, NULL, dst);
     }
@@ -4068,7 +4072,13 @@ static void sm6_parser_emit_alloca(struct sm6_parser *sm6, const struct dxil_rec
     }
     packed_operands &= ~(ALLOCA_FLAG_IN_ALLOCA | ALLOCA_FLAG_EXPLICIT_TYPE);
 
-    if (!sm6_type_is_array(type[0]) || !sm6_type_is_numeric(elem_type = type[0]->u.array.elem_type))
+    /* ALLOCA is normally emitted because a local array was declared, but very rarely the type can be scalar.
+     * This can occur in cases where SSA could easily be used, so it is unclear why it occurs. */
+    if (sm6_type_is_numeric(type[0]))
+    {
+        elem_type = type[0];
+    }
+    else if (!sm6_type_is_array(type[0]) || !sm6_type_is_numeric(elem_type = type[0]->u.array.elem_type))
     {
         WARN("Type is not a numeric array.\n");
         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
@@ -4111,7 +4121,10 @@ static void sm6_parser_emit_alloca(struct sm6_parser *sm6, const struct dxil_rec
     if (packed_operands)
         WARN("Ignoring flags %#"PRIx64".\n", packed_operands);
 
-    sm6_parser_declare_indexable_temp(sm6, elem_type, type[0]->u.array.count, alignment, true, 0, ins, dst);
+    if (sm6_type_is_numeric(type[0]))
+        sm6_parser_declare_typed_temp(sm6, elem_type, alignment, true, 0, ins, dst);
+    else
+        sm6_parser_declare_indexable_temp(sm6, elem_type, type[0]->u.array.count, alignment, true, 0, ins, dst);
 }
 
 static enum vkd3d_shader_opcode map_dx_atomicrmw_op(uint64_t code)

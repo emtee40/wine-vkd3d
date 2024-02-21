@@ -1172,6 +1172,7 @@ struct vkd3d_shader_typed_temp
     unsigned int register_idx;
     unsigned int alignment;
     enum vkd3d_data_type data_type;
+    bool has_function_scope;
     struct vkd3d_shader_register initialiser;
 };
 
