@@ -352,6 +352,7 @@ struct vkd3d_spirv_builder
     uint32_t invocation_count;
     SpvExecutionModel execution_model;
 
+    uint32_t file_string_id;
     uint32_t current_id;
     uint32_t main_function_id;
     struct rb_tree declarations;
@@ -918,6 +919,11 @@ static void vkd3d_spirv_build_op_name(struct vkd3d_spirv_builder *builder,
     vkd3d_spirv_build_word(stream, vkd3d_spirv_opcode_word(SpvOpName, 2 + name_size));
     vkd3d_spirv_build_word(stream, id);
     vkd3d_spirv_build_string(stream, name, name_size);
+}
+
+static void vkd3d_spirv_build_op_line(struct vkd3d_spirv_builder *builder, uint32_t line_number)
+{
+    vkd3d_spirv_build_op3(&builder->function_stream, SpvOpLine, builder->file_string_id, line_number, 0);
 }
 
 static void vkd3d_spirv_build_op_member_name(struct vkd3d_spirv_builder *builder,
@@ -1866,6 +1872,10 @@ static void vkd3d_spirv_builder_init(struct vkd3d_spirv_builder *builder, const 
     builder->current_id = 1;
 
     rb_init(&builder->declarations, vkd3d_spirv_declaration_compare);
+
+    /* OpString must appear before other declarations such as names. The source name is
+     * not particularly useful here, if one is available at all, so emit an empty string. */
+    builder->file_string_id = vkd3d_spirv_build_op_r1(builder, &builder->debug_stream, SpvOpString, 0);
 
     builder->main_function_id = vkd3d_spirv_alloc_id(builder);
     vkd3d_spirv_build_op_name(builder, builder->main_function_id, "%s", entry_point);
@@ -9481,6 +9491,9 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
     int ret = VKD3D_OK;
+
+    if (!compiler->strip_debug && !vsir_instruction_is_dcl(instruction) && instruction->handler_idx != VKD3DSIH_NOP)
+        vkd3d_spirv_build_op_line(&compiler->spirv_builder, compiler->location.line);
 
     switch (instruction->handler_idx)
     {

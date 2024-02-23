@@ -191,8 +191,9 @@ static void print_usage(const char *program_name)
         "  --formatting=<flags>  Specify the formatting options for text output.\n"
         "                        <flags> is a comma separated list of formatting flags,\n"
         "                        optionally prefixed by '+' or '-'. Valid flags are\n"
-        "                        'colour', 'indent', 'offsets', 'header', and 'raw-ids'.\n"
-        "                        The 'indent' and 'header' flags are enabled by default.\n"
+        "                        'colour', 'indent', 'offsets', 'header', 'raw-ids' and\n"
+        "                        'numbers'. The 'indent' and 'header' flags are enabled\n"
+        "                        by default.\n"
         "  --fragment-coordinate-origin=<origin>\n"
         "                        Specify the origin of fragment coordinates for SPIR-V\n"
         "                        targets. Valid values are 'upper-left' (default) and\n"
@@ -305,6 +306,7 @@ static bool parse_formatting(uint32_t *formatting, bool *colour, char *arg)
         {"offsets", VKD3D_SHADER_COMPILE_OPTION_FORMATTING_OFFSETS},
         {"header",  VKD3D_SHADER_COMPILE_OPTION_FORMATTING_HEADER},
         {"raw-ids", VKD3D_SHADER_COMPILE_OPTION_FORMATTING_RAW_IDS},
+        {"numbers", VKD3D_SHADER_COMPILE_OPTION_FORMATTING_NUMBERS},
     };
     char *tok;
 

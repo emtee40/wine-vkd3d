@@ -39,13 +39,6 @@ static inline bool shader_register_is_phase_instance_id(const struct vkd3d_shade
     return reg->type == VKD3DSPR_FORKINSTID || reg->type == VKD3DSPR_JOININSTID;
 }
 
-static bool vsir_instruction_is_dcl(const struct vkd3d_shader_instruction *instruction)
-{
-    enum vkd3d_shader_opcode handler_idx = instruction->handler_idx;
-    return (VKD3DSIH_DCL <= handler_idx && handler_idx <= VKD3DSIH_DCL_VERTICES_OUT)
-            || handler_idx == VKD3DSIH_HS_DECLS;
-}
-
 static void vkd3d_shader_instruction_make_nop(struct vkd3d_shader_instruction *ins)
 {
     struct vkd3d_shader_location location = ins->location;
