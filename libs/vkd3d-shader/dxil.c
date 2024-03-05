@@ -10890,8 +10890,6 @@ int dxil_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t co
     uint32_t *byte_code = NULL;
     int ret;
 
-    ERR("Creating a DXIL parser. This is unsupported; you get to keep all the pieces if it breaks.\n");
-
     dxbc_desc.is_dxil = true;
     if ((ret = shader_extract_from_dxbc(&compile_info->source, message_context, compile_info->source_name,
             &dxbc_desc)) < 0)
