@@ -2654,7 +2654,6 @@ static struct spirv_compiler *spirv_compiler_create(const struct vsir_program *p
                 break;
 
             case VKD3D_SHADER_COMPILE_OPTION_FEATURE:
-                compiler->features = option->value;
                 break;
 
             default:
@@ -2662,10 +2661,9 @@ static struct spirv_compiler *spirv_compiler_create(const struct vsir_program *p
                 break;
         }
     }
-
-    /* Explicit enabling of float64 was not required for API versions <= 1.10. */
-    if (compiler->api_version <= VKD3D_SHADER_API_VERSION_1_10)
-        compiler->features |= VKD3D_SHADER_COMPILE_OPTION_FEATURE_FLOAT64;
+    compiler->features = ~0u;
+    compiler->ssbo_srvs = true;
+    compiler->ssbo_uavs = true;
 
     rb_init(&compiler->symbol_table, vkd3d_symbol_compare);
 
@@ -2718,7 +2716,10 @@ static enum vkd3d_shader_spirv_environment spirv_compiler_get_target_environment
 {
     const struct vkd3d_shader_spirv_target_info *info = compiler->spirv_target_info;
 
-    return info ? info->environment : VKD3D_SHADER_SPIRV_ENVIRONMENT_VULKAN_1_0;
+    if (!info)
+        return VKD3D_SHADER_SPIRV_ENVIRONMENT_VULKAN_1_1;
+    return info->environment == VKD3D_SHADER_SPIRV_ENVIRONMENT_VULKAN_1_0
+            ? VKD3D_SHADER_SPIRV_ENVIRONMENT_VULKAN_1_1 : info->environment;
 }
 
 static bool spirv_compiler_is_opengl_target(const struct spirv_compiler *compiler)
@@ -2734,16 +2735,7 @@ static bool spirv_compiler_is_spirv_min_1_3_target(const struct spirv_compiler *
 static bool spirv_compiler_is_target_extension_supported(const struct spirv_compiler *compiler,
         enum vkd3d_shader_spirv_extension extension)
 {
-    const struct vkd3d_shader_spirv_target_info *info = compiler->spirv_target_info;
-    unsigned int i;
-
-    for (i = 0; info && i < info->extension_count; ++i)
-    {
-        if (info->extensions[i] == extension)
-            return true;
-    }
-
-    return false;
+    return true;
 }
 
 static bool spirv_compiler_check_shader_visibility(const struct spirv_compiler *compiler,
