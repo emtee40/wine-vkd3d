@@ -84,6 +84,7 @@ struct vkd3d_shader_cache
 
     FILE *file;
     uint64_t entry_count, byte_count;
+    bool delete_on_destroy;
 
     char filename[];
 };
@@ -317,6 +318,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
     object->file = NULL;
     object->entry_count = object->byte_count = 0;
+    object->delete_on_destroy = false;
     object->filename[0] = '\0';
 
     if (info->filename)
@@ -381,6 +383,13 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     int ret;
 
     fclose(cache->file);
+
+    if (cache->delete_on_destroy)
+    {
+        TRACE("Deleting cache file %s.\n", debugstr_a(cache->filename));
+        remove(cache->filename);
+        return;
+    }
 
     filename = vkd3d_malloc(strlen(cache->filename) + 5);
     if (!filename)
@@ -560,4 +569,12 @@ int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
 done:
     vkd3d_shader_cache_unlock(cache);
     return ret;
+}
+
+void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache)
+{
+    TRACE("%p\n", cache);
+    vkd3d_shader_cache_lock(cache);
+    cache->delete_on_destroy = true;
+    vkd3d_shader_cache_unlock(cache);
 }

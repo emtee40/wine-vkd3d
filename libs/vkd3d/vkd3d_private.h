@@ -1788,5 +1788,6 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, const void *value, size_t value_size);
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
+void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache);
 
 #endif  /* __VKD3D_PRIVATE_H */
