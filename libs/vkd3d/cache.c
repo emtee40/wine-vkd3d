@@ -75,6 +75,7 @@ struct vkd3d_shader_cache
     struct rb_tree tree;
 
     FILE *indices, *values;
+    bool delete_on_destroy;
 
     char filename[];
 };
@@ -317,6 +318,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     object->info = *info;
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
     object->indices = object->values = NULL;
+    object->delete_on_destroy = false;
     object->filename[0] = '\0';
 
     if (info->filename)
@@ -391,12 +393,23 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
         return;
     }
 
-    fseek(cache->values, 0, SEEK_END);
-
     filename = vkd3d_malloc(strlen(cache->filename) + 9);
     dstname = vkd3d_malloc(strlen(cache->filename) + 5);
     if (!filename || !dstname)
         goto out;
+
+    if (cache->delete_on_destroy)
+    {
+        fclose(cache->values);
+
+        sprintf(filename, "%s.idx", cache->filename);
+        remove(filename);
+        sprintf(filename, "%s.val", cache->filename);
+        remove(filename);
+        goto out;
+    }
+
+    fseek(cache->values, 0, SEEK_END);
 
     /* For now unconditionally repack. */
     fclose(cache->values);
@@ -435,7 +448,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     remove(dstname); /* msvcrt needs this. */
     ret = rename(filename, dstname);
     if (ret)
-        ERR("Index file rename failed.\n");
+        ERR("Index file rename %s -> %s failed.\n", filename, dstname);
 
     sprintf(dstname, "%s.val", cache->filename);
     sprintf(filename, "%s-new.val", cache->filename);
@@ -940,4 +953,12 @@ void vkd3d_persistent_cache_add_compute_state(const struct vkd3d_shader_cache_pi
     }
 
     vkd3d_mutex_unlock(&persistent_cache.mutex);
+}
+
+void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache)
+{
+    TRACE("%p\n", cache);
+    vkd3d_shader_cache_lock(cache);
+    cache->delete_on_destroy = true;
+    vkd3d_shader_cache_unlock(cache);
 }

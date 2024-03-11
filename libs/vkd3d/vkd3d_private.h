@@ -1900,6 +1900,7 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
         const void *value, size_t value_size, enum vkd3d_shader_cache_put_flags flags);
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
+void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache);
 
 /* Which data structure should we use to maintain a collection of known hashes:
  *

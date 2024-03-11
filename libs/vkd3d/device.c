@@ -2842,7 +2842,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_cache_session_StoreValue(ID3D12ShaderCach
 
 static void STDMETHODCALLTYPE d3d12_cache_session_SetDeleteOnDestroy(ID3D12ShaderCacheSession *iface)
 {
-    FIXME("iface %p stub!\n", iface);
+    struct d3d12_cache_session *session = impl_from_ID3D12ShaderCacheSession(iface);
+    TRACE("iface %p.\n", iface);
+    vkd3d_shader_cache_delete_on_destroy(session->cache);
 }
 
 static D3D12_SHADER_CACHE_SESSION_DESC * STDMETHODCALLTYPE d3d12_cache_session_GetDesc(
