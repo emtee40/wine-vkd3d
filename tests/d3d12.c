@@ -38827,6 +38827,10 @@ static void test_shader_cache(void)
     ok(!session2, "Got unexpected pointer %p.\n", session2);
     hr = ID3D12Device9_CreateShaderCacheSession(device, &desc, &IID_IUnknown, NULL);
     ok(hr == S_FALSE, "NULL outptr: Got hr %#x.\n", hr);
+    desc.Mode = 9876;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
 
     ID3D12ShaderCacheSession_Release(session);
 
@@ -38834,6 +38838,7 @@ static void test_shader_cache(void)
     ok(refcount == base_refcount, "Got unexpected refcount %u.\n", refcount);
 
     /* Create two sessions with the same cache GUID. */
+    desc.Mode = D3D12_SHADER_CACHE_MODE_MEMORY;
     hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
             &IID_ID3D12ShaderCacheSession, (void **)&session);
     ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
@@ -38903,6 +38908,28 @@ static void test_shader_cache(void)
     hr = ID3D12ShaderCacheSession_FindValue(session, key2, sizeof(key2), NULL, NULL);
     ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
     hr = ID3D12ShaderCacheSession_FindValue(session, key2, sizeof(key2), blob3, NULL);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
+
+    /* Test what happens when the descriptor of a second session differs - the original
+     * session's mode applies. */
+    desc.Mode = D3D12_SHADER_CACHE_MODE_DISK;
+    desc.MaximumInMemoryCacheSizeBytes = 1;
+    desc.MaximumValueFileSizeBytes = 3;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    desc = ID3D12ShaderCacheSession_GetDesc(session);
+    ok(desc.Mode == D3D12_SHADER_CACHE_MODE_MEMORY, "Got mode %u\n", desc.Mode);
+    ok(desc.MaximumInMemoryCacheSizeBytes == 1024 * 32, "Got MaximumInMemoryCacheSizeBytes %u\n",
+            desc.MaximumInMemoryCacheSizeBytes);
+    ok(desc.MaximumValueFileSizeBytes == 128 * 1024 * 1024, "Got MaximumValueFileSizeBytes %u\n",
+            desc.MaximumValueFileSizeBytes);
+    ID3D12ShaderCacheSession_Release(session2);
+
+    /* The description is validated before the existing cache is opened though. */
+    desc.Mode = 9876;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
     ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
 
     /* Test how the output size is handled. - A NULL data ptr returns S_OK and sets
@@ -38999,6 +39026,8 @@ static void test_shader_cache(void)
     ID3D12ShaderCacheSession_Release(session);
 
     /* Test disk caches - first delete whatever may be left behind from previous runs. */
+    desc.MaximumInMemoryCacheSizeBytes = 32 * 1024;
+    desc.MaximumValueFileSizeBytes = 0;
     desc.Mode = D3D12_SHADER_CACHE_MODE_DISK;
     desc.Flags = D3D12_SHADER_CACHE_FLAG_USE_WORKING_DIR;
     hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
