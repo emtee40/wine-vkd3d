@@ -38994,6 +38994,79 @@ static void test_shader_cache(void)
 
     ID3D12ShaderCacheSession_Release(session);
 
+    /* Test disk caches - first delete whatever may be left behind from previous runs. */
+    desc.Mode = D3D12_SHADER_CACHE_MODE_DISK;
+    desc.Flags = D3D12_SHADER_CACHE_FLAG_USE_WORKING_DIR;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session);
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_StoreValue(session, key1, sizeof(key1), blob1, sizeof(blob1));
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    value_size = sizeof(blob3);
+    memset(blob3, '3', sizeof(blob3));
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(value_size == sizeof(blob1), "Got unexpected size %x.\n", value_size);
+    ok(!memcmp(blob3, blob1, sizeof(blob1)), "Unexpected value retrieved.\n");
+    ok(blob3[sizeof(blob1)] == '3', "Output buffer was modified beyond the stored value.\n");
+    ID3D12ShaderCacheSession_Release(session);
+
+    /* Reopen with a different version - It succeeds, but the contents are gone. */
+    desc.Version = 99999;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), NULL, &value_size);
+    ok(hr == DXGI_ERROR_NOT_FOUND, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_StoreValue(session, key1, sizeof(key1), blob1, sizeof(blob1));
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_Release(session);
+
+    /* Writing to the cache with the new version should have worked. */
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), NULL, &value_size);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(value_size == sizeof(blob1), "Got unexpected size %x.\n", value_size);
+
+    /* Create a second session, set it to delete on destroy. The cache will get deleted, though I am
+     * not yet sure if the disk cache gets deleted when session2 or session get destroyed. I can
+     * still retrieve the value, but this may be due to a leftover in memory.
+     *
+     * I could check for the existence of the .val / .idx files, but that would require us to use
+     * the exact same naming scheme. */
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session2);
+    ID3D12ShaderCacheSession_Release(session2);
+
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(value_size == sizeof(blob1), "Got unexpected size %x.\n", value_size);
+
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == DXGI_ERROR_NOT_FOUND, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session); /* Clean up after the last test. */
+    ID3D12ShaderCacheSession_Release(session);
+
     ID3D12Device9_Release(device);
     destroy_test_context(&context);
 }
