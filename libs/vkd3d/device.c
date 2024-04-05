@@ -19,6 +19,10 @@
 #include "vkd3d_private.h"
 #include "vkd3d_version.h"
 
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
 #define VKD3D_MAX_UAV_CLEAR_DESCRIPTORS_PER_TYPE 256u
 
 /* FIXME: We may want to put the GPU and driver identities in there,
@@ -2876,6 +2880,7 @@ static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
 {
     struct vkd3d_shader_cache_info info = {0};
     struct d3d12_cache_session *i;
+    char *name = NULL, *cwd;
     enum vkd3d_result ret;
     HRESULT hr;
 
@@ -2922,7 +2927,25 @@ static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
     {
         info.version = desc->Version;
         if (session->desc.Mode == D3D12_SHADER_CACHE_MODE_DISK)
-            FIXME("Disk caches are not yet implemented.\n");
+        {
+            cwd = getcwd(NULL, 0);
+            if (!cwd)
+                ERR("Cannot get current working directory.\n");
+            name = vkd3d_malloc(strlen(cwd) + 64);
+            if (!name)
+                ERR("Out of memory\n");
+            sprintf(name, "%s/%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x.vkd3d-cache", cwd,
+                    (unsigned long)session->desc.Identifier.Data1, session->desc.Identifier.Data2,
+                    session->desc.Identifier.Data3, session->desc.Identifier.Data4[0],
+                    session->desc.Identifier.Data4[1], session->desc.Identifier.Data4[2],
+                    session->desc.Identifier.Data4[3], session->desc.Identifier.Data4[4],
+                    session->desc.Identifier.Data4[5], session->desc.Identifier.Data4[6],
+                    session->desc.Identifier.Data4[7]);
+            free(cwd); /* Don't use vkd3d_free here. */
+
+            ERR("cache file %s.\n", name);
+            info.filename = name;
+        }
 
         ret = vkd3d_shader_open_cache(&info, &session->cache);
         if (ret)
@@ -2931,6 +2954,7 @@ static HRESULT d3d12_cache_session_init(struct d3d12_cache_session *session,
             hr = hresult_from_vkd3d_result(ret);
             goto error;
         }
+        vkd3d_free(name);
     }
 
     /* Add it to the list even if we reused an existing cache. The other session might be destroyed,
