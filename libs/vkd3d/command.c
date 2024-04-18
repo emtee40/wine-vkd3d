@@ -4168,14 +4168,30 @@ static unsigned int d3d12_find_ds_multiplanar_transition(const D3D12_RESOURCE_BA
     return 0;
 }
 
+static void d3d12_command_list_emit_aliasing_vk_global_barrier(struct d3d12_command_list *list,
+        bool after_is_texture)
+{
+    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
+    VkMemoryBarrier vk_global_barrier;
+
+    vk_global_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    vk_global_barrier.pNext = NULL;
+    vk_global_barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    /* An 'after' texture will be transitioned from undefined (TODO), so use VK_ACCESS_NONE here. */
+    vk_global_barrier.dstAccessMask = after_is_texture
+            ? VK_ACCESS_NONE : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    VK_CALL(vkCmdPipelineBarrier(list->vk_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &vk_global_barrier, 0, NULL, 0, NULL));
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsCommandList6 *iface,
         UINT barrier_count, const D3D12_RESOURCE_BARRIER *barriers)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList6(iface);
-    bool have_aliasing_barriers = false, have_split_barriers = false;
     const struct vkd3d_vk_device_procs *vk_procs;
     const struct vkd3d_vulkan_info *vk_info;
     bool *multiplanar_handled = NULL;
+    bool have_split_barriers = false;
     unsigned int i;
 
     TRACE("iface %p, barrier_count %u, barriers %p.\n", iface, barrier_count, barriers);
@@ -4191,8 +4207,8 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsC
         VkPipelineStageFlags src_stage_mask = 0, dst_stage_mask = 0;
         VkAccessFlags src_access_mask = 0, dst_access_mask = 0;
         const D3D12_RESOURCE_BARRIER *current = &barriers[i];
+        struct d3d12_resource *resource, *before, *after;
         VkImageLayout layout_before, layout_after;
-        struct d3d12_resource *resource;
 
         have_split_barriers = have_split_barriers
                 || (current->Flags & D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY)
@@ -4306,8 +4322,37 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsC
             }
 
             case D3D12_RESOURCE_BARRIER_TYPE_ALIASING:
-                have_aliasing_barriers = true;
+            {
+                const D3D12_RESOURCE_ALIASING_BARRIER *aliasing = &current->u.Aliasing;
+                bool after_is_texture;
+
+                if ((before = unsafe_impl_from_ID3D12Resource(aliasing->pResourceBefore)))
+                    d3d12_command_list_track_resource_usage(list, before);
+                if ((after = unsafe_impl_from_ID3D12Resource(aliasing->pResourceAfter)))
+                    d3d12_command_list_track_resource_usage(list, after);
+
+                if ((before && (before->flags & VKD3D_RESOURCE_DEDICATED_HEAP))
+                        || (after && (after->flags & VKD3D_RESOURCE_DEDICATED_HEAP)))
+                {
+                    TRACE("Skipping an aliasing barrier for a committed resource.\n");
+                    continue;
+                }
+
+                if (before && after == before)
+                    WARN("Aliasing barrier has non-null pResourceAfter == pResourceBefore.\n");
+
+                after_is_texture = after && d3d12_resource_is_texture(after);
+
+                /* vkCmdPipelineBarrier() does not check that any particular stage accesses the resource
+                 * specified in a VkBufferMemoryBarrier and VkImageMemoryBarrier in order to prevent
+                 * unnecessary waiting, so there is no advantage to using them. The D3D12 enhanced barrier
+                 * spec admits these legacy aliasing barriers are inefficient.
+                 * TODO: implement enhanced barriers and use VK_KHR_synchronization2. */
+                d3d12_command_list_emit_aliasing_vk_global_barrier(list, after_is_texture);
+
                 continue;
+            }
+
             default:
                 WARN("Invalid barrier type %#x.\n", current->Type);
                 continue;
@@ -4388,9 +4433,6 @@ static void STDMETHODCALLTYPE d3d12_command_list_ResourceBarrier(ID3D12GraphicsC
     }
 
     vkd3d_free(multiplanar_handled);
-
-    if (have_aliasing_barriers)
-        FIXME_ONCE("Aliasing barriers not implemented yet.\n");
 
     /* Vulkan doesn't support split barriers. */
     if (have_split_barriers)

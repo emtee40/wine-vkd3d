@@ -39050,7 +39050,6 @@ static void test_aliasing_barrier(void)
             OP_CLEAR_UAV,
             OP_RENDER,
         } op;
-        bool is_todo;
     } tests[][2] =
     {
         {
@@ -39062,7 +39061,7 @@ static void test_aliasing_barrier(void)
         {
             {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 1, DXGI_FORMAT_UNKNOWN, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, 0, OP_UPLOAD},
             {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 1024, 1024, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_TEXTURE_LAYOUT_UNKNOWN,
-                    D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, OP_CLEAR_RTV, true},
+                    D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, OP_CLEAR_RTV},
         },
         {
             {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 1024, 1024, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_TEXTURE_LAYOUT_UNKNOWN,
@@ -39078,12 +39077,12 @@ static void test_aliasing_barrier(void)
         {
             {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 1024, 1024, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_TEXTURE_LAYOUT_UNKNOWN,
                     D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, OP_CLEAR_UAV},
-            {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 1, DXGI_FORMAT_UNKNOWN, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, 0, OP_UPLOAD, true},
+            {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 1, DXGI_FORMAT_UNKNOWN, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, 0, OP_UPLOAD},
         },
         {
             {D3D12_RESOURCE_DIMENSION_BUFFER, 0, 1, DXGI_FORMAT_UNKNOWN, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, 0, OP_UPLOAD},
             {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 1024, 1024, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_TEXTURE_LAYOUT_UNKNOWN,
-                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, OP_CLEAR_UAV, true},
+                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, OP_CLEAR_UAV},
         },
         {
             {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 1024, 1024, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_TEXTURE_LAYOUT_UNKNOWN,
@@ -39294,14 +39293,12 @@ static void test_aliasing_barrier(void)
                         got = get_readback_uint(&rb.rb, j, 0, 0);
                         all_match &= got == j;
                     }
-                    todo_if(tests[i][1].is_todo)
                     ok(all_match, "Got 0x%08x expected 0x%08x at %u.\n", got, j, j);
                     release_resource_readback(&rb);
                     break;
                 }
                 case OP_CLEAR_RTV:
                 case OP_CLEAR_UAV:
-                    todo_if(tests[i][1].is_todo)
                     check_sub_resource_vec4(resources[1], 0, queue, command_list, (const struct vec4*)&colors[1], 1);
                     break;
 
@@ -39324,7 +39321,6 @@ static void test_aliasing_barrier(void)
                             all_match &= compare_vec4(got, &expected, 1);
                         }
                     }
-                    todo_if(tests[i][1].is_todo)
                     ok(all_match, "Got {%.8e, %.8e, %.8e, %.8e}, expected {%.8e, %.8e, %.8e, %.8e} at (%u, %u).\n",
                             got->x, got->y, got->z, got->w, expected.x, expected.y, expected.z, expected.w, x, y);
                     release_resource_readback(&rb);
