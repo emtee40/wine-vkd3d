@@ -207,11 +207,11 @@ float4 main(float4 pos : SV_Position, float2 attr : ATTR,
 
 [test]
 clear rtv 0 1.0 1.0 1.0 1.0
-todo draw triangle list 3
-todo probe (  0,   0) rgba (0.25, 0.25, 0.25, 0.25)
-todo probe (638,   0) rgba (0.0, 0.0, 0.0, 0.0)
-todo probe (  0, 478) rgba (0.25, 0.25, 0.25, 0.25)
-todo probe (639, 479) rgba (0.0, 0.0, 0.0, 0.0)
+todo(sm<6) draw triangle list 3
+todo(sm<6) probe (  0,   0) rgba (0.25, 0.25, 0.25, 0.25)
+todo(sm<6) probe (638,   0) rgba (0.0, 0.0, 0.0, 0.0)
+todo(sm<6) probe (  0, 478) rgba (0.25, 0.25, 0.25, 0.25)
+todo(sm<6) probe (639, 479) rgba (0.0, 0.0, 0.0, 0.0)
 
 % Using EvaluateAttributeAtSample()
 
@@ -248,7 +248,7 @@ float4 main(float4 pos : SV_Position, float2 attr : ATTR,
 
 [test]
 clear rtv 0 1.0 1.0 1.0 1.0
-todo draw triangle list 3
+todo(sm<6) draw triangle list 3
 todo(sm<6) probe (  0,   0) rgba (0.25, 0.25, 0.25, 0.25)
 todo(sm<6) probe (639,   0) rgba (0.0, 0.0, 0.0, 0.0)
 todo(sm<6) probe (  0, 479) rgba (0.25, 0.25, 0.25, 0.25)
