@@ -159,6 +159,7 @@ struct shader_runner
     const struct shader_runner_caps *caps;
 
     bool is_todo;
+    bool is_bugged;
     bool is_broken;
 
     char *vs_source;

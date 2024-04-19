@@ -148,6 +148,7 @@ static bool check_qualifier_args_conjunction(struct shader_runner *runner, const
         {"sm<6",  SHADER_MODEL_2_0, SHADER_MODEL_6_0 - 1},
         {"glsl", 0, 0, true},
         {"warp", 0, 0, true},
+        {"radv", 0, 0, true},
     };
 
     while (*line != ')' && *line != '|')
@@ -802,6 +803,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
     int ret;
 
     runner->is_todo = false;
+    runner->is_bugged = false;
     runner->is_broken = false;
 
     while (match)
@@ -811,6 +813,11 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
         if (match_string_with_args(runner, line, "todo", &line))
         {
             runner->is_todo = true;
+            match = true;
+        }
+        if (match_string_with_args(runner, line, "bug", &line))
+        {
+            runner->is_bugged = true;
             match = true;
         }
         if (match_string_with_args(runner, line, "broken", &line))
@@ -1076,7 +1083,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             ++line;
             read_uint4(&line, &v, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_uvec4(rb, &rect, &v);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uvec4(rb, &rect, &v);
         }
         else if (match_string(line, "rgbai", &line))
         {
@@ -1087,7 +1095,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             ++line;
             read_int4(&line, &v, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_ivec4(rb, &rect, &v);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_ivec4(rb, &rect, &v);
         }
         else if (match_string(line, "rgba", &line))
         {
@@ -1098,7 +1107,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 5)
                 ulps = 0;
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_vec4(rb, &rect, &v, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_vec4(rb, &rect, &v, ulps);
         }
         else if (match_string(line, "rui", &line) || (is_signed = match_string(line, "ri", &line)))
         {
@@ -1119,7 +1129,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             else
                 read_uint(&line, &expect, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_uint(rb, &box, expect, 0);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uint(rb, &box, expect, 0);
         }
         else if (match_string(line, "rui64", &line) || (is_signed = match_string(line, "ri64", &line)))
         {
@@ -1140,7 +1151,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             else
                 read_uint64(&line, &expect, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_uint64(rb, &box, expect, 0);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uint64(rb, &box, expect, 0);
         }
         else if (match_string(line, "rd", &line))
         {
@@ -1151,7 +1163,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 2)
                 ulps = 0;
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_double(rb, &rect, expect, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_double(rb, &rect, expect, ulps);
         }
         else if (match_string(line, "r", &line))
         {
@@ -1162,7 +1175,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 2)
                 ulps = 0;
-            todo_if(runner->is_todo) broken_if(runner->is_broken) check_readback_data_float(rb, &rect, expect, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_float(rb, &rect, expect, ulps);
         }
         else
         {
