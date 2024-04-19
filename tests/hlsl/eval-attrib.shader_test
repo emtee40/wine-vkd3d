@@ -39,7 +39,7 @@ float4 main(float4 pos : SV_Position, float2 attr : ATTR, uint sample_idx : SV_S
 }
 
 [test]
-todo draw triangle list 3
+todo(sm<6) draw triangle list 3
 probe all rgba (0.0, 1.0, 0.0, 1.0)
 bug(radv) broken(warp) probe uav 1 (0) rgbai (0, 0, 0, 0)
 bug(radv) broken(warp) probe uav 1 (1) rgbai (0, 0, 0, 0)
@@ -86,7 +86,7 @@ float4 main(float4 pos : SV_Position, float2 attr : ATTR, uint sample_idx : SV_S
 
 [test]
 clear rtv 0 0.0 0.0 0.0 0.0
-todo draw triangle list 3
+todo(sm<6) draw triangle list 3
 probe all rgba (0.0, 1.0, 0.0, 1.0)
 bug(radv) probe uav 1 (0) rgbai (-125, -125, -375, -375)
 bug(radv) probe uav 1 (1) rgbai (375, 375, -125, -125)
