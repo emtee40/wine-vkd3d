@@ -167,7 +167,7 @@ float4 main(uint id : sv_sampleindex) : sv_target
 
 [test]
 clear rtv 0 0.0 0.0 0.0 0.0
-todo(glsl | sm>=6 | msl) draw quad
+todo(glsl | msl) draw quad
 probe (32, 32) rgba(3.75, 0.25, 0.5, 1.0)
 todo(msl) copy rtv 0 srv 0
 
@@ -188,13 +188,13 @@ float4 main(float4 position : sv_position) : sv_target
 [test]
 uniform 0 uint 0
 todo(glsl | msl) draw quad
-todo(sm>=6) probe (32, 32) rgba(1.0, 0.25, 0.5, 1.0)
+probe (32, 32) rgba(1.0, 0.25, 0.5, 1.0)
 uniform 0 uint 1
 todo(glsl | msl) draw quad
-todo(sm>=6) probe (32, 32) rgba(2.0, 0.25, 0.5, 1.0)
+probe (32, 32) rgba(2.0, 0.25, 0.5, 1.0)
 uniform 0 uint 2
 todo(glsl | msl) draw quad
-todo(sm>=6) probe (32, 32) rgba(4.0, 0.25, 0.5, 1.0)
+probe (32, 32) rgba(4.0, 0.25, 0.5, 1.0)
 uniform 0 uint 3
 todo(glsl | msl) draw quad
-todo(sm>=6) probe (32, 32) rgba(8.0, 0.25, 0.5, 1.0)
+probe (32, 32) rgba(8.0, 0.25, 0.5, 1.0)
