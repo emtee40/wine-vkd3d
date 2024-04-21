@@ -20370,13 +20370,7 @@ static void test_get_copyable_footprints(void)
             sub_resource_count = resource_desc.MipLevels;
             if (resources[i].dimension != D3D12_RESOURCE_DIMENSION_TEXTURE3D)
                 sub_resource_count *= resource_desc.DepthOrArraySize;
-            if (format_plane_count(resource_desc.Format) > 1)
-            {
-                /* FIXME: we require D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL here for DS formats but windows doesn't. */
-                if (!vkd3d_test_platform_is_windows())
-                    resource_desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-                sub_resource_count *= 2;
-            }
+            sub_resource_count *= format_plane_count(resource_desc.Format);
             assert(sub_resource_count <= ARRAY_SIZE(layouts));
 
             for (k = 0; k < ARRAY_SIZE(base_offsets); ++k)

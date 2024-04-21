@@ -951,7 +951,7 @@ HRESULT vkd3d_get_image_allocation_info(struct d3d12_device *device,
     HRESULT hr;
 
     assert(desc->Dimension != D3D12_RESOURCE_DIMENSION_BUFFER);
-    assert(d3d12_resource_validate_desc(desc, device) == S_OK);
+    assert(d3d12_resource_validate_desc(desc, device, false) == S_OK);
 
     if (!desc->MipLevels)
     {
@@ -1847,7 +1847,8 @@ static bool d3d12_resource_validate_texture_alignment(const D3D12_RESOURCE_DESC1
     return true;
 }
 
-HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device)
+HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device,
+        bool for_footprints)
 {
     const D3D12_MIP_REGION *mip_region = &desc->SamplerFeedbackMipRegion;
     const struct vkd3d_format *format;
@@ -1893,7 +1894,12 @@ HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3
                 return E_INVALIDARG;
             }
 
-            if (!(format = vkd3d_format_from_d3d12_resource_desc(device, desc, 0)))
+            if (for_footprints)
+                format = vkd3d_get_format(device, desc->Format, dxgi_format_is_depth_stencil(desc->Format));
+            else
+                format = vkd3d_format_from_d3d12_resource_desc(device, desc, 0);
+
+            if (!format)
             {
                 WARN("Invalid format %#x.\n", desc->Format);
                 return E_INVALIDARG;
@@ -2013,7 +2019,7 @@ static HRESULT d3d12_resource_init(struct d3d12_resource *resource, struct d3d12
     resource->gpu_address = 0;
     resource->flags = 0;
 
-    if (FAILED(hr = d3d12_resource_validate_desc(&resource->desc, device)))
+    if (FAILED(hr = d3d12_resource_validate_desc(&resource->desc, device, false)))
         return hr;
 
     resource->format = vkd3d_format_from_d3d12_resource_desc(device, desc, 0);

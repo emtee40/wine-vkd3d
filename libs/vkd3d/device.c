@@ -4249,7 +4249,7 @@ static void d3d12_device_get_resource1_allocation_info(struct d3d12_device *devi
     {
         desc = &resource_descs[i];
 
-        if (FAILED(d3d12_resource_validate_desc(desc, device)))
+        if (FAILED(d3d12_resource_validate_desc(desc, device, false)))
         {
             WARN("Invalid resource desc.\n");
             goto invalid;
@@ -4613,13 +4613,13 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
     if (total_bytes)
         *total_bytes = ~(uint64_t)0;
 
-    if (!(format = vkd3d_format_from_d3d12_resource_desc(device, desc, 0)))
+    if (!(format = vkd3d_get_format(device, desc->Format, dxgi_format_is_depth_stencil(desc->Format))))
     {
         WARN("Invalid format %#x.\n", desc->Format);
         return;
     }
 
-    if (FAILED(d3d12_resource_validate_desc(desc, device)))
+    if (FAILED(d3d12_resource_validate_desc(desc, device, true)))
     {
         WARN("Invalid resource desc.\n");
         return;
