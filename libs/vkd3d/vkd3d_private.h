@@ -528,7 +528,8 @@ struct vkd3d_resource_allocation_info
 };
 
 bool d3d12_resource_is_cpu_accessible(const struct d3d12_resource *resource);
-HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device);
+HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device,
+        bool ds_from_format);
 void d3d12_resource_get_tiling(struct d3d12_device *device, const struct d3d12_resource *resource,
         UINT *total_tile_count, D3D12_PACKED_MIP_INFO *packed_mip_info, D3D12_TILE_SHAPE *standard_tile_shape,
         UINT *sub_resource_tiling_count, UINT first_sub_resource_tiling,
@@ -1614,6 +1615,8 @@ static inline unsigned int d3d12_device_get_descriptor_handle_increment_size(str
 {
     return ID3D12Device9_GetDescriptorHandleIncrementSize(&device->ID3D12Device9_iface, descriptor_type);
 }
+
+bool dxgi_format_is_depth_stencil(DXGI_FORMAT dxgi_format);
 
 /* utils */
 enum vkd3d_format_type
