@@ -1097,6 +1097,18 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             line = close_parentheses(line);
             todo_if(runner->is_todo) check_readback_data_uint(rb, &box, expect, 0);
         }
+        else if (match_string(line, "rgui64", &line))
+        {
+            struct u64vec2 v;
+
+            if (*line != '(')
+                fatal_error("Malformed probe arguments '%s'.\n", line);
+            ++line;
+            read_uint64(&line, &v.x, false);
+            read_uint64(&line, &v.y, false);
+            line = close_parentheses(line);
+            todo_if(runner->is_todo) check_readback_data_u64vec2(rb, &rect, &v);
+        }
         else if (match_string(line, "rui64", &line) || (is_signed = match_string(line, "ri64", &line)))
         {
             uint64_t expect;
@@ -1117,6 +1129,17 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 read_uint64(&line, &expect, false);
             line = close_parentheses(line);
             todo_if(runner->is_todo) check_readback_data_uint64(rb, &box, expect, 0);
+        }
+        else if (match_string(line, "rgd", &line))
+        {
+            struct dvec2 v;
+
+            ret = sscanf(line, "( %lf , %lf ) %u", &v.x, &v.y, &ulps);
+            if (ret < 2)
+                fatal_error("Malformed probe arguments '%s'.\n", line);
+            if (ret < 3)
+                ulps = 0;
+            todo_if(runner->is_todo) check_readback_data_dvec2(rb, &rect, &v, ulps);
         }
         else if (match_string(line, "rd", &line))
         {
