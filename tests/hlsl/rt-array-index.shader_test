@@ -31,20 +31,20 @@ float4 main(in float4 pos : SV_Position,
 uniform 0 uint 0
 uniform 1 uint 0
 clear rtv 0 1.0 1.0 1.0 1.0
-todo(sm>=6 | glsl) draw quad
+todo(glsl) draw quad
 probe rtv 0 0 (0, 0) rgba (0.0, 0.0, 0.0, 0.0)
 probe rtv 0 1 (0, 0) rgba (1.0, 1.0, 1.0, 1.0)
 
 uniform 0 uint 1
 uniform 1 uint 1
 clear rtv 0 1.0 1.0 1.0 1.0
-todo(sm>=6 | glsl) draw quad
+todo(glsl) draw quad
 probe rtv 0 0 (0, 0) rgba (1.0, 1.0, 1.0, 1.0)
 bug(mvk) probe rtv 0 1 (0, 0) rgba (1.0, 1.0, 0.0, 0.0)
 
 uniform 0 uint 3
 uniform 1 uint 2
 clear rtv 0 1.0 1.0 1.0 1.0
-todo(sm>=6 | glsl) draw quad
+todo(glsl) draw quad
 probe rtv 0 0 (0, 0) rgba (1.0, 1.0, 1.0, 1.0)
 bug(mvk) probe rtv 0 3 (0, 0) rgba (3.0, 2.0, 0.0, 0.0)
