@@ -245,6 +245,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/vector-indexing.shader_test \
 	tests/hlsl/vertex-shader-ops.shader_test \
 	tests/hlsl/vp-array-index.shader_test \
+	tests/hlsl/wave-ops-64-bit.shader_test \
 	tests/hlsl/wave-ops-float.shader_test \
 	tests/hlsl/wave-ops-int.shader_test \
 	tests/hlsl/wave-ops-uint.shader_test \
