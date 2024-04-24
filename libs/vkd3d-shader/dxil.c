@@ -3835,6 +3835,8 @@ static enum vkd3d_shader_register_type register_type_from_dxil_semantic_kind(
             return VKD3DSPR_DEPTHOUTGE;
         case VKD3D_SHADER_SV_DEPTH_LESS_EQUAL:
             return VKD3DSPR_DEPTHOUTLE;
+        case VKD3D_SHADER_SV_PRIMITIVE_ID:
+            return VKD3DSPR_PRIMID;
         default:
             return VKD3DSPR_INVALID;
     }
