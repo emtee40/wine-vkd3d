@@ -1772,6 +1772,11 @@ static inline void vkd3d_prepend_struct(void *header, void *structure)
 }
 
 struct vkd3d_shader_cache;
+struct vkd3d_shader_cache_item
+{
+    const void *key, *value;
+    size_t key_size, value_size;
+};
 
 int vkd3d_shader_open_cache(struct vkd3d_shader_cache **cache);
 unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
@@ -1780,5 +1785,7 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, const void *value, size_t value_size);
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
+const struct vkd3d_shader_cache_item *vkd3d_shader_cache_enumerate(struct vkd3d_shader_cache *cache);
+void vkd3d_shader_cache_end_enumerate(struct vkd3d_shader_cache *cache);
 
 #endif  /* __VKD3D_PRIVATE_H */
