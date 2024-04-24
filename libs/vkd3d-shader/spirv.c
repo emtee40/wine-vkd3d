@@ -7188,6 +7188,27 @@ static void spirv_compiler_emit_bool_cast(struct spirv_compiler *compiler,
     spirv_compiler_emit_store_dst(compiler, dst, val_id);
 }
 
+static void spirv_compiler_emit_trunc_to_bool(struct spirv_compiler *compiler,
+        const struct vkd3d_shader_instruction *instruction)
+{
+    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    const struct vkd3d_shader_dst_param *dst = instruction->dst;
+    const struct vkd3d_shader_src_param *src = instruction->src;
+    uint32_t type_id, src_id, one_id, val_id;
+
+    type_id = vkd3d_spirv_get_type_id_for_data_type(builder, src[0].reg.data_type,
+            vsir_write_mask_component_count(dst->write_mask));
+    src_id = spirv_compiler_emit_load_src(compiler, &src[0], dst->write_mask);
+    one_id = data_type_is_64_bit(src[0].reg.data_type)
+            ? vkd3d_spirv_get_op_constant64(builder, type_id, 1)
+            : vkd3d_spirv_get_op_constant(builder, type_id, 1);
+    val_id = vkd3d_spirv_build_op_and(builder, type_id, src_id, one_id);
+    type_id = vkd3d_spirv_get_op_type_bool(builder);
+    val_id = vkd3d_spirv_build_op_tr2(builder, &builder->function_stream, SpvOpIEqual, type_id, val_id, one_id);
+
+    spirv_compiler_emit_store_dst(compiler, dst, val_id);
+}
+
 static enum vkd3d_result spirv_compiler_emit_alu_instruction(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
@@ -7223,6 +7244,12 @@ static enum vkd3d_result spirv_compiler_emit_alu_instruction(struct spirv_compil
             spirv_compiler_emit_bool_cast(compiler, instruction);
             return VKD3D_OK;
         }
+    }
+    else if (dst->reg.data_type == VKD3D_DATA_BOOL && instruction->opcode == VKD3DSIH_UTOU)
+    {
+        /* Truncate integer to bool. DXC emits this as part of its IsFirstLane() implementation for SM < 6.6. */
+        spirv_compiler_emit_trunc_to_bool(compiler, instruction);
+        return VKD3D_OK;
     }
     else
     {
