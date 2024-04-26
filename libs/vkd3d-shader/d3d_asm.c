@@ -93,6 +93,7 @@ static const char * const shader_opcode_names[] =
     [VKD3DSIH_DCL_RESOURCE_RAW                ] = "dcl_resource_raw",
     [VKD3DSIH_DCL_RESOURCE_STRUCTURED         ] = "dcl_resource_structured",
     [VKD3DSIH_DCL_SAMPLER                     ] = "dcl_sampler",
+    [VKD3DSIH_DCL_TYPED_TEMP                  ] = "dcl_typed_temp",
     [VKD3DSIH_DCL_STREAM                      ] = "dcl_stream",
     [VKD3DSIH_DCL_TEMPS                       ] = "dcl_temps",
     [VKD3DSIH_DCL_TESSELLATOR_DOMAIN          ] = "dcl_tessellator_domain",
@@ -2054,6 +2055,15 @@ static void shader_dump_instruction(struct vkd3d_d3d_asm_compiler *compiler,
             shader_print_register(compiler, " ", &ins->declaration.sampler.src.reg, true,
                     ins->flags == VKD3DSI_SAMPLER_COMPARISON_MODE ? ", comparisonMode" : "");
             shader_dump_register_space(compiler, ins->declaration.sampler.range.space);
+            break;
+
+        case VKD3DSIH_DCL_TYPED_TEMP:
+            vkd3d_string_buffer_printf(buffer, " %sa%u%s", compiler->colours.reg,
+                    ins->declaration.typed_temp.register_idx, compiler->colours.reset);
+            if (ins->declaration.typed_temp.alignment)
+                shader_print_uint_literal(compiler, ", align ", ins->declaration.typed_temp.alignment, "");
+            if (ins->declaration.typed_temp.initialiser.type != VKD3DSPR_NULL)
+                shader_print_register(compiler, ", init ", &ins->declaration.typed_temp.initialiser, false, "");
             break;
 
         case VKD3DSIH_DCL_TEMPS:
