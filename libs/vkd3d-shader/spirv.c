@@ -3234,6 +3234,9 @@ static bool spirv_compiler_get_register_name(char *buffer, unsigned int buffer_s
         case VKD3DSPR_WAVELANEINDEX:
             snprintf(buffer, buffer_size, "vWaveLaneIndex");
             break;
+        case VKD3DSPR_TYPEDTEMP:
+            snprintf(buffer, buffer_size, "a%u", idx);
+            break;
         default:
             FIXME("Unhandled register %#x.\n", reg->type);
             snprintf(buffer, buffer_size, "unrecognized_%#x", reg->type);
@@ -6617,6 +6620,60 @@ static void spirv_compiler_emit_dcl_output(struct spirv_compiler *compiler,
 
     if (dst->reg.type != VKD3DSPR_OUTPUT && dst->reg.type != VKD3DSPR_PATCHCONST)
         spirv_compiler_emit_output_register(compiler, dst);
+}
+
+static void spirv_compiler_emit_dcl_typed_temp(struct spirv_compiler *compiler,
+          const struct vkd3d_shader_instruction *instruction)
+{
+    const struct vkd3d_shader_typed_temp *temp = &instruction->declaration.typed_temp;
+    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    enum vkd3d_shader_component_type component_type;
+    uint32_t id, type_id, ptr_type_id, init_id = 0;
+    struct vkd3d_spirv_stream *stream;
+    struct vkd3d_shader_register reg;
+    struct vkd3d_symbol reg_symbol;
+    SpvStorageClass storage_class;
+    size_t function_location;
+
+    /* Scalar temps may be used by more than one function in hull shaders, and
+     * declarations generally should not occur within VSIR code blocks unless function
+     * scope is specified, e.g. DXIL alloca. */
+    if (temp->has_function_scope)
+    {
+        storage_class = SpvStorageClassFunction;
+        stream = &builder->function_stream;
+        function_location = spirv_compiler_get_current_function_location(compiler);
+        vkd3d_spirv_begin_function_stream_insertion(builder, function_location);
+    }
+    else
+    {
+        storage_class = SpvStorageClassPrivate;
+        stream = &builder->global_stream;
+    }
+
+    vsir_register_init(&reg, VKD3DSPR_TYPEDTEMP, temp->data_type, 1);
+    reg.idx[0].offset = temp->register_idx;
+
+    if (temp->alignment)
+        TRACE("Ignoring alignment %u.\n", temp->alignment);
+
+    component_type = vkd3d_component_type_from_data_type(temp->data_type);
+    type_id = vkd3d_spirv_get_type_id(builder, component_type, 1);
+    ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, storage_class, type_id);
+
+    if (temp->initialiser.type != VKD3DSPR_NULL)
+        init_id = spirv_compiler_emit_load_reg(compiler, &temp->initialiser, VKD3D_SHADER_SWIZZLE(X, X, X, X),
+                VKD3DSP_WRITEMASK_0);
+
+    id = vkd3d_spirv_build_op_variable(builder, stream, ptr_type_id, storage_class, init_id);
+    spirv_compiler_emit_register_debug_name(builder, id, &reg);
+
+    if (temp->has_function_scope)
+        vkd3d_spirv_end_function_stream_insertion(builder);
+
+    vkd3d_symbol_make_register(&reg_symbol, &reg);
+    vkd3d_symbol_set_register_info(&reg_symbol, id, storage_class, component_type, VKD3DSP_WRITEMASK_0);
+    spirv_compiler_put_symbol(compiler, &reg_symbol);
 }
 
 static void spirv_compiler_emit_dcl_stream(struct spirv_compiler *compiler,
@@ -10110,6 +10167,9 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
             break;
         case VKD3DSIH_DCL_OUTPUT:
             spirv_compiler_emit_dcl_output(compiler, instruction);
+            break;
+        case VKD3DSIH_DCL_TYPED_TEMP:
+            spirv_compiler_emit_dcl_typed_temp(compiler, instruction);
             break;
         case VKD3DSIH_DCL_STREAM:
             spirv_compiler_emit_dcl_stream(compiler, instruction);
