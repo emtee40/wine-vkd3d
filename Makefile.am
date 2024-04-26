@@ -141,6 +141,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/invalid.shader_test \
 	tests/hlsl/inverse-trig.shader_test \
 	tests/hlsl/is-front-face.shader_test \
+	tests/hlsl/is-helper-lane.shader_test \
 	tests/hlsl/ldexp.shader_test \
 	tests/hlsl/length.shader_test \
 	tests/hlsl/lerp.shader_test \
