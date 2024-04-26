@@ -324,6 +324,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_DCL_RESOURCE_RAW,
     VKD3DSIH_DCL_RESOURCE_STRUCTURED,
     VKD3DSIH_DCL_SAMPLER,
+    VKD3DSIH_DCL_TYPED_TEMP,
     VKD3DSIH_DCL_STREAM,
     VKD3DSIH_DCL_TEMPS,
     VKD3DSIH_DCL_TESSELLATOR_DOMAIN,
@@ -649,6 +650,7 @@ enum vkd3d_shader_register_type
     VKD3DSPR_WAVELANEINDEX,
     VKD3DSPR_PARAMETER,
     VKD3DSPR_POINT_COORD,
+    VKD3DSPR_TYPEDTEMP,
 
     VKD3DSPR_COUNT,
 
@@ -1195,6 +1197,14 @@ struct vkd3d_shader_function_table_pointer
     unsigned int table_count;
 };
 
+struct vkd3d_shader_typed_temp
+{
+    unsigned int register_idx;
+    unsigned int alignment;
+    enum vkd3d_data_type data_type;
+    struct vkd3d_shader_register initialiser;
+};
+
 struct vkd3d_shader_texel_offset
 {
     signed char u, v, w;
@@ -1269,6 +1279,7 @@ struct vkd3d_shader_instruction
         struct vkd3d_shader_index_range index_range;
         struct vkd3d_shader_indexable_temp indexable_temp;
         struct vkd3d_shader_function_table_pointer fp;
+        struct vkd3d_shader_typed_temp typed_temp;
     } declaration;
 };
 

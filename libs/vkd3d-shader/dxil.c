@@ -879,6 +879,7 @@ struct sm6_parser
     size_t descriptor_count;
 
     unsigned int indexable_temp_count;
+    unsigned int typed_temp_count;
     unsigned int icb_count;
     unsigned int tgsm_count;
 
@@ -3444,6 +3445,25 @@ static void sm6_parser_declare_indexable_temp(struct sm6_parser *sm6, const stru
     register_init_with_id(&dst->u.reg, VKD3DSPR_IDXTEMP, data_type, ins->declaration.indexable_temp.register_idx);
 }
 
+/* A typed temp is a scalar global which may have an initialiser. If initialisers
+ * did not occur here, we could use the x component of a normal temp register. */
+static void sm6_parser_declare_typed_temp(struct sm6_parser *sm6, const struct sm6_type *elem_type,
+        unsigned int alignment, unsigned int init, struct sm6_value *dst)
+{
+    enum vkd3d_data_type data_type = vkd3d_data_type_from_sm6_type(elem_type);
+    struct vkd3d_shader_instruction *ins;
+
+    ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_TYPED_TEMP);
+    ins->declaration.typed_temp.register_idx = sm6->typed_temp_count++;
+    ins->declaration.typed_temp.alignment = alignment;
+    ins->declaration.typed_temp.data_type = data_type;
+    vsir_register_init(&ins->declaration.typed_temp.initialiser, VKD3DSPR_NULL, VKD3D_DATA_UNUSED, 0);
+    /* The initialiser value index will be resolved later when forward references can be handled. */
+    ins->declaration.typed_temp.initialiser.u.immconst_u32[0] = init;
+
+    register_init_with_id(&dst->u.reg, VKD3DSPR_TYPEDTEMP, data_type, ins->declaration.typed_temp.register_idx);
+}
+
 static void sm6_parser_declare_tgsm_raw(struct sm6_parser *sm6, const struct sm6_type *elem_type,
         unsigned int alignment, unsigned int init, struct sm6_value *dst)
 {
@@ -3499,10 +3519,10 @@ static void sm6_parser_declare_tgsm_structured(struct sm6_parser *sm6, const str
 static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_record *record)
 {
     const struct sm6_type *type, *scalar_type;
+    bool is_constant, is_scalar = false;
     unsigned int alignment, count;
     uint64_t address_space, init;
     struct sm6_value *dst;
-    bool is_constant;
 
     if (!dxil_record_validate_operand_min_count(record, 6, sm6))
         return false;
@@ -3526,6 +3546,9 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
     {
         count = 1;
         scalar_type = type;
+        /* Do not declare scalar globals as indexable temps because their initialisers
+         * are scalar, and load/store addressing does not include an array index. */
+        is_scalar = true;
     }
     else
     {
@@ -3617,6 +3640,8 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
     {
         if (is_constant)
             sm6_parser_declare_icb(sm6, scalar_type, count, alignment, init, dst);
+        else if (is_scalar)
+            sm6_parser_declare_typed_temp(sm6, scalar_type, alignment, init, dst);
         else
             sm6_parser_declare_indexable_temp(sm6, scalar_type, count, alignment, false, init, NULL, dst);
     }
@@ -3700,6 +3725,24 @@ static bool resolve_forward_zero_initialiser(size_t index, struct sm6_parser *sm
     return false;
 }
 
+static void resolve_forward_immconst_initialiser(struct vkd3d_shader_register *initialiser, size_t index,
+        struct sm6_parser *sm6)
+{
+    const struct sm6_value *value;
+
+    VKD3D_ASSERT(index);
+    --index;
+    if (!(value = sm6_parser_get_value_safe(sm6, index)) || (!sm6_value_is_constant(value) && !sm6_value_is_undef(value)))
+    {
+        WARN("Invalid initialiser index %zu.\n", index);
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                "Global variable initialiser value index %zu is invalid.", index);
+        return;
+    }
+
+    *initialiser = value->u.reg;
+}
+
 static enum vkd3d_result sm6_parser_globals_init(struct sm6_parser *sm6)
 {
     size_t i, count, base_value_idx = sm6->value_count;
@@ -3768,6 +3811,12 @@ static enum vkd3d_result sm6_parser_globals_init(struct sm6_parser *sm6)
         {
             ins->declaration.indexable_temp.initialiser = resolve_forward_initialiser(
                     (uintptr_t)ins->declaration.indexable_temp.initialiser, sm6);
+        }
+        else if (ins->opcode == VKD3DSIH_DCL_TYPED_TEMP
+                && ins->declaration.typed_temp.initialiser.u.immconst_u32[0])
+        {
+            resolve_forward_immconst_initialiser(&ins->declaration.typed_temp.initialiser,
+                    ins->declaration.typed_temp.initialiser.u.immconst_u32[0], sm6);
         }
         else if (ins->opcode == VKD3DSIH_DCL_IMMEDIATE_CONSTANT_BUFFER)
         {
