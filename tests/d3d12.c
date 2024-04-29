@@ -39003,7 +39003,6 @@ static void test_out_of_order_initial_transition(void)
     wait_queue_idle(device, queue);
 
     init_readback(&rb, readback_buffer, buffer_size, resource_desc.Width, resource_desc.Height, 1, row_pitch);
-    todo
     check_readback_data_uint(&rb.rb, NULL, 0xff00ff00, 0);
     release_resource_readback(&rb);
 
