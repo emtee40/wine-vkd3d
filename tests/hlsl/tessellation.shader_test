@@ -96,3 +96,155 @@ float4 main(data input) : sv_target
 [test]
 todo(sm<6) draw 3 control point patch list 3
 probe all rgba (0.0, 1.0, 0.0, 1.0)
+
+
+[input layout]
+0 r32g32b32a32 float POSITION
+0 r32 float REF_BUFFER_DATA
+
+[vb 0]
+-1.0 -1.0 0.0 1.0   1.0
+-1.0  1.0 0.0 1.0   1.0
+ 1.0 -1.0 0.0 1.0   1.0
+
+-1.0  1.0 0.0 1.0   2.0
+ 1.0  1.0 0.0 1.0   2.0
+ 1.0 -1.0 0.0 1.0   2.0
+
+[srv 0]
+format r32 uint
+size (buffer, 2)
+1 2
+
+[vertex shader]
+struct data
+{
+    float4 position : POSITION;
+    float ref_buffer_data : REF_BUFFER_DATA;
+};
+
+data main(in data input)
+{
+    return input;
+}
+
+[hull shader todo]
+Buffer<uint> b;
+
+struct data
+{
+    float4 position : POSITION;
+    float ref_buffer_data : REF_BUFFER_DATA;
+};
+
+struct ds_data
+{
+    float4 position : POSITION;
+    float ref_buffer_data : REF_BUFFER_DATA;
+    uint primitive_id : PRIM_ID;
+    uint invocation_id : CP_ID;
+};
+
+struct patch_constant_data
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+    float buffer_data : BUFFER_DATA;
+    uint primitive_id : PATCH_PRIM_ID;
+};
+
+void patch_constant(uint prim_id : SV_PrimitiveID, out patch_constant_data output)
+{
+    output.edges[0] = output.edges[1] = output.edges[2] = 4.0f;
+    output.inside = 4.0f;
+    output.buffer_data = b[prim_id];
+    output.primitive_id = prim_id;
+}
+
+    [domain("tri")]
+    [outputcontrolpoints(3)]
+    [partitioning("integer")]
+    [outputtopology("triangle_cw")]
+    [patchconstantfunc("patch_constant")]
+ds_data main(const InputPatch<data, 3> input,
+        uint prim_id : SV_PrimitiveID, uint i : SV_OutputControlPointID)
+{
+    ds_data output;
+    output.position = input[i].position;
+    output.ref_buffer_data = input[i].ref_buffer_data;
+    output.primitive_id = prim_id;
+    output.invocation_id = i;
+    return output;
+}
+
+[domain shader todo]
+struct patch_constant_data
+{
+    float edges[3] : SV_TessFactor;
+    float inside : SV_InsideTessFactor;
+    float buffer_data : BUFFER_DATA;
+    uint primitive_id : PATCH_PRIM_ID;
+};
+
+struct ds_data
+{
+    float4 position : POSITION;
+    float ref_buffer_data : REF_BUFFER_DATA;
+    uint primitive_id : PRIM_ID;
+    uint invocation_id : CP_ID;
+};
+
+struct ps_data
+{
+    float4 position : SV_POSITION;
+    float4 color : COLOR;
+};
+
+    [domain("tri")]
+void main(patch_constant_data input,
+        float3 tess_coord : SV_DomainLocation,
+        const OutputPatch<ds_data, 3> patch,
+        out ps_data output)
+{
+    uint i;
+
+    output.position = tess_coord.x * patch[0].position
+            + tess_coord.y * patch[1].position
+            + tess_coord.z * patch[2].position;
+
+    for (i = 0; i < 3; ++i)
+    {
+        if (patch[i].ref_buffer_data != input.buffer_data)
+        {
+            output.color = float4(1, patch[i].ref_buffer_data / 255.0f, input.buffer_data / 255.0f, 0);
+            return;
+        }
+    }
+
+    for (i = 0; i < 3; ++i)
+    {
+        if (patch[i].primitive_id != input.primitive_id)
+        {
+            output.color = float4(1, 0, 1, 1);
+            return;
+        }
+    }
+
+    if (patch[0].invocation_id != 0 || patch[1].invocation_id != 1 || patch[2].invocation_id != 2)
+    {
+        output.color = float4(1, 1, 0, 1);
+        return;
+    }
+
+    output.color = float4(0, 1, 0, 1);
+}
+
+[pixel shader]
+float4 main(in float4 p : SV_Position, in float4 color : COLOR) : SV_Target
+{
+    return color;
+}
+
+[test]
+todo(sm<6) draw 3 control point patch list 6
+probe all rgba (0.0, 1.0, 0.0, 1.0)
