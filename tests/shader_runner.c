@@ -149,6 +149,7 @@ static bool check_qualifier_args_conjunction(struct shader_runner *runner, const
         {"glsl", 0, 0, true},
         {"warp", 0, 0, true},
         {"radv", 0, 0, true},
+        {"mvk",  0, 0, true},
     };
 
     while (*line != ')' && *line != '|')
@@ -351,6 +352,10 @@ static void parse_require_directive(struct shader_runner *runner, const char *li
     {
         runner->crashes_on_warp = true;
     }
+    else if (match_string(line, "array index in vertex and tessellation", &line))
+    {
+        runner->require_array_index_in_vertex_and_tessellation = true;
+    }
     else
     {
         fatal_error("Unknown require directive '%s'.\n", line);
@@ -516,11 +521,13 @@ static void parse_resource_directive(struct resource_params *resource, const cha
         {
             resource->dimension = RESOURCE_DIMENSION_BUFFER;
             resource->height = 1;
+            resource->depth_or_array_size = 1;
         }
         else if (sscanf(line, "( counter_buffer , %u ) ", &resource->width) == 1)
         {
             resource->dimension = RESOURCE_DIMENSION_BUFFER;
             resource->height = 1;
+            resource->depth_or_array_size = 1;
             resource->is_uav_counter = true;
             resource->stride = sizeof(uint32_t);
             resource->texel_size = resource->stride;
@@ -529,8 +536,15 @@ static void parse_resource_directive(struct resource_params *resource, const cha
         else if (sscanf(line, "( 2d , %u , %u ) ", &resource->width, &resource->height) == 2)
         {
             resource->dimension = RESOURCE_DIMENSION_2D;
+            resource->depth_or_array_size = 1;
         }
         else if (sscanf(line, "( 2dms , %u , %u , %u ) ", &resource->sample_count, &resource->width, &resource->height) == 3)
+        {
+            resource->dimension = RESOURCE_DIMENSION_2D;
+            resource->depth_or_array_size = 1;
+        }
+        else if (sscanf(line, "( 2darray , %u , %u , %u ) ", &resource->width, &resource->height,
+                &resource->depth_or_array_size) == 3)
         {
             resource->dimension = RESOURCE_DIMENSION_2D;
         }
@@ -579,6 +593,9 @@ static void parse_resource_directive(struct resource_params *resource, const cha
             if (rest == line)
                 break;
 
+            if (resource->depth_or_array_size > 1)
+                fatal_error("Upload not implemented for 2d arrays.\n");
+
             vkd3d_array_reserve((void **)&resource->data, &resource->data_capacity, resource->data_size + sizeof(u), 1);
             memcpy(resource->data + resource->data_size, &u, sizeof(u));
             resource->data_size += sizeof(u);
@@ -625,6 +642,7 @@ void init_resource(struct resource *resource, const struct resource_params *para
     resource->texel_size = params->texel_size;
     resource->width = params->width;
     resource->height = params->height;
+    resource->depth_or_array_size = params->depth_or_array_size;
     resource->sample_count = params->sample_count;
 }
 
@@ -923,6 +941,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             params.texel_size = 16;
             params.width = RENDER_TARGET_WIDTH;
             params.height = RENDER_TARGET_HEIGHT;
+            params.depth_or_array_size = 1;
             params.level_count = 1;
 
             set_resource(runner, &params);
@@ -976,6 +995,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             params.texel_size = 16;
             params.width = RENDER_TARGET_WIDTH;
             params.height = RENDER_TARGET_HEIGHT;
+            params.depth_or_array_size = 1;
             params.level_count = 1;
 
             set_resource(runner, &params);
@@ -1011,7 +1031,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
     }
     else if (match_string(line, "probe", &line))
     {
-        unsigned int left, top, right, bottom, ulps, slot;
+        unsigned int left, top, right, bottom, ulps, slot, array_layer = 0;
         struct resource_readback *rb;
         struct resource *resource;
         bool is_signed = false;
@@ -1040,6 +1060,15 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             line = rest;
 
             resource = shader_runner_get_resource(runner, RESOURCE_TYPE_RENDER_TARGET, slot);
+
+            if (resource->depth_or_array_size > 1)
+            {
+                array_layer = strtoul(line, &rest, 10);
+
+                if (rest == line)
+                    fatal_error("Malformed render target array layer '%s'.\n", line);
+                line = rest;
+            }
         }
         else if (match_string(line, "dsv", &line))
         {
@@ -1050,7 +1079,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             resource = shader_runner_get_resource(runner, RESOURCE_TYPE_RENDER_TARGET, 0);
         }
 
-        rb = runner->ops->get_resource_readback(runner, resource);
+        rb = runner->ops->get_resource_readback(runner, resource, array_layer);
 
         if (match_string(line, "all", &line))
         {
@@ -1588,6 +1617,8 @@ static bool check_requirements(const struct shader_runner *runner, const struct 
         return false;
     if (runner->crashes_on_warp && test_options.use_warp_device)
         return false;
+    if (runner->require_array_index_in_vertex_and_tessellation && !caps->array_index_in_vertex_and_tessellation)
+        return false;
 
     return true;
 }
@@ -1652,6 +1683,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     trace("   float64: %u.\n", caps->float64);
     trace("     int64: %u.\n", caps->int64);
     trace("       rov: %u.\n", caps->rov);
+    trace("array index in vertex and tessellation: %u.\n", caps->array_index_in_vertex_and_tessellation);
 
     if (!test_options.filename)
         fatal_error("No filename specified.\n");

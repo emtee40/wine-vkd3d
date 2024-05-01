@@ -508,7 +508,8 @@ struct d3d9_resource_readback
     IDirect3DSurface9 *surface;
 };
 
-static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d9_shader_runner *runner = d3d9_shader_runner(r);
     struct d3d9_resource_readback *rb = malloc(sizeof(*rb));

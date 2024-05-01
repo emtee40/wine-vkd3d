@@ -120,7 +120,8 @@ static void end_command_buffer(struct vulkan_shader_runner *runner)
 }
 
 static void transition_image_layout(struct vulkan_shader_runner *runner,
-        VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout src_layout, VkImageLayout dst_layout)
+        VkImage image, VkImageAspectFlags aspect_mask, uint32_t base_layer, uint32_t layer_count,
+        VkImageLayout src_layout, VkImageLayout dst_layout)
 {
     VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
 
@@ -134,8 +135,8 @@ static void transition_image_layout(struct vulkan_shader_runner *runner,
     barrier.subresourceRange.aspectMask = aspect_mask;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.baseArrayLayer = base_layer;
+    barrier.subresourceRange.layerCount = layer_count;
 
     VK_CALL(vkCmdPipelineBarrier(runner->cmd_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &barrier));
@@ -212,7 +213,8 @@ static VkBufferView create_buffer_view(const struct vulkan_shader_runner *runner
 }
 
 static VkImage create_2d_image(const struct vulkan_shader_runner *runner, uint32_t width, uint32_t height,
-        uint32_t level_count, VkImageUsageFlags usage, VkFormat format, VkDeviceMemory *memory)
+        uint32_t array_size, uint32_t level_count, VkImageUsageFlags usage, VkFormat format,
+        VkDeviceMemory *memory)
 {
     VkImageCreateInfo image_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     VkMemoryRequirements memory_reqs;
@@ -224,7 +226,7 @@ static VkImage create_2d_image(const struct vulkan_shader_runner *runner, uint32
     image_info.extent.height = height;
     image_info.extent.depth = 1;
     image_info.mipLevels = level_count;
-    image_info.arrayLayers = 1;
+    image_info.arrayLayers = array_size;
     image_info.samples = VK_SAMPLE_COUNT_1_BIT;
     image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_info.usage = usage;
@@ -241,13 +243,13 @@ static VkImage create_2d_image(const struct vulkan_shader_runner *runner, uint32
 }
 
 static VkImageView create_2d_image_view(const struct vulkan_shader_runner *runner, VkImage image, VkFormat format,
-        VkImageAspectFlags aspect_mask)
+        VkImageAspectFlags aspect_mask, uint32_t layer_count)
 {
     VkImageViewCreateInfo view_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     VkImageView view;
 
     view_info.image = image;
-    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.viewType = (layer_count > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     view_info.format = format;
     view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
     view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -257,7 +259,7 @@ static VkImageView create_2d_image_view(const struct vulkan_shader_runner *runne
     view_info.subresourceRange.baseMipLevel = 0;
     view_info.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
     view_info.subresourceRange.baseArrayLayer = 0;
-    view_info.subresourceRange.layerCount = 1;
+    view_info.subresourceRange.layerCount = layer_count;
 
     VK_CALL(vkCreateImageView(runner->device, &view_info, NULL, &view));
     return view;
@@ -269,6 +271,7 @@ static void resource_init_2d(struct vulkan_shader_runner *runner, struct vulkan_
     VkImageUsageFlagBits usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkFormat format = vkd3d_get_vk_format(params->format);
+    uint32_t layer_count = params->depth_or_array_size;
     VkDevice device = runner->device;
     unsigned int buffer_offset = 0;
     VkDeviceMemory staging_memory;
@@ -281,14 +284,15 @@ static void resource_init_2d(struct vulkan_shader_runner *runner, struct vulkan_
         usage |= VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
 
-    resource->image = create_2d_image(runner, params->width, params->height, params->level_count,
-            usage, format, &resource->memory);
-    resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT);
+    resource->image = create_2d_image(runner, params->width, params->height, params->depth_or_array_size,
+            params->level_count, usage, format, &resource->memory);
+    resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT,
+            layer_count);
 
     if (!params->data)
     {
         begin_command_buffer(runner);
-        transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT, 0, layer_count,
                 VK_IMAGE_LAYOUT_UNDEFINED, layout);
         end_command_buffer(runner);
         return;
@@ -302,7 +306,7 @@ static void resource_init_2d(struct vulkan_shader_runner *runner, struct vulkan_
 
     begin_command_buffer(runner);
 
-    transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT,
+    transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT, 0, layer_count,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     for (unsigned int level = 0; level < params->level_count; ++level)
@@ -324,7 +328,8 @@ static void resource_init_2d(struct vulkan_shader_runner *runner, struct vulkan_
         buffer_offset += level_width * level_height * params->texel_size;
     }
 
-    transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layout);
+    transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT, 0, layer_count,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layout);
 
     end_command_buffer(runner);
 
@@ -374,12 +379,14 @@ static struct resource *vulkan_runner_create_resource(struct shader_runner *r, c
         case RESOURCE_TYPE_RENDER_TARGET:
             format = vkd3d_get_vk_format(params->format);
 
-            resource->image = create_2d_image(runner, params->width, params->height, params->level_count,
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, format, &resource->memory);
-            resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT);
+            resource->image = create_2d_image(runner, params->width, params->height, params->depth_or_array_size,
+                    params->level_count, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, format,
+                    &resource->memory);
+            resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_COLOR_BIT,
+                    params->depth_or_array_size);
 
             begin_command_buffer(runner);
-            transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT,
+            transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_COLOR_BIT, 0, params->depth_or_array_size,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             end_command_buffer(runner);
             break;
@@ -387,13 +394,14 @@ static struct resource *vulkan_runner_create_resource(struct shader_runner *r, c
         case RESOURCE_TYPE_DEPTH_STENCIL:
             format = vkd3d_get_vk_format(params->format);
 
-            resource->image = create_2d_image(runner, params->width, params->height, params->level_count,
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, format,
-                    &resource->memory);
-            resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_DEPTH_BIT);
+            resource->image = create_2d_image(runner, params->width, params->height, params->depth_or_array_size,
+                    params->level_count, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                    format, &resource->memory);
+            resource->image_view = create_2d_image_view(runner, resource->image, format, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    params->depth_or_array_size);
 
             begin_command_buffer(runner);
-            transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            transition_image_layout(runner, resource->image, VK_IMAGE_ASPECT_DEPTH_BIT, 0, params->depth_or_array_size,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             end_command_buffer(runner);
             break;
@@ -448,7 +456,7 @@ static bool compile_shader(struct vulkan_shader_runner *runner, const char *sour
     struct vkd3d_shader_compile_info info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO};
     struct vkd3d_shader_resource_binding bindings[MAX_RESOURCES + MAX_SAMPLERS];
     struct vkd3d_shader_push_constant_buffer push_constants;
-    enum vkd3d_shader_spirv_extension spirv_extensions[2];
+    enum vkd3d_shader_spirv_extension spirv_extensions[3];
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_compile_option options[3];
     struct vkd3d_shader_compile_option *option;
@@ -540,6 +548,8 @@ static bool compile_shader(struct vulkan_shader_runner *runner, const char *sour
 
     if (runner->caps.rov)
         spirv_extensions[spirv_info.extension_count++] = VKD3D_SHADER_SPIRV_EXTENSION_EXT_FRAGMENT_SHADER_INTERLOCK;
+    if (runner->caps.array_index_in_vertex_and_tessellation)
+        spirv_extensions[spirv_info.extension_count++] = VKD3D_SHADER_SPIRV_EXTENSION_EXT_VIEWPORT_INDEX_LAYER;
     if (runner->demote_to_helper_invocation)
         spirv_extensions[spirv_info.extension_count++] = VKD3D_SHADER_SPIRV_EXTENSION_EXT_DEMOTE_TO_HELPER_INVOCATION;
 
@@ -1278,7 +1288,7 @@ static void vulkan_runner_clear(struct shader_runner *r, struct resource *res, c
     fb_desc.pAttachments = &resource->image_view;
     fb_desc.width = width;
     fb_desc.height = height;
-    fb_desc.layers = 1;
+    fb_desc.layers = resource_get_layer_count(res);
     VK_CALL(vkCreateFramebuffer(device, &fb_desc, NULL, &fb));
 
     begin_desc.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1366,7 +1376,8 @@ struct vulkan_resource_readback
     VkBuffer buffer;
 };
 
-static struct resource_readback *vulkan_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *vulkan_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct vulkan_shader_runner *runner = vulkan_shader_runner(r);
     struct vulkan_resource_readback *rb = malloc(sizeof(*rb));
@@ -1408,9 +1419,11 @@ static struct resource_readback *vulkan_runner_get_resource_readback(struct shad
 
         begin_command_buffer(runner);
 
-        transition_image_layout(runner, resource->image, aspect_mask, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        transition_image_layout(runner, resource->image, aspect_mask, subresource, 1,
+                layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
         region.imageSubresource.aspectMask = aspect_mask;
+        region.imageSubresource.baseArrayLayer = subresource;
         region.imageSubresource.layerCount = 1;
         region.imageExtent.width = resource->r.width;
         region.imageExtent.height = resource->r.height;
@@ -1419,7 +1432,8 @@ static struct resource_readback *vulkan_runner_get_resource_readback(struct shad
         VK_CALL(vkCmdCopyImageToBuffer(runner->cmd_buffer, resource->image,
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb->buffer, 1, &region));
 
-        transition_image_layout(runner, resource->image, aspect_mask, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
+        transition_image_layout(runner, resource->image, aspect_mask, subresource, 1,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout);
 
         end_command_buffer(runner);
 
@@ -1532,6 +1546,7 @@ static bool check_device_extensions(struct vulkan_shader_runner *runner, struct 
     {
         {VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME},
         {VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME},
+        {VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME},
         {VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME, true},
         {VK_KHR_MAINTENANCE1_EXTENSION_NAME, true},
     };
@@ -1552,6 +1567,8 @@ static bool check_device_extensions(struct vulkan_shader_runner *runner, struct 
             enabled_extensions->names[enabled_extensions->count++] = name;
             if (!strcmp(name, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME))
                 runner->caps.rov = true;
+            if (!strcmp(name, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME))
+                runner->caps.array_index_in_vertex_and_tessellation = true;
             if (!strcmp(name, VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME))
                 runner->demote_to_helper_invocation = true;
             continue;

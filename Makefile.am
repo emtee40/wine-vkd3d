@@ -184,6 +184,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/return-implicit-conversion.shader_test \
 	tests/hlsl/return.shader_test \
 	tests/hlsl/round.shader_test \
+	tests/hlsl/rt-array-index.shader_test \
 	tests/hlsl/rt-get-sample-info.shader_test \
 	tests/hlsl/sample-bias.shader_test \
 	tests/hlsl/sample-cmp.shader_test \
