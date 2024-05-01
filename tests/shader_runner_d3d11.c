@@ -915,7 +915,8 @@ struct d3d11_resource_readback
     ID3D11Resource *resource;
 };
 
-static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d11_shader_runner *runner = d3d11_shader_runner(r);
     struct d3d11_resource_readback *rb = malloc(sizeof(*rb));

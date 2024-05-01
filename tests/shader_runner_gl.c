@@ -136,6 +136,8 @@ static bool check_gl_extensions(struct gl_runner *runner)
         runner->caps.int64 = true;
     if (check_gl_extension("GL_EXT_depth_bounds_test", count))
         runner->caps.depth_bounds = true;
+    if (check_gl_extension("GL_ARB_shader_viewport_layer_array", count))
+        runner->caps.array_index_in_vertex_and_tessellation = true;
 
     return true;
 }
@@ -393,8 +395,18 @@ static void gl_runner_cleanup(struct gl_runner *runner)
 
 static bool init_resource_2d(struct gl_resource *resource, const struct resource_params *params)
 {
-    GLenum target = params->desc.sample_count > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
     unsigned int offset, w, h, i;
+    GLenum target;
+
+    if (params->desc.sample_count > 1)
+    {
+        assert(params->desc.depth_or_array_size == 1);
+        target = GL_TEXTURE_2D_MULTISAMPLE;
+    }
+    else
+    {
+        target = (params->desc.depth_or_array_size > 1) ? GL_TEXTURE_3D : GL_TEXTURE_2D;
+    }
 
     resource->format = get_format_info(params->desc.format, params->is_shadow);
 
@@ -419,8 +431,12 @@ static bool init_resource_2d(struct gl_resource *resource, const struct resource
     }
     else
     {
-        glTexStorage2D(target, params->desc.level_count,
-                resource->format->internal_format, params->desc.width, params->desc.height);
+        if (params->desc.depth_or_array_size > 1)
+            glTexStorage3D(GL_TEXTURE_3D, params->desc.level_count, resource->format->internal_format,
+                    params->desc.width, params->desc.height, params->desc.depth_or_array_size);
+        else
+            glTexStorage2D(target, params->desc.level_count,
+                    resource->format->internal_format, params->desc.width, params->desc.height);
         glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     }
@@ -543,6 +559,7 @@ static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3
     struct vkd3d_shader_resource_binding bindings[MAX_RESOURCES + 1 /* CBV */];
     struct vkd3d_shader_scan_combined_resource_sampler_info combined_sampler_info;
     struct vkd3d_shader_combined_resource_sampler *sampler;
+    enum vkd3d_shader_spirv_extension spirv_extensions[1];
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_parameter parameters[1];
     unsigned int count, i;
@@ -605,6 +622,10 @@ static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3
         info.next = &spirv_info;
         spirv_info.next = &interface_info;
         spirv_info.environment = VKD3D_SHADER_SPIRV_ENVIRONMENT_OPENGL_4_5;
+        spirv_info.extensions = spirv_extensions;
+        spirv_info.extension_count = 0;
+        if (runner->caps.array_index_in_vertex_and_tessellation)
+            spirv_extensions[spirv_info.extension_count++] = VKD3D_SHADER_SPIRV_EXTENSION_EXT_VIEWPORT_INDEX_LAYER;
     }
     else
     {
@@ -1246,11 +1267,13 @@ struct gl_resource_readback
     struct resource_readback rb;
 };
 
-static struct resource_readback *gl_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *gl_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct gl_resource *resource = gl_resource(res);
     struct gl_runner *runner = gl_runner(r);
     struct resource_readback *rb;
+    size_t plane_size;
 
     if (resource->r.desc.type != RESOURCE_TYPE_RENDER_TARGET && resource->r.desc.type != RESOURCE_TYPE_DEPTH_STENCIL
             && resource->r.desc.type != RESOURCE_TYPE_UAV)
@@ -1263,12 +1286,13 @@ static struct resource_readback *gl_runner_get_resource_readback(struct shader_r
     rb->depth = 1;
 
     rb->row_pitch = rb->width * resource->r.desc.texel_size;
-    rb->data = malloc(rb->row_pitch * rb->height);
+    plane_size = rb->row_pitch * rb->height;
+    rb->data = malloc(plane_size * resource->r.desc.depth_or_array_size);
 
     if (resource->r.desc.dimension == RESOURCE_DIMENSION_BUFFER)
     {
         glBindBuffer(GL_TEXTURE_BUFFER, resource->id);
-        glGetBufferSubData(GL_TEXTURE_BUFFER, 0, rb->row_pitch * rb->height, rb->data);
+        glGetBufferSubData(GL_TEXTURE_BUFFER, 0, plane_size, rb->data);
     }
     else if (resource->r.desc.sample_count > 1)
     {
@@ -1302,8 +1326,11 @@ static struct resource_readback *gl_runner_get_resource_readback(struct shader_r
     }
     else
     {
-        glBindTexture(GL_TEXTURE_2D, resource->id);
-        glGetTexImage(GL_TEXTURE_2D, 0, resource->format->format, resource->format->type, rb->data);
+        GLenum target = (resource->r.desc.depth_or_array_size > 1) ? GL_TEXTURE_3D : GL_TEXTURE_2D;
+        glBindTexture(target, resource->id);
+        glGetTexImage(target, 0, resource->format->format, resource->format->type, rb->data);
+        if (subresource)
+            memcpy(rb->data, (const uint8_t *)rb->data + plane_size * subresource, plane_size);
     }
 
     return rb;

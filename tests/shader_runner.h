@@ -92,7 +92,7 @@ struct resource_desc
 
     DXGI_FORMAT format;
     unsigned int texel_size;
-    unsigned int width, height;
+    unsigned int width, height, depth_or_array_size;
     unsigned int level_count;
     unsigned int sample_count;
 };
@@ -107,7 +107,6 @@ struct resource_params
     bool explicit_format;
     enum texture_data_type data_type;
     unsigned int stride;
-
     uint8_t *data;
     size_t data_size, data_capacity;
 };
@@ -116,6 +115,11 @@ struct resource
 {
     struct resource_desc desc;
 };
+
+static inline unsigned int resource_get_layer_count(const struct resource *res)
+{
+    return res->desc.depth_or_array_size;
+}
 
 struct input_element
 {
@@ -147,6 +151,7 @@ struct shader_runner_caps
     bool rov;
     bool wave_ops;
     bool depth_bounds;
+    bool array_index_in_vertex_and_tessellation;
 
     uint32_t format_caps[DXGI_FORMAT_COUNT];
 };
@@ -169,6 +174,7 @@ struct shader_runner
     const struct shader_runner_caps *caps;
 
     bool is_todo;
+    bool is_bugged;
 
     char *vs_source;
     char *ps_source;
@@ -184,6 +190,7 @@ struct shader_runner
     bool require_rov;
     bool require_wave_ops;
     bool require_depth_bounds;
+    bool require_array_index_in_vertex_and_tessellation;
     uint32_t require_format_caps[DXGI_FORMAT_COUNT];
 
     bool last_render_failed;
@@ -225,7 +232,8 @@ struct shader_runner_ops
     bool (*draw)(struct shader_runner *runner, D3D_PRIMITIVE_TOPOLOGY primitive_topology, unsigned int vertex_count,
             unsigned int instance_count);
     bool (*dispatch)(struct shader_runner *runner, unsigned int x, unsigned int y, unsigned int z);
-    struct resource_readback *(*get_resource_readback)(struct shader_runner *runner, struct resource *resource);
+    struct resource_readback *(*get_resource_readback)(struct shader_runner *runner, struct resource *resource,
+            unsigned int subresource);
     void (*release_readback)(struct shader_runner *runner, struct resource_readback *rb);
 };
 
