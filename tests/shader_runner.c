@@ -1330,6 +1330,20 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
         else
             runner->flat_shading = false;
     }
+    else if (match_string(line, "viewport", &line))
+    {
+        unsigned int i;
+
+        read_uint(&line, &i, false);
+        if (i >= ARRAY_SIZE(runner->viewports))
+            fatal_error("Unhandled viewport index %u.\n", i);
+
+        if (sscanf(line, "%f %f %f %f", &runner->viewports[i].x, &runner->viewports[i].y,
+                &runner->viewports[i].width, &runner->viewports[i].height) < 4)
+            fatal_error("Malformed viewport '%s'.\n", line);
+
+        runner->viewport_count = max(runner->viewport_count, i + 1);
+    }
     else
     {
         fatal_error("Unknown test directive '%s'.\n", line);

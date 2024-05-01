@@ -784,9 +784,11 @@ static bool d3d12_runner_draw(struct shader_runner *r,
     D3D12_CPU_DESCRIPTOR_HANDLE rtvs[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT] = {0};
     ID3D12GraphicsCommandList1 *command_list1 = test_context->list1;
     ID3D12GraphicsCommandList *command_list = test_context->list;
+    unsigned int uniform_index, rtv_count = 0, viewport_count;
+    D3D12_VIEWPORT viewports[ARRAY_SIZE(r->viewports)];
     ID3D12CommandQueue *queue = test_context->queue;
+    RECT scissor_rects[ARRAY_SIZE(r->viewports)];
     ID3D12Device *device = test_context->device;
-    unsigned int uniform_index, rtv_count = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = {0};
     ID3D12PipelineState *pso;
     bool succeeded;
@@ -898,12 +900,26 @@ static bool d3d12_runner_draw(struct shader_runner *r,
         }
     }
 
+    viewports[0] = test_context->viewport;
+    scissor_rects[0] = test_context->scissor_rect;
+    viewport_count = max(r->viewport_count, 1);
+    for (i = 0; i < r->viewport_count; ++i)
+    {
+        viewports[i].TopLeftX = r->viewports[i].x;
+        viewports[i].TopLeftY = r->viewports[i].y;
+        viewports[i].Width = r->viewports[i].width;
+        viewports[i].Height = r->viewports[i].height;
+        viewports[i].MinDepth = 0.0f;
+        viewports[i].MaxDepth = 1.0f;
+        scissor_rects[i] = test_context->scissor_rect;
+    }
+
     ID3D12GraphicsCommandList_OMSetRenderTargets(command_list, rtv_count, rtvs, false, dsv.ptr ? &dsv : NULL);
 
     if (runner->r.depth_bounds)
         ID3D12GraphicsCommandList1_OMSetDepthBounds(command_list1, runner->r.depth_min, runner->r.depth_max);
-    ID3D12GraphicsCommandList_RSSetScissorRects(command_list, 1, &test_context->scissor_rect);
-    ID3D12GraphicsCommandList_RSSetViewports(command_list, 1, &test_context->viewport);
+    ID3D12GraphicsCommandList_RSSetScissorRects(command_list, viewport_count, scissor_rects);
+    ID3D12GraphicsCommandList_RSSetViewports(command_list, viewport_count, viewports);
     ID3D12GraphicsCommandList_IASetPrimitiveTopology(command_list, primitive_topology);
     ID3D12GraphicsCommandList_SetPipelineState(command_list, pso);
     ID3D12GraphicsCommandList_DrawInstanced(command_list, vertex_count, instance_count, 0, 0);

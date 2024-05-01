@@ -749,25 +749,25 @@ static enum VkCompareOp vk_compare_op_from_d3d12(D3D12_COMPARISON_FUNC op)
 static VkPipeline create_graphics_pipeline(struct vulkan_shader_runner *runner, VkRenderPass render_pass,
         VkPipelineLayout pipeline_layout, D3D_PRIMITIVE_TOPOLOGY primitive_topology)
 {
+    VkRect2D rt_rects[ARRAY_SIZE(runner->r.viewports)] = {{.extent.width = RENDER_TARGET_WIDTH, .extent.height = RENDER_TARGET_HEIGHT}};
     VkPipelineInputAssemblyStateCreateInfo ia_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     VkPipelineRasterizationStateCreateInfo rs_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     VkPipelineVertexInputStateCreateInfo input_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     VkPipelineColorBlendStateCreateInfo blend_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     VkPipelineMultisampleStateCreateInfo ms_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    VkViewport viewport = {.y = RENDER_TARGET_HEIGHT,
-            .width = RENDER_TARGET_WIDTH, .height = -RENDER_TARGET_HEIGHT, .maxDepth = 1};
     VkPipelineViewportStateCreateInfo vp_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    static const VkRect2D rt_rect = {.extent.width = RENDER_TARGET_WIDTH, .extent.height = RENDER_TARGET_HEIGHT};
     VkGraphicsPipelineCreateInfo pipeline_desc = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    VkViewport viewports[ARRAY_SIZE(runner->r.viewports)] = {{.y = RENDER_TARGET_HEIGHT,
+            .width = RENDER_TARGET_WIDTH, .height = -RENDER_TARGET_HEIGHT, .maxDepth = 1}};
     VkPipelineColorBlendAttachmentState attachment_desc[MAX_RESOURCES] = {0};
     VkPipelineTessellationStateCreateInfo tessellation_info;
     VkVertexInputAttributeDescription input_attributes[32];
     VkPipelineDepthStencilStateCreateInfo ds_desc = {0};
     VkVertexInputBindingDescription input_bindings[32];
     VkPipelineShaderStageCreateInfo stage_desc[5];
+    unsigned int stage_count = 0, viewport_count;
     struct vkd3d_shader_code vs_dxbc;
     VkDevice device = runner->device;
-    unsigned int stage_count = 0;
     VkPipeline pipeline;
     unsigned int i, j;
     VkResult vr;
@@ -877,16 +877,32 @@ static VkPipeline create_graphics_pipeline(struct vulkan_shader_runner *runner, 
 
     ia_desc.topology = vulkan_primitive_topology_from_d3d(primitive_topology);
 
+    viewport_count = max(runner->r.viewport_count, 1);
+    for (i = 0; i < runner->r.viewport_count; ++i)
+    {
+        viewports[i].x = runner->r.viewports[i].x;
+        viewports[i].y = runner->r.viewports[i].y + runner->r.viewports[i].height;
+        viewports[i].width = runner->r.viewports[i].width;
+        viewports[i].height = -runner->r.viewports[i].height;
+        viewports[i].maxDepth = 1.0f;
+        rt_rects[i].offset.x = 0;
+        rt_rects[i].offset.y = 0;
+        rt_rects[i].extent.width = RENDER_TARGET_WIDTH;
+        rt_rects[i].extent.height = RENDER_TARGET_HEIGHT;
+    }
     if (runner->r.minimum_shader_model < SHADER_MODEL_4_0)
     {
-        viewport.x += 0.5f;
-        viewport.y += 0.5f;
+        for (i = 0; i < viewport_count; ++i)
+        {
+            viewports[i].x += 0.5f;
+            viewports[i].y += 0.5f;
+        }
     }
 
-    vp_desc.viewportCount = 1;
-    vp_desc.pViewports = &viewport;
-    vp_desc.scissorCount = 1;
-    vp_desc.pScissors = &rt_rect;
+    vp_desc.viewportCount = viewport_count;
+    vp_desc.pViewports = viewports;
+    vp_desc.scissorCount = viewport_count;
+    vp_desc.pScissors = rt_rects;
 
     rs_desc.cullMode = VK_CULL_MODE_NONE;
     rs_desc.frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -1811,18 +1827,23 @@ static bool init_vulkan_runner(struct vulkan_shader_runner *runner)
     /* FIXME: Probably make these optional. */
 
 #define ENABLE_FEATURE(x) \
-    if (!ret_features->x) \
+    do \
     { \
-        skip("The selected Vulkan device does not support " #x ".\n"); \
-        goto out_destroy_instance; \
-    } \
-    features.x = VK_TRUE
+        if (!ret_features->x) \
+        { \
+            skip("The selected Vulkan device does not support " #x ".\n"); \
+            goto out_destroy_instance; \
+        } \
+        features.x = VK_TRUE; \
+    } while (false)
 
     ENABLE_FEATURE(fragmentStoresAndAtomics);
     /* For SV_PrimitiveID/SpvBuiltInPrimitiveId in fragment shaders. */
     ENABLE_FEATURE(geometryShader);
     ENABLE_FEATURE(shaderImageGatherExtended);
     ENABLE_FEATURE(shaderStorageImageWriteWithoutFormat);
+    if (runner->caps.array_index_in_vertex_and_tessellation)
+        ENABLE_FEATURE(multiViewport);
 
     if (ret_features->shaderFloat64)
     {

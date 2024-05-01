@@ -130,6 +130,14 @@ struct input_element
     unsigned int index;
 };
 
+struct rect_float
+{
+    float x;
+    float y;
+    float width;
+    float height;
+};
+
 #define MAX_RESOURCES 32
 #define MAX_SAMPLERS 32
 #define DXGI_FORMAT_COUNT (DXGI_FORMAT_B4G4R4A4_UNORM + 1)
@@ -222,6 +230,9 @@ struct shader_runner
     enum vkd3d_shader_comparison_func alpha_test_func;
     float alpha_test_ref;
     bool flat_shading;
+
+    struct rect_float viewports[4];
+    unsigned int viewport_count;
 };
 
 struct shader_runner_ops
