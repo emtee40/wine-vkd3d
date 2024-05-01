@@ -130,6 +130,14 @@ struct input_element
     unsigned int index;
 };
 
+struct rect_float
+{
+    float x;
+    float y;
+    float width;
+    float height;
+};
+
 #define MAX_RESOURCES 32
 #define MAX_SAMPLERS 32
 
@@ -205,6 +213,9 @@ struct shader_runner
     unsigned int compile_options;
 
     D3D12_COMPARISON_FUNC depth_func;
+
+    struct rect_float viewports[4];
+    unsigned int viewport_count;
 };
 
 struct shader_runner_ops

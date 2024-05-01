@@ -355,6 +355,8 @@ static bool d3d9_runner_draw(struct shader_runner *r,
 
     if (instance_count > 1)
         fatal_error("Unhandled instance count %u.\n", instance_count);
+    if (r->viewport_count)
+        fatal_error("Unhandled viewports.\n");
 
     if (!(vs_code = compile_shader(runner, runner->r.vs_source, "vs")))
         return false;
