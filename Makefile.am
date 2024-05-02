@@ -380,6 +380,7 @@ libvkd3d_la_SOURCES = \
 	libs/vkd3d/cache.c \
 	libs/vkd3d/command.c \
 	libs/vkd3d/device.c \
+	libs/vkd3d/miniz.c \
 	libs/vkd3d/resource.c \
 	libs/vkd3d/state.c \
 	libs/vkd3d/utils.c \
