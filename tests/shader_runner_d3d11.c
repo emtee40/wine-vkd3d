@@ -263,6 +263,11 @@ static BOOL init_test_context(struct d3d11_shader_runner *runner)
     HRESULT hr;
     RECT rect;
 
+    static const char *const warp_tag[] =
+    {
+        "warp",
+    };
+
     memset(runner, 0, sizeof(*runner));
 
     if (!(runner->device = create_device()))
@@ -272,6 +277,11 @@ static BOOL init_test_context(struct d3d11_shader_runner *runner)
     }
 
     runner->caps.runner = "d3d11.dll";
+    if (test_options.use_warp_device)
+    {
+        runner->caps.tags = warp_tag;
+        runner->caps.tag_count = 1;
+    }
     runner->caps.minimum_shader_model = SHADER_MODEL_4_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_5_0;
 

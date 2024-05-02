@@ -159,6 +159,7 @@ struct shader_runner
     const struct shader_runner_caps *caps;
 
     bool is_todo;
+    bool is_broken;
 
     char *vs_source;
     char *ps_source;
@@ -173,6 +174,7 @@ struct shader_runner
     bool require_int64;
     bool require_rov;
     bool require_wave_ops;
+    bool crashes_on_warp;
 
     bool last_render_failed;
 

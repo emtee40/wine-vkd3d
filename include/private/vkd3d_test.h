@@ -97,6 +97,10 @@ static void vkd3d_test_end_todo(void);
 #define bug_if(is_bug) \
     for (vkd3d_test_start_bug(is_bug); vkd3d_test_loop_bug(); vkd3d_test_end_bug())
 
+/* Does not check the platform, and so depends only on the passed bool parameter. */
+#define broken_if(is_broken) \
+    for (vkd3d_test_start_broken(is_broken); vkd3d_test_loop_broken(); vkd3d_test_end_broken())
+
 #define todo todo_if(true)
 
 struct vkd3d_test_state
@@ -116,6 +120,9 @@ struct vkd3d_test_state
     unsigned int bug_level;
     bool bug_do_loop;
     bool bug_enabled;
+
+    unsigned int broken_level;
+    bool broken_do_loop;
 
     const char *test_name_filter;
     char context[8][128];
@@ -177,6 +184,7 @@ vkd3d_test_check_ok(unsigned int line, bool result, const char *fmt, va_list arg
 {
     bool is_todo = vkd3d_test_state.todo_level && !vkd3d_test_platform_is_windows();
     bool is_bug = vkd3d_test_state.bug_level && !vkd3d_test_platform_is_windows();
+    bool is_broken = vkd3d_test_state.broken_level;
 
     if (is_bug && vkd3d_test_state.bug_enabled)
     {
@@ -187,6 +195,14 @@ vkd3d_test_check_ok(unsigned int line, bool result, const char *fmt, va_list arg
             vkd3d_test_printf(line, "Fixed bug: ");
         else
             vkd3d_test_printf(line, "Bug: ");
+        vprintf(fmt, args);
+    }
+    else if (is_broken)
+    {
+        if (result)
+            vkd3d_test_printf(line, "Unbroken: ");
+        else
+            vkd3d_test_printf(line, "Broken: ");
         vprintf(fmt, args);
     }
     else if (is_todo)
@@ -402,6 +418,24 @@ static inline int vkd3d_test_loop_bug(void)
 static inline void vkd3d_test_end_bug(void)
 {
     vkd3d_test_state.bug_level >>= 1;
+}
+
+static inline void vkd3d_test_start_broken(bool is_broken)
+{
+    vkd3d_test_state.broken_level = (vkd3d_test_state.broken_level << 1) | is_broken;
+    vkd3d_test_state.broken_do_loop = true;
+}
+
+static inline int vkd3d_test_loop_broken(void)
+{
+    bool do_loop = vkd3d_test_state.broken_do_loop;
+    vkd3d_test_state.broken_do_loop = false;
+    return do_loop;
+}
+
+static inline void vkd3d_test_end_broken(void)
+{
+    vkd3d_test_state.broken_level >>= 1;
 }
 
 static inline void vkd3d_test_push_context(const char *fmt, ...)

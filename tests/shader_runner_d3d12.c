@@ -771,6 +771,11 @@ static void d3d12_runner_init_caps(struct d3d12_shader_runner *runner)
     D3D12_FEATURE_DATA_D3D12_OPTIONS options;
     HRESULT hr;
 
+    static const char *const warp_tag[] =
+    {
+        "warp",
+    };
+
     hr = ID3D12Device_CheckFeatureSupport(device, D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
     ok(hr == S_OK, "Failed to check feature options support, hr %#x.\n", hr);
     hr = ID3D12Device_CheckFeatureSupport(device, D3D12_FEATURE_D3D12_OPTIONS1, &options1, sizeof(options1));
@@ -781,6 +786,11 @@ static void d3d12_runner_init_caps(struct d3d12_shader_runner *runner)
 #else
     runner->caps.runner = "vkd3d";
 #endif
+    if (test_options.use_warp_device)
+    {
+        runner->caps.tags = warp_tag;
+        runner->caps.tag_count = 1;
+    }
     runner->caps.minimum_shader_model = SHADER_MODEL_4_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_5_1;
     runner->caps.float64 = options.DoublePrecisionFloatShaderOps;

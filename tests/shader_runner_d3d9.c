@@ -117,6 +117,11 @@ static bool init_test_context(struct d3d9_shader_runner *runner)
     D3DCAPS9 caps;
     HRESULT hr;
 
+    static const char *const warp_tag[] =
+    {
+        "warp",
+    };
+
     memset(runner, 0, sizeof(*runner));
 
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -150,6 +155,11 @@ static bool init_test_context(struct d3d9_shader_runner *runner)
     }
 
     runner->caps.runner = "d3d9.dll";
+    if (test_options.use_warp_device)
+    {
+        runner->caps.tags = warp_tag;
+        runner->caps.tag_count = 1;
+    }
     runner->caps.minimum_shader_model = SHADER_MODEL_2_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_3_0;
 
