@@ -17,6 +17,7 @@
  */
 
 #include "vkd3d_private.h"
+#include "miniz.h"
 
 /* Data structures used in the serialized files. Changing these will break compatibility with
  * existing cache files, so bump the cache version if doing so.
@@ -126,6 +127,7 @@ static void vkd3d_shader_cache_remove_entry(struct vkd3d_shader_cache *cache,
 static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, struct shader_cache_entry *e)
 {
     size_t len;
+    void *blob;
 
     TRACE("reading object key len %#"PRIx64", data %#"PRIx64".\n", e->h.key_size, e->h.value_size);
 
@@ -147,18 +149,44 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
         return false;
     }
 
-    if (e->h.disk_size != e->h.key_size + e->h.value_size)
-        ERR("How do I get a compressed object before implementing compression?\n");
+    if (e->h.disk_size == e->h.key_size + e->h.value_size)
+    {
+        blob = e->payload;
+    }
+    else
+    {
+        blob = vkd3d_malloc(e->h.disk_size);
+        if (!blob)
+        {
+            WARN("out of memory\n");
+            vkd3d_free(e->payload);
+            return false;
+        }
+    }
 
     fseek(cache->values, e->h.offset, SEEK_SET);
-    len = fread(e->payload, e->h.key_size + e->h.value_size, 1, cache->values);
+    len = fread(blob, e->h.disk_size, 1, cache->values);
     if (len != 1)
     {
         /* I suppose this could be handled better. */
         ERR("Failed to read cached object data len %#"PRIx64" offset %#"PRIx64".\n",
-                e->h.key_size + e->h.value_size, e->h.offset);
+                e->h.disk_size, e->h.offset);
         vkd3d_free(e->payload);
+        if (blob != e->payload)
+            vkd3d_free(blob);
         return false;
+    }
+
+    if (blob != e->payload)
+    {
+        len = tinfl_decompress_mem_to_mem(e->payload, e->h.key_size + e->h.value_size,
+                blob, e->h.disk_size, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+        if (len != e->h.key_size + e->h.value_size)
+            ERR("decompress: got %#zx bytes expected %#zx.\n", len, e->h.key_size + e->h.value_size);
+        else
+            TRACE("decompress successful, %#zx -> %#zx\n", e->h.disk_size,
+                    e->h.key_size + e->h.value_size);
+        vkd3d_free(blob);
     }
 
     return true;
@@ -328,13 +356,26 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     struct shader_cache_entry *e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
     struct write_context *ctx = context;
     struct vkd3d_shader_cache *cache = ctx->cache;
+    size_t comp_len;
+    void *blob;
 
-    /* TODO: Compress the data. */
-    e->h.disk_size = e->h.key_size + e->h.value_size;
+    blob = tdefl_compress_mem_to_heap(e->payload, e->h.key_size + e->h.value_size, &comp_len, 0);
+    if (!blob || comp_len >= (e->h.key_size + e->h.value_size))
+    {
+        TRACE("Compression failed or grew the size.\n");
+        blob = e->payload;
+        e->h.disk_size = e->h.key_size + e->h.value_size;
+    }
+    else
+        e->h.disk_size = comp_len;
+
     e->h.offset = ftell(cache->values);
 
     fwrite(&e->h, sizeof(e->h), 1, ctx->indices);
-    fwrite(e->payload, e->h.disk_size, 1, cache->values);
+    fwrite(blob, e->h.disk_size, 1, cache->values);
+
+    if (blob != e->payload)
+        free(blob);
 }
 
 static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
