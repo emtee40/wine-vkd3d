@@ -1302,4 +1302,21 @@ static inline D3D12_GPU_DESCRIPTOR_HANDLE get_gpu_sampler_handle(struct test_con
     return get_gpu_handle(context->device, heap, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, offset);
 }
 
+static inline void create_buffer_unordered_access_view(struct test_context *context,
+        ID3D12DescriptorHeap *cpu_heap, ID3D12DescriptorHeap *gpu_heap, ID3D12Resource *uav, DXGI_FORMAT format)
+{
+    D3D12_RESOURCE_DESC desc = ID3D12Resource_GetDesc(uav);
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {0};
+
+    uav_desc.Format = format;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = desc.Width / sizeof(uint32_t);
+    ID3D12Device_CreateUnorderedAccessView(context->device, uav, NULL, &uav_desc,
+            get_cpu_descriptor_handle(context, cpu_heap, 0));
+    ID3D12Device_CopyDescriptorsSimple(context->device, 1,
+            get_cpu_descriptor_handle(context, gpu_heap, 0),
+            get_cpu_descriptor_handle(context, cpu_heap, 0),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+}
+
 #endif  /* __VKD3D_D3D12_TEST_UTILS_H */
