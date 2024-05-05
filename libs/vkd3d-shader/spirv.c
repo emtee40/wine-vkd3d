@@ -17,6 +17,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "vkd3d_shader.h"
 #include "vkd3d_shader_private.h"
 #include "rbtree.h"
 
@@ -382,6 +383,7 @@ struct vkd3d_spirv_builder
     size_t iface_element_count;
 
     bool uses_subgroup_uniform_control_flow;
+    bool uses_maximal_reconvergence;
 };
 
 static uint32_t vkd3d_spirv_alloc_id(struct vkd3d_spirv_builder *builder)
@@ -1989,6 +1991,8 @@ static bool vkd3d_spirv_compile_module(struct vkd3d_spirv_builder *builder,
         vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_shader_viewport_index_layer");
     if (builder->uses_subgroup_uniform_control_flow)
         vkd3d_spirv_build_op_extension(&stream, "SPV_KHR_subgroup_uniform_control_flow");
+    if (builder->uses_maximal_reconvergence)
+        vkd3d_spirv_build_op_extension(&stream, "SPV_KHR_maximal_reconvergence");
 
     if (builder->ext_instr_set_glsl_450)
         vkd3d_spirv_build_op_ext_inst_import(&stream, builder->ext_instr_set_glsl_450, "GLSL.std.450");
@@ -5747,6 +5751,13 @@ static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *comp
                 spirv_compiler_emit_execution_mode(compiler,
                         SpvExecutionModeSubgroupUniformControlFlowKHR, NULL, 0);
             }
+            if (spirv_compiler_is_target_extension_supported(compiler,
+                    VKD3D_SHADER_SPIRV_EXTENSION_KHR_MAXIMAL_RECONVERGENCE))
+            {
+                builder->uses_maximal_reconvergence = true;
+                spirv_compiler_emit_execution_mode(compiler,
+                        SpvExecutionModeMaximallyReconvergesKHR, NULL, 0);
+            }
             break;
         case VKD3D_SHADER_TYPE_COMPUTE:
             vkd3d_spirv_set_execution_model(builder, SpvExecutionModelGLCompute);
@@ -5756,6 +5767,13 @@ static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *comp
                 builder->uses_subgroup_uniform_control_flow = true;
                 spirv_compiler_emit_execution_mode(compiler,
                         SpvExecutionModeSubgroupUniformControlFlowKHR, NULL, 0);
+            }
+            if (spirv_compiler_is_target_extension_supported(compiler,
+                    VKD3D_SHADER_SPIRV_EXTENSION_KHR_MAXIMAL_RECONVERGENCE))
+            {
+                builder->uses_maximal_reconvergence = true;
+                spirv_compiler_emit_execution_mode(compiler,
+                        SpvExecutionModeMaximallyReconvergesKHR, NULL, 0);
             }
             break;
         default:
