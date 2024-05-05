@@ -380,6 +380,8 @@ struct vkd3d_spirv_builder
     uint32_t *iface;
     size_t iface_capacity;
     size_t iface_element_count;
+
+    bool uses_subgroup_uniform_control_flow;
 };
 
 static uint32_t vkd3d_spirv_alloc_id(struct vkd3d_spirv_builder *builder)
@@ -1985,6 +1987,8 @@ static bool vkd3d_spirv_compile_module(struct vkd3d_spirv_builder *builder,
         vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_shader_stencil_export");
     if (vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityShaderViewportIndexLayerEXT))
         vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_shader_viewport_index_layer");
+    if (builder->uses_subgroup_uniform_control_flow)
+        vkd3d_spirv_build_op_extension(&stream, "SPV_KHR_subgroup_uniform_control_flow");
 
     if (builder->ext_instr_set_glsl_450)
         vkd3d_spirv_build_op_ext_inst_import(&stream, builder->ext_instr_set_glsl_450, "GLSL.std.450");
@@ -5736,9 +5740,23 @@ static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *comp
         case VKD3D_SHADER_TYPE_PIXEL:
             vkd3d_spirv_set_execution_model(builder, SpvExecutionModelFragment);
             spirv_compiler_emit_execution_mode(compiler, compiler->fragment_coordinate_origin, NULL, 0);
+            if (spirv_compiler_is_target_extension_supported(compiler,
+                    VKD3D_SHADER_SPIRV_EXTENSION_KHR_SUBGROUP_UNIFORM_CONTROL_FLOW))
+            {
+                builder->uses_subgroup_uniform_control_flow = true;
+                spirv_compiler_emit_execution_mode(compiler,
+                        SpvExecutionModeSubgroupUniformControlFlowKHR, NULL, 0);
+            }
             break;
         case VKD3D_SHADER_TYPE_COMPUTE:
             vkd3d_spirv_set_execution_model(builder, SpvExecutionModelGLCompute);
+            if (spirv_compiler_is_target_extension_supported(compiler,
+                    VKD3D_SHADER_SPIRV_EXTENSION_KHR_SUBGROUP_UNIFORM_CONTROL_FLOW))
+            {
+                builder->uses_subgroup_uniform_control_flow = true;
+                spirv_compiler_emit_execution_mode(compiler,
+                        SpvExecutionModeSubgroupUniformControlFlowKHR, NULL, 0);
+            }
             break;
         default:
             ERR("Invalid shader type %#x.\n", compiler->shader_type);
