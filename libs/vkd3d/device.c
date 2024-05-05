@@ -87,6 +87,7 @@ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
     VK_EXTENSION(KHR_MAINTENANCE3, KHR_maintenance3),
     VK_EXTENSION(KHR_PUSH_DESCRIPTOR, KHR_push_descriptor),
     VK_EXTENSION(KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE, KHR_sampler_mirror_clamp_to_edge),
+    VK_EXTENSION(KHR_SHADER_MAXIMAL_RECONVERGENCE, KHR_shader_maximal_reconvergence),
     VK_EXTENSION(KHR_SHADER_SUBGROUP_UNIFORM_CONTROL_FLOW, KHR_shader_subgroup_uniform_control_flow),
     VK_EXTENSION(KHR_TIMELINE_SEMAPHORE, KHR_timeline_semaphore),
     /* EXT extensions */
@@ -820,6 +821,7 @@ struct vkd3d_physical_device_info
     VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT mutable_features;
     VkPhysicalDevice4444FormatsFeaturesEXT formats4444_features;
     VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR subgroup_uniform_control_flow_features;
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR maximal_reconvergence_features;
 
     VkPhysicalDeviceFeatures2 features2;
 };
@@ -828,6 +830,7 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
 {
     VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR *subgroup_uniform_control_flow_features;
     VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT *fragment_shader_interlock_features;
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR *maximal_reconvergence_features;
     const struct vkd3d_vk_instance_procs *vk_procs = &device->vkd3d_instance->vk_procs;
     VkPhysicalDeviceConditionalRenderingFeaturesEXT *conditional_rendering_features;
     VkPhysicalDeviceDescriptorIndexingPropertiesEXT *descriptor_indexing_properties;
@@ -869,6 +872,7 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     xfb_properties = &info->xfb_properties;
     subgroup_properties = &info->subgroup_properties;
     subgroup_uniform_control_flow_features = &info->subgroup_uniform_control_flow_features;
+    maximal_reconvergence_features = &info->maximal_reconvergence_features;
 
     info->features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
@@ -911,6 +915,9 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     subgroup_uniform_control_flow_features->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_UNIFORM_CONTROL_FLOW_FEATURES_KHR;
     if (vulkan_info->KHR_shader_subgroup_uniform_control_flow)
         vk_prepend_struct(&info->features2, subgroup_uniform_control_flow_features);
+    maximal_reconvergence_features->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR;
+    if (vulkan_info->KHR_shader_maximal_reconvergence)
+        vk_prepend_struct(&info->features2, maximal_reconvergence_features);
 
     if (vulkan_info->KHR_get_physical_device_properties2)
         VK_CALL(vkGetPhysicalDeviceFeatures2KHR(physical_device, &info->features2));
@@ -1738,6 +1745,8 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
         vulkan_info->KHR_timeline_semaphore = false;
     if (!physical_device_info->subgroup_uniform_control_flow_features.shaderSubgroupUniformControlFlow)
         vulkan_info->KHR_shader_subgroup_uniform_control_flow = false;
+    if (!physical_device_info->maximal_reconvergence_features.shaderMaximalReconvergence)
+        vulkan_info->KHR_shader_maximal_reconvergence = false;
 
     physical_device_info->formats4444_features.formatA4B4G4R4 = VK_FALSE;
 
@@ -1795,6 +1804,10 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
     if (vulkan_info->KHR_shader_subgroup_uniform_control_flow)
         vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
                 = VKD3D_SHADER_SPIRV_EXTENSION_KHR_SUBGROUP_UNIFORM_CONTROL_FLOW;
+
+    if (vulkan_info->KHR_shader_maximal_reconvergence)
+        vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
+                = VKD3D_SHADER_SPIRV_EXTENSION_KHR_MAXIMAL_RECONVERGENCE;
 
     /* Disable unused Vulkan features. */
     features->shaderTessellationAndGeometryPointSize = VK_FALSE;

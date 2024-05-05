@@ -54,7 +54,7 @@
 
 #define VKD3D_MAX_COMPATIBLE_FORMAT_COUNT 6u
 #define VKD3D_MAX_QUEUE_FAMILY_COUNT      3u
-#define VKD3D_MAX_SHADER_EXTENSIONS       6u
+#define VKD3D_MAX_SHADER_EXTENSIONS       7u
 #define VKD3D_MAX_SHADER_STAGES           5u
 #define VKD3D_MAX_VK_SYNC_OBJECTS         4u
 #define VKD3D_MAX_DEVICE_BLOCKED_QUEUES  16u
@@ -125,6 +125,7 @@ struct vkd3d_vulkan_info
     bool KHR_maintenance3;
     bool KHR_push_descriptor;
     bool KHR_sampler_mirror_clamp_to_edge;
+    bool KHR_shader_maximal_reconvergence;
     bool KHR_shader_subgroup_uniform_control_flow;
     bool KHR_timeline_semaphore;
     /* EXT device extensions */
