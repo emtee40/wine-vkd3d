@@ -675,6 +675,8 @@ static VkPrimitiveTopology vulkan_primitive_topology_from_d3d(D3D_PRIMITIVE_TOPO
 {
     switch (topology)
     {
+        case D3D_PRIMITIVE_TOPOLOGY_POINTLIST:
+            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
         default:
             fatal_error("Unhandled primitive topology %#x.\n", topology);
             /* fall through */

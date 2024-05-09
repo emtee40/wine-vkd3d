@@ -995,7 +995,9 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
 
         set_default_target(runner);
 
-        if (match_string(line, "triangle list", &line))
+        if (match_string(line, "point list", &line))
+            topology = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+        else if (match_string(line, "triangle list", &line))
             topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
         else if (match_string(line, "triangle strip", &line))
             topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;

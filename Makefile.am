@@ -185,6 +185,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/pointer-cast.shader_test \
 	tests/hlsl/pow.shader_test \
 	tests/hlsl/precise-modifier.shader_test \
+	tests/hlsl/primitive-id.shader_test \
 	tests/hlsl/rasteriser-ordered-views.shader_test \
 	tests/hlsl/rcp.shader_test \
 	tests/hlsl/reflect.shader_test \
