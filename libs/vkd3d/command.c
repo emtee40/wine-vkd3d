@@ -5558,10 +5558,132 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearUnorderedAccessViewFloat(I
     d3d12_command_list_clear_uav(list, resource_impl, view, &colour, rect_count, rects);
 }
 
-static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(ID3D12GraphicsCommandList5 *iface,
-        ID3D12Resource *resource, const D3D12_DISCARD_REGION *region)
+static void d3d12_command_list_emit_vk_transition_from_undefined(struct d3d12_command_list *list,
+        struct d3d12_resource *resource, uint32_t base_mip_level, uint32_t level_count,
+        uint32_t base_array_layer, uint32_t layer_count, VkImageLayout new_layout)
 {
-    FIXME_ONCE("iface %p, resource %p, region %p stub!\n", iface, resource, region);
+    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
+    VkImageMemoryBarrier vk_barrier;
+
+    vk_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    vk_barrier.pNext = NULL;
+    vk_barrier.srcAccessMask = VK_ACCESS_NONE;
+    vk_barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    vk_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    vk_barrier.newLayout = new_layout;
+    vk_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vk_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    vk_barrier.image = resource->u.vk_image;
+
+    vk_barrier.subresourceRange.aspectMask = resource->format->vk_aspect_mask;
+    vk_barrier.subresourceRange.baseMipLevel = base_mip_level;
+    vk_barrier.subresourceRange.levelCount = level_count;
+    vk_barrier.subresourceRange.baseArrayLayer = base_array_layer;
+    vk_barrier.subresourceRange.layerCount = layer_count;
+
+    VK_CALL(vkCmdPipelineBarrier(list->vk_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &vk_barrier));
+}
+
+static void STDMETHODCALLTYPE d3d12_command_list_DiscardResource(ID3D12GraphicsCommandList5 *iface,
+        ID3D12Resource *resource_iface, const D3D12_DISCARD_REGION *region)
+{
+    uint32_t base_mip_level, mip_level, end_mip_level, base_array_layer, end_layer, layer_count = 0;
+    struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct d3d12_resource *resource = impl_from_ID3D12Resource(resource_iface);
+    unsigned int i, miplevel_count = resource->desc.MipLevels;
+    VkImageLayout new_layout;
+
+    TRACE("iface %p, resource %p, region %p.\n", iface, resource, region);
+
+    if (region && !region->NumSubresources)
+        return;
+
+    if (list->type != D3D12_COMMAND_LIST_TYPE_DIRECT && list->type != D3D12_COMMAND_LIST_TYPE_COMPUTE)
+    {
+        WARN("Invalid command list type %u.\n", list->type);
+        return;
+    }
+
+    if (region && region->NumRects)
+    {
+        const D3D12_RECT *rects = region->pRects;
+
+        if (resource->desc.MipLevels > 1)
+        {
+            WARN("Rects supplied for texture with mip levels.\n");
+            return;
+        }
+
+        for (i = 0; i < region->NumRects; ++i)
+        {
+            if (rects[i].left || rects[i].top || rects[i].right != resource->desc.Width
+                    || rects[i].bottom != resource->desc.Height)
+            {
+                TRACE("Ignoring partial plane discard.\n");
+                return;
+            }
+        }
+    }
+
+    /* We have no layout info, but there are restrictions based on command list type. This may
+     * be the activation command after an aliasing barrier, so ignoring it requires a fixme. */
+    if (list->type == D3D12_COMMAND_LIST_TYPE_DIRECT)
+    {
+        if (resource->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        {
+            new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        else if (resource->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        {
+            new_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+        else
+        {
+            FIXME_ONCE("Cannot infer layout; ignoring discard command.\n");
+            return;
+        }
+    }
+    else if (list->type == D3D12_COMMAND_LIST_TYPE_COMPUTE)
+    {
+        if (resource->desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
+        {
+            new_layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        else
+        {
+            FIXME_ONCE("Cannot infer layout; ignoring discard command.\n");
+            return;
+        }
+    }
+
+    if (!region)
+    {
+        d3d12_command_list_emit_vk_transition_from_undefined(list, resource, 0, VK_REMAINING_MIP_LEVELS,
+                0, VK_REMAINING_ARRAY_LAYERS, new_layout);
+        return;
+    }
+
+    base_mip_level = region->FirstSubresource % miplevel_count;
+    base_array_layer = region->FirstSubresource / miplevel_count;
+    end_mip_level = (region->FirstSubresource + region->NumSubresources) % miplevel_count;
+    end_layer = (region->FirstSubresource + region->NumSubresources) / miplevel_count;
+
+    for (i = base_array_layer, mip_level = base_mip_level; i < end_layer; i += layer_count)
+    {
+        if (mip_level)
+            layer_count = 1;
+        else if (!end_mip_level)
+            layer_count = end_layer - i;
+        else
+            layer_count = max(end_layer - i - 1, 1);
+
+        d3d12_command_list_emit_vk_transition_from_undefined(list, resource, mip_level,
+                (i == end_layer - 1 && end_mip_level) ? end_mip_level : VK_REMAINING_MIP_LEVELS,
+                i, layer_count, new_layout);
+
+        mip_level = 0;
+    }
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_BeginQuery(ID3D12GraphicsCommandList5 *iface,
