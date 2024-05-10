@@ -38813,6 +38813,7 @@ static void test_aliasing_barrier(void)
     struct d3d12_resource_readback rb;
     D3D12_RESOURCE_BARRIER barrier;
     struct test_context_desc desc;
+    D3D12_DISCARD_REGION region;
     struct test_context context;
     ID3D12CommandQueue *queue;
     D3D12_HEAP_DESC heap_desc;
@@ -39063,6 +39064,11 @@ static void test_aliasing_barrier(void)
                         rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
                         rtv_desc.Format = tests[i][j].format;
                         ID3D12Device_CreateRenderTargetView(device, resources[j], &rtv_desc, rtv_handles[j]);
+                        region.NumRects = 0;
+                        region.pRects = NULL;
+                        region.FirstSubresource = 0;
+                        region.NumSubresources = 1;
+                        ID3D12GraphicsCommandList_DiscardResource(command_list, resources[j], &region);
                         ID3D12GraphicsCommandList_OMSetRenderTargets(command_list, 1, &rtv_handles[j], false, NULL);
                         ID3D12GraphicsCommandList_SetGraphicsRootSignature(command_list, context.root_signature);
                         ID3D12GraphicsCommandList_SetPipelineState(command_list, context.pipeline_state);
