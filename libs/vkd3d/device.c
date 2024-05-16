@@ -2773,7 +2773,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_cache_session_StoreValue(ID3D12ShaderCach
         return E_INVALIDARG;
     }
 
-    ret = vkd3d_shader_cache_put(session->cache, key, key_size, value, value_size);
+    ret = vkd3d_shader_cache_put(session->cache, key, key_size, value, value_size, 0);
     return hresult_from_vkd3d_result(ret);
 }
 

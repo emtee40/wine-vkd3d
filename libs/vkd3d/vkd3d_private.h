@@ -1782,12 +1782,18 @@ struct vkd3d_shader_cache_info
     uint64_t version;
 };
 
+enum vkd3d_shader_cache_put_flags
+{
+    VKD3D_PUT_REPLACE =                         0x00000001,
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_PUT_REPLACE),
+};
+
 int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
         struct vkd3d_shader_cache **cache);
 unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
 unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache);
-int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
-        const void *key, size_t key_size, const void *value, size_t value_size);
+int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, size_t key_size,
+        const void *value, size_t value_size, enum vkd3d_shader_cache_put_flags flags);
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
 void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache);

@@ -124,6 +124,12 @@ static void vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
     rb_put(&cache->tree, &e->h.hash, &e->entry);
 }
 
+static void vkd3d_shader_cache_remove_entry(struct vkd3d_shader_cache *cache,
+        struct shader_cache_entry *e)
+{
+    rb_remove(&cache->tree, &e->entry);
+}
+
 static uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size)
 {
     static const uint64_t fnv_prime = 0x00000100000001b3;
@@ -421,8 +427,8 @@ static void vkd3d_shader_cache_unlock(struct vkd3d_shader_cache *cache)
     vkd3d_mutex_unlock(&cache->lock);
 }
 
-int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
-        const void *key, size_t key_size, const void *value, size_t value_size)
+int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, size_t key_size,
+        const void *value, size_t value_size, enum vkd3d_shader_cache_put_flags flags)
 {
     struct shader_cache_entry *e;
     struct shader_cache_key k;
@@ -442,9 +448,17 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
 
     if (e)
     {
-        WARN("Key already exists, returning VKD3D_ERROR_KEY_ALREADY_EXISTS.\n");
-        ret = VKD3D_ERROR_KEY_ALREADY_EXISTS;
-        goto done;
+        if (flags & VKD3D_PUT_REPLACE)
+        {
+            vkd3d_shader_cache_remove_entry(cache, e);
+            vkd3d_free(e);
+        }
+        else
+        {
+            WARN("Key already exists, returning VKD3D_ERROR_KEY_ALREADY_EXISTS.\n");
+            ret = VKD3D_ERROR_KEY_ALREADY_EXISTS;
+            goto done;
+        }
     }
 
     e = vkd3d_malloc(sizeof(*e));
