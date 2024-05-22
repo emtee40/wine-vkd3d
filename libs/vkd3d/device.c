@@ -3009,6 +3009,7 @@ static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device9 *iface)
         vkd3d_destroy_null_resources(&device->null_resources, device);
         vkd3d_gpu_va_allocator_cleanup(&device->gpu_va_allocator);
         vkd3d_render_pass_cache_cleanup(&device->render_pass_cache, device);
+        vkd3d_root_signature_cache_cleanup(&device->root_signature_cache, device);
         d3d12_device_destroy_pipeline_cache(device);
         d3d12_device_destroy_vkd3d_queues(device);
         vkd3d_desc_object_cache_cleanup(&device->view_desc_cache);
@@ -5392,6 +5393,7 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     }
 
     vkd3d_render_pass_cache_init(&device->render_pass_cache);
+    vkd3d_root_signature_cache_init(&device->root_signature_cache);
     vkd3d_gpu_va_allocator_init(&device->gpu_va_allocator);
     vkd3d_time_domains_init(device);
 

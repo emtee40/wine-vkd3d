@@ -55,6 +55,8 @@ static ULONG STDMETHODCALLTYPE d3d12_root_signature_AddRef(ID3D12RootSignature *
     unsigned int refcount = vkd3d_atomic_increment_u32(&root_signature->refcount);
 
     TRACE("%p increasing refcount to %u.\n", root_signature, refcount);
+    if (refcount == 1)
+        d3d12_device_add_ref(root_signature->device);
 
     return refcount;
 }
@@ -116,11 +118,8 @@ static ULONG STDMETHODCALLTYPE d3d12_root_signature_Release(ID3D12RootSignature 
 
     if (!refcount)
     {
-        struct d3d12_device *device = root_signature->device;
-        vkd3d_private_store_destroy(&root_signature->private_store);
-        d3d12_root_signature_cleanup(root_signature, device);
-        vkd3d_free(root_signature);
-        d3d12_device_release(device);
+        vkd3d_private_store_wipe(&root_signature->private_store);
+        d3d12_device_release(root_signature->device);
     }
 
     return refcount;
@@ -1423,7 +1422,7 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
     binding_desc = NULL;
 
     root_signature->ID3D12RootSignature_iface.lpVtbl = &d3d12_root_signature_vtbl;
-    root_signature->refcount = 1;
+    root_signature->refcount = 0;
 
     root_signature->vk_pipeline_layout = VK_NULL_HANDLE;
     root_signature->vk_set_count = 0;
@@ -1526,8 +1525,6 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
     if (FAILED(hr = vkd3d_private_store_init(&root_signature->private_store)))
         goto fail;
 
-    d3d12_device_add_ref(device);
-
     return S_OK;
 
 fail:
@@ -1546,19 +1543,39 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
         struct vkd3d_shader_versioned_root_signature_desc vkd3d;
     } root_signature_desc;
     struct d3d12_root_signature *object;
+    struct rb_entry *entry;
+    uint64_t hash;
     HRESULT hr;
     int ret;
+
+    vkd3d_mutex_lock(&device->root_signature_cache.mutex);
+
+    hash = vkd3d_shader_cache_hash_key(bytecode, bytecode_length);
+    entry = rb_get(&device->root_signature_cache.tree, &hash);
+    if (entry)
+    {
+        object = RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+        if (object->bytecode_length == bytecode_length
+                && !memcmp(object->bytecode, bytecode, bytecode_length))
+        {
+            hr = S_OK;
+            goto unlock;
+        }
+        FIXME("Root signature hash collision.\n");
+    }
 
     if ((ret = vkd3d_parse_root_signature_v_1_0(&dxbc, &root_signature_desc.vkd3d)) < 0)
     {
         WARN("Failed to parse root signature, vkd3d result %d.\n", ret);
-        return hresult_from_vkd3d_result(ret);
+        hr = hresult_from_vkd3d_result(ret);
+        goto unlock;
     }
 
-    if (!(object = vkd3d_malloc(sizeof(*object))))
+    if (!(object = vkd3d_malloc(offsetof(struct d3d12_root_signature, bytecode[bytecode_length]))))
     {
         vkd3d_shader_free_root_signature(&root_signature_desc.vkd3d);
-        return E_OUTOFMEMORY;
+        hr = E_OUTOFMEMORY;
+        goto unlock;
     }
 
     hr = d3d12_root_signature_init(object, device, &root_signature_desc.d3d12.u.Desc_1_0);
@@ -1566,15 +1583,58 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
     if (FAILED(hr))
     {
         vkd3d_free(object);
-        return hr;
+        goto unlock;
     }
 
+    object->bytecode_length = bytecode_length;
+    memcpy(object->bytecode, bytecode, bytecode_length);
+    object->hash = hash;
+    rb_put(&device->root_signature_cache.tree, &hash, &object->cache_entry);
     TRACE("Created root signature %p.\n", object);
 
-    *root_signature = object;
-
-    return S_OK;
+unlock:
+    if (SUCCEEDED(hr))
+    {
+        *root_signature = object;
+        d3d12_root_signature_AddRef(&object->ID3D12RootSignature_iface);
+    }
+    vkd3d_mutex_unlock(&device->root_signature_cache.mutex);
+    return hr;
 }
+
+static int vkd3d_root_signature_compare_key(const void *key, const struct rb_entry *entry)
+{
+    const struct d3d12_root_signature *e;
+    const uint64_t *hash = key;
+
+    e = RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+    return vkd3d_u64_compare(*hash, e->hash);
+}
+
+void vkd3d_root_signature_cache_init(struct vkd3d_root_signature_cache *cache)
+{
+    vkd3d_mutex_init(&cache->mutex);
+    rb_init(&cache->tree, vkd3d_root_signature_compare_key);
+}
+
+static void vkd3d_root_signature_destroy_cb(struct rb_entry *entry, void *context)
+{
+    struct d3d12_root_signature *root_signature =
+            RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+    struct d3d12_device *device = context;
+
+    d3d12_root_signature_cleanup(root_signature, device);
+    vkd3d_private_store_destroy(&root_signature->private_store);
+    vkd3d_free(root_signature);
+}
+
+void vkd3d_root_signature_cache_cleanup(struct vkd3d_root_signature_cache *cache,
+        struct d3d12_device *device)
+{
+    rb_destroy(&cache->tree, vkd3d_root_signature_destroy_cb, device);
+    vkd3d_mutex_destroy(&cache->mutex);
+}
+
 
 /* vkd3d_render_pass_cache */
 struct vkd3d_render_pass_entry

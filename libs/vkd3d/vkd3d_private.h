@@ -336,7 +336,7 @@ static inline HRESULT vkd3d_private_store_init(struct vkd3d_private_store *store
     return S_OK;
 }
 
-static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store)
+static inline void vkd3d_private_store_wipe(struct vkd3d_private_store *store)
 {
     struct vkd3d_private_data *data, *cursor;
 
@@ -344,7 +344,11 @@ static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store
     {
         vkd3d_private_data_destroy(data);
     }
+}
 
+static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store)
+{
+    vkd3d_private_store_wipe(store);
     vkd3d_mutex_destroy(&store->mutex);
 }
 
@@ -979,11 +983,25 @@ struct d3d12_root_signature
     struct d3d12_device *device;
 
     struct vkd3d_private_store private_store;
+
+    struct rb_entry cache_entry;
+    uint64_t hash;
+    size_t bytecode_length;
+    uint8_t bytecode[];
+};
+
+struct vkd3d_root_signature_cache
+{
+    struct vkd3d_mutex mutex;
+    struct rb_tree tree;
 };
 
 HRESULT d3d12_root_signature_create(struct d3d12_device *device, const void *bytecode,
         size_t bytecode_length, struct d3d12_root_signature **root_signature);
 struct d3d12_root_signature *unsafe_impl_from_ID3D12RootSignature(ID3D12RootSignature *iface);
+void vkd3d_root_signature_cache_init(struct vkd3d_root_signature_cache *cache);
+void vkd3d_root_signature_cache_cleanup(struct vkd3d_root_signature_cache *cache,
+        struct d3d12_device *device);
 
 int vkd3d_parse_root_signature_v_1_0(const struct vkd3d_shader_code *dxbc,
         struct vkd3d_shader_versioned_root_signature_desc *desc);
@@ -1546,6 +1564,7 @@ struct d3d12_device
 
     struct vkd3d_mutex pipeline_cache_mutex;
     struct vkd3d_render_pass_cache render_pass_cache;
+    struct vkd3d_root_signature_cache root_signature_cache;
     VkPipelineCache vk_pipeline_cache;
 
     VkPhysicalDeviceMemoryProperties memory_properties;
@@ -1790,6 +1809,7 @@ enum vkd3d_shader_cache_put_flags
 
 int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
         struct vkd3d_shader_cache **cache);
+uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size);
 unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
 unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache);
 int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, size_t key_size,

@@ -2776,9 +2776,9 @@ static void test_create_root_signature(void)
      * heap manager reuses the allocation. */
     hr = create_root_signature(device, &root_signature_desc, &root_signature2);
     ok(hr == S_OK, "Failed to create root signature, hr %#x.\n", hr);
-    todo ok(root_signature == root_signature2, "Got different root signature pointers.\n");
+    ok(root_signature == root_signature2, "Got different root signature pointers.\n");
     refcount = ID3D12RootSignature_Release(root_signature2);
-    todo ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
+    ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
 
     hr = 0xdeadbeef;
     hr = ID3D12RootSignature_SetPrivateData(root_signature, &test_guid, sizeof(hr), &hr);
@@ -2830,9 +2830,9 @@ static void test_create_root_signature(void)
 
     hr = create_root_signature(device, &root_signature_desc, &root_signature2);
     ok(hr == S_OK, "Failed to create root signature, hr %#x.\n", hr);
-    todo ok(root_signature == root_signature2, "Got different root signature pointers.\n");
+    ok(root_signature == root_signature2, "Got different root signature pointers.\n");
     refcount = ID3D12RootSignature_Release(root_signature2);
-    todo ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
+    ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
 
     refcount = ID3D12RootSignature_Release(root_signature);
     ok(!refcount, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
