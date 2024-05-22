@@ -426,7 +426,7 @@ unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache)
     return 0;
 }
 
-static uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size)
+uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size)
 {
     static const uint64_t fnv_prime = 0x00000100000001b3;
     uint64_t hash = 0xcbf29ce484222325;
