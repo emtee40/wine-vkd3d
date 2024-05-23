@@ -1840,10 +1840,48 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
 
+/* Which data structure should we use to maintain a collection of known hashes:
+ *
+ * A hash is an uint64_t. A struct list means two pointers for an uint64_t and a ton
+ * of malloc calls. We do want to be able to delete entries though, see the comment in
+ * vkd3d_persistent_cache_open().
+ *
+ * The dynamic array avoids pointer overhead and is easy to put in/out of the cache.
+ *
+ * Considerations might change in the future. We may want to store some priority data
+ * and sort by it, which might make a tree a better choice. */
+struct vkd3d_dynamic_array
+{
+    size_t count, alloc_size;
+    uint64_t *a;
+};
+
+static inline void vkd3d_dynamic_array_put(struct vkd3d_dynamic_array *array, uint64_t value)
+{
+    if (array->count == array->alloc_size)
+    {
+        size_t new_size = max(1, array->alloc_size * 2);
+        uint64_t *n;
+
+        if (array->a)
+            n = vkd3d_realloc(array->a, sizeof(*n) * new_size);
+        else
+            n = vkd3d_malloc(sizeof(*n) * new_size);
+
+        if (!n)
+            return;
+        array->a = n;
+        array->alloc_size = new_size;
+    }
+
+    array->a[array->count++] = value;
+}
+
 struct vkd3d_cache_struct
 {
     struct vkd3d_mutex mutex;
     struct vkd3d_shader_cache *cache;
+    struct vkd3d_dynamic_array root_signatures;
 };
 
 /* FIXME: Write accessory functions
@@ -1853,5 +1891,8 @@ extern struct vkd3d_cache_struct persistent_cache;
 
 HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance);
 void vkd3d_persistent_cache_close(void);
+void vkd3d_persistent_cache_add_root_signature(const struct d3d12_root_signature *root_signature);
+
+static const char vkd3d_root_signature_index[] = "root_signature.idx";
 
 #endif  /* __VKD3D_PRIVATE_H */
