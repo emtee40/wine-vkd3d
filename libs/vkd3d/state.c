@@ -1558,6 +1558,10 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
         if (object->bytecode_length == bytecode_length
                 && !memcmp(object->bytecode, bytecode, bytecode_length))
         {
+            /* This code gets out ASAP after finding an already created
+             * root signature. We may want to add some telemetry to the cache
+             * to keep track of when objects from the cache are actually used
+             * by the application. */
             hr = S_OK;
             goto unlock;
         }
@@ -1591,9 +1595,10 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
     object->hash = hash;
     rb_put(&device->root_signature_cache.tree, &hash, &object->cache_entry);
     TRACE("Created root signature %p.\n", object);
+    vkd3d_persistent_cache_add_root_signature(object);
 
 unlock:
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr) && root_signature)
     {
         *root_signature = object;
         d3d12_root_signature_AddRef(&object->ID3D12RootSignature_iface);

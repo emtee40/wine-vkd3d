@@ -575,13 +575,18 @@ void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache)
 struct vkd3d_cache_struct persistent_cache =
 {
     VKD3D_MUTEX_INITIALIZER, NULL,
+    {0, 0, NULL},
 };
 
 HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
 {
     struct vkd3d_shader_cache_info cache_info = {0};
+    uint64_t hash, *root_signatures = NULL;
     char *cache_name, *cwd;
+    unsigned int i, count;
+    enum vkd3d_result ret;
     HRESULT hr = S_OK;
+    size_t alloc_size, size;
 
     /* FIXME: Does this use of getcwd work on Unix too? */
     cwd = getcwd(NULL, 0);
@@ -596,6 +601,7 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
     if (persistent_cache.cache)
     {
         vkd3d_shader_cache_incref(persistent_cache.cache);
+        goto out;
     }
     else if (vkd3d_shader_open_cache(&cache_info, &persistent_cache.cache))
     {
@@ -606,20 +612,126 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
             FIXME("Failed to open a dummy memory cache.\n");
             hr = E_FAIL;
         }
+        /* We won't find anything in the dummy cache. */
+        goto out;
     }
-    vkd3d_mutex_unlock(&persistent_cache.mutex);
-    vkd3d_free(cache_name);
+    else if ((ret = vkd3d_shader_cache_get(persistent_cache.cache,
+                vkd3d_root_signature_index, sizeof(vkd3d_root_signature_index), NULL, &alloc_size)))
+    {
+        /* OK if the cache is empty. Downgrade to a WARN later. */
+        FIXME("Root signature index not found.\n");
+        goto out;
+    }
+    /* We want the application to be able to create new pipelines while the cache load is running.
+     * We want to record those new and not yet cached pipelines in the cache and merge the list of
+     * pipelines. I see four options:
+     *
+     * 1: Make the root_signature_create call() add them. That won't work easily because the
+     * pipeline hash already exists in the disk cache, so root_signature_create() will get
+     * VKD3D_ERROR_KEY_ALREADY_EXISTS.
+     *
+     * 2.a: Assign the array we have here into persistent_cache.root_signatures.a. As long as this
+     * function has exclusive control over the cache this should work, but gives us no way of
+     * removing evicted hashes.
+     *
+     * 2.b: Iterate over the hashes here and add the ones we find.
+     *
+     * 3.a: Do 2.b in device_load_cache(), removing one loop over the cache. A problem with this is
+     * that device_load_cache is called for each created device, but we want to share the cache
+     * between multiple devices in the same process. So we have to make sure that hashes are copied
+     * along only the first time, otherwise we'd duplicate everything.
+     *
+     * 3.b: Do 2.a here and have device_load_cache() delete every not found entry. Deleting would
+     * need a different data structure than an array though.
+     *
+     * Right now it is #2.b
+     */
+    root_signatures = vkd3d_malloc(alloc_size);
+    if (!root_signatures)
+    {
+        hr = E_OUTOFMEMORY;
+        goto out;
+    }
+    size = alloc_size;
+    ret = vkd3d_shader_cache_get(persistent_cache.cache, vkd3d_root_signature_index,
+            sizeof(vkd3d_root_signature_index), root_signatures, &size);
+    if (ret)
+        ERR("huh fail\n");
 
+    count = size / sizeof(*root_signatures);
+    for (i = 0; i < count; ++i)
+    {
+        hash = root_signatures[i];
+
+        ret = vkd3d_shader_cache_get(persistent_cache.cache, &hash, sizeof(hash), NULL, &size);
+        if (ret == VKD3D_ERROR_NOT_FOUND)
+        {
+            /* We don't have eviction yet, so this likely indicates a bug. */
+            FIXME("Root signature with hash %#"PRIx64" was evicted.\n", hash);
+            continue;
+        }
+        else
+        {
+            TRACE("Re-add root signature %#"PRIx64".\n", hash);
+            vkd3d_dynamic_array_put(&persistent_cache.root_signatures, hash);
+        }
+    }
+    vkd3d_free(root_signatures);
+    ERR("on load %zu items in array\n", persistent_cache.root_signatures.count);
+
+out:
+    vkd3d_free(cache_name);
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
     return hr;
 }
 
 void vkd3d_persistent_cache_close(void)
 {
     unsigned int cache_ref;
+    enum vkd3d_result ret;
 
     vkd3d_mutex_lock(&persistent_cache.mutex);
+
+    /* FIXME: We don't need to close the cache here, but at this point closing
+     * it is the only way to initiate a write to disk. */
+    ERR("on close %zu items in array\n", persistent_cache.root_signatures.count);
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_root_signature_index,
+            sizeof(vkd3d_root_signature_index), persistent_cache.root_signatures.a,
+            persistent_cache.root_signatures.count * sizeof(*persistent_cache.root_signatures.a),
+            VKD3D_PUT_REPLACE);
+    if (ret)
+        ERR("Failed to store root signature index object.\n");
     cache_ref = vkd3d_shader_cache_decref(persistent_cache.cache);
     if (!cache_ref)
+    {
+        persistent_cache.root_signatures.count = 0;
         persistent_cache.cache = NULL;
+    }
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+}
+
+void vkd3d_persistent_cache_add_root_signature(const struct d3d12_root_signature *root_signature)
+{
+    enum vkd3d_result ret;
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, &root_signature->hash,
+            sizeof(root_signature->hash), root_signature->bytecode,
+            root_signature->bytecode_length, 0);
+    if (!ret)
+    {
+        vkd3d_dynamic_array_put(&persistent_cache.root_signatures, root_signature->hash);
+        TRACE("Added root signature %#"PRIx64"\n", root_signature->hash);
+    }
+    else if (ret == VKD3D_ERROR_KEY_ALREADY_EXISTS)
+    {
+        TRACE("Root signature %#"PRIx64" already stored in cache\n", root_signature->hash);
+    }
+    else
+    {
+        ERR("Unexpected error adding root signature to cache.\n");
+    }
+
     vkd3d_mutex_unlock(&persistent_cache.mutex);
 }

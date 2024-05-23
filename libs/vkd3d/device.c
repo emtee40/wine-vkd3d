@@ -5380,6 +5380,58 @@ static void *device_worker_main(void *arg)
     return NULL;
 }
 
+static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_cache *cache)
+{
+    size_t size = 0, alloc_size = 0;
+    void *dxbc = vkd3d_malloc(0);
+    enum vkd3d_result ret;
+    unsigned int i, count;
+    uint64_t hash;
+
+    /* FIXME: We don't want to keep the lock held permanently or we'd just run into
+     * the same issue shader_cache_enumerate has - being a long running operation
+     * that makes parallelism difficult. */
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+    count = persistent_cache.root_signatures.count;
+    for (i = 0; i < count; ++i)
+    {
+        /* We may want to make a copy of this array, but we need a lock for
+         * cache_get() anyway. */
+        hash = persistent_cache.root_signatures.a[i];
+
+        size = alloc_size;
+        ret = vkd3d_shader_cache_get(cache, &hash, sizeof(hash), dxbc, &size);
+        if (ret == VKD3D_ERROR_NOT_FOUND)
+        {
+            FIXME("Root signature with hash %#"PRIx64" was evicted.\n", hash);
+            continue;
+        }
+        else if (ret == VKD3D_ERROR_MORE_DATA)
+        {
+            dxbc = vkd3d_realloc(dxbc, size);
+            if (!dxbc)
+            {
+                ERR("Out of memory.\n");
+                break;
+            }
+            alloc_size = size;
+            ret = vkd3d_shader_cache_get(cache, &hash, sizeof(hash), dxbc, &size);
+            if (ret)
+                ERR("unexpected error %d\n", ret);
+        }
+        else if (ret)
+        {
+            ERR("unexpected error %d\n", ret);
+        }
+
+        vkd3d_mutex_unlock(&persistent_cache.mutex);
+        d3d12_root_signature_create(device, dxbc, size, NULL);
+        vkd3d_mutex_lock(&persistent_cache.mutex);
+    }
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+    vkd3d_free(dxbc);
+}
+
 static HRESULT d3d12_device_init(struct d3d12_device *device,
         struct vkd3d_instance *instance, const struct vkd3d_device_create_info *create_info)
 {
@@ -5455,6 +5507,8 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
 
     if ((device->parent = create_info->parent))
         IUnknown_AddRef(device->parent);
+
+    device_load_cache(device, persistent_cache.cache);
 
     return S_OK;
 
