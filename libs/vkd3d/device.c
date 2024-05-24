@@ -5403,7 +5403,8 @@ static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_c
         }
         else if (ret)
         {
-            ERR("unexpected error %d\n", ret);
+            ERR("unexpected error %d hash %#"PRIx64" idx %u\n", ret, hash, i);
+            continue;
         }
 
         vkd3d_mutex_unlock(&persistent_cache.mutex);

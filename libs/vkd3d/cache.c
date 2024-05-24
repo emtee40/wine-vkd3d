@@ -591,12 +591,13 @@ struct vkd3d_cache_struct persistent_cache =
 {
     VKD3D_MUTEX_INITIALIZER, NULL,
     {0, 0, NULL},
+    {0, 0, NULL},
 };
 
 HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
 {
     struct vkd3d_shader_cache_info cache_info = {0};
-    uint64_t hash, *root_signatures = NULL;
+    uint64_t hash, *hashes = NULL;
     char *cache_name, *cwd;
     unsigned int i, count;
     enum vkd3d_result ret;
@@ -660,21 +661,20 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
      *
      * Right now it is #2.b
      */
-    root_signatures = vkd3d_malloc(size);
-    if (!root_signatures)
+    hashes = vkd3d_malloc(size);
+    if (!hashes)
     {
-        vkd3d_mutex_unlock(&persistent_cache.mutex);
-        return E_OUTOFMEMORY;
+        goto out;
     }
     ret = vkd3d_shader_cache_get(persistent_cache.cache, vkd3d_root_signature_index,
-            sizeof(vkd3d_root_signature_index), root_signatures, &size);
+            sizeof(vkd3d_root_signature_index), hashes, &size);
     if (ret)
         ERR("huh fail\n");
 
-    count = size / sizeof(*root_signatures);
+    count = size / sizeof(*hashes);
     for (i = 0; i < count; ++i)
     {
-        hash = root_signatures[i];
+        hash = hashes[i];
 
         ret = vkd3d_shader_cache_get(persistent_cache.cache, &hash, sizeof(hash), NULL, &size);
         if (ret == VKD3D_ERROR_NOT_FOUND)
@@ -689,10 +689,50 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
             vkd3d_dynamic_array_put(&persistent_cache.root_signatures, hash);
         }
     }
-    vkd3d_free(root_signatures);
-    ERR("on load %zu items in array\n", persistent_cache.root_signatures.count);
+    ERR("on load %zu root signatures in array\n", persistent_cache.root_signatures.count);
+
+    ret = vkd3d_shader_cache_get(persistent_cache.cache,
+            vkd3d_graphics_index, sizeof(vkd3d_graphics_index), hashes, &size);
+    if (ret == VKD3D_ERROR_MORE_DATA)
+    {
+        hashes = vkd3d_realloc(hashes, size);
+        if (!hashes)
+        {
+            ERR("Out of memory\n");
+            goto out;
+        }
+        if ((ret = vkd3d_shader_cache_get(persistent_cache.cache,
+                vkd3d_graphics_index, sizeof(vkd3d_graphics_index), hashes, &size)))
+            ERR("huh?\n");
+    }
+    else if (ret && ret != VKD3D_ERROR_MORE_DATA)
+    {
+        FIXME("Graphics pipeline collection not found.\n");
+        goto out;
+    }
+
+    count = size / sizeof(*hashes);
+    for (i = 0; i < count; ++i)
+    {
+        hash = hashes[i];
+
+        ret = vkd3d_shader_cache_get(persistent_cache.cache, &hash, sizeof(hash), NULL, &size);
+        if (ret == VKD3D_ERROR_NOT_FOUND)
+        {
+            /* We don't have eviction yet, so this likely indicates a bug. */
+            FIXME("Graphics pipeline with hash %#"PRIx64" was evicted.\n", hash);
+            continue;
+        }
+        else
+        {
+            TRACE("Re-add graphics pipeline %#"PRIx64".\n", hash);
+            vkd3d_dynamic_array_put(&persistent_cache.graphics_pipelines, hash);
+        }
+    }
+    ERR("on load %zu graphics pipelines in array\n", persistent_cache.graphics_pipelines.count);
 
 out:
+    vkd3d_free(hashes);
     vkd3d_free(cache_name);
     vkd3d_mutex_unlock(&persistent_cache.mutex);
     return S_OK;
@@ -707,17 +747,27 @@ void vkd3d_persistent_cache_close(void)
 
     /* FIXME: We don't need to close the cache here, but at this point closing
      * it is the only way to initiate a write to disk. */
-    ERR("on close %zu items in array\n", persistent_cache.root_signatures.count);
+    ERR("on close %zu root sigs in array\n", persistent_cache.root_signatures.count);
     ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_root_signature_index,
             sizeof(vkd3d_root_signature_index), persistent_cache.root_signatures.a,
             persistent_cache.root_signatures.count * sizeof(*persistent_cache.root_signatures.a),
             VKD3D_PUT_REPLACE);
     if (ret)
         ERR("Failed to store root signature index object.\n");
+
+    ERR("on close %zu gfx pipes in array\n", persistent_cache.graphics_pipelines.count);
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_graphics_index,
+            sizeof(vkd3d_graphics_index), persistent_cache.graphics_pipelines.a,
+            persistent_cache.graphics_pipelines.count * sizeof(*persistent_cache.graphics_pipelines.a),
+            VKD3D_PUT_REPLACE);
+    if (ret)
+        ERR("Failed to store root signature index object.\n");
+
     cache_ref = vkd3d_shader_cache_decref(persistent_cache.cache);
     if (!cache_ref)
     {
         persistent_cache.root_signatures.count = 0;
+        persistent_cache.graphics_pipelines.count = 0;
         persistent_cache.cache = NULL;
     }
     vkd3d_mutex_unlock(&persistent_cache.mutex);
@@ -748,3 +798,30 @@ void vkd3d_persistent_cache_add_root_signature(const struct d3d12_root_signature
 
     vkd3d_mutex_unlock(&persistent_cache.mutex);
 }
+
+void vkd3d_persistent_cache_add_graphics_pipeline(const struct vkd3d_graphics_pipeline_entry *entry)
+{
+    enum vkd3d_result ret;
+    uint64_t hash = vkd3d_shader_cache_hash_key(entry, sizeof(*entry));
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, &hash,
+            sizeof(hash), entry, sizeof(*entry), 0);
+    if (!ret)
+    {
+        vkd3d_dynamic_array_put(&persistent_cache.graphics_pipelines, hash);
+        TRACE("Added graphics pipeline %#"PRIx64"\n", hash);
+    }
+    else if (ret == VKD3D_ERROR_KEY_ALREADY_EXISTS)
+    {
+        TRACE("Graphics pipeline %#"PRIx64" already stored in cache\n", hash);
+    }
+    else
+    {
+        ERR("Unexpected error adding root signature to cache.\n");
+    }
+
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+}
+
