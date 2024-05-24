@@ -8205,7 +8205,7 @@ static enum vkd3d_result sm6_function_emit_blocks(const struct sm6_function *fun
     struct vsir_program *program = sm6->p.program;
     unsigned int i;
 
-    program->block_count = function->block_count;
+    program->block_count = max(program->block_count, function->block_count);
 
     for (i = 0; i < function->block_count; ++i)
     {

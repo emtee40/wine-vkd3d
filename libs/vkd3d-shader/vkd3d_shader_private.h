@@ -1405,7 +1405,7 @@ struct vsir_program
     unsigned int input_control_point_count, output_control_point_count;
     struct vsir_thread_group_size thread_group_size;
     unsigned int flat_constant_count[3];
-    unsigned int block_count;
+    unsigned int block_count; /* maximum block count in any function */
     unsigned int temp_count;
     unsigned int ssa_count;
     bool use_vocp;

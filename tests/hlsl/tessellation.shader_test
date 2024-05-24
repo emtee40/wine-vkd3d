@@ -170,8 +170,8 @@ void main(patch_constant_data input,
 
 [test]
 uniform 0 uint 0
-todo draw 3 control point patch list 3
+todo(sm<6) draw 3 control point patch list 3
 probe (0, 0, 640, 480) rgba (0.75, 0.5, 0.0, 1.0)
 uniform 0 uint 1
-todo draw 3 control point patch list 3
+todo(sm<6) draw 3 control point patch list 3
 probe (0, 0, 640, 480) rgba (0.25, 0.25, 0.0, 1.0)

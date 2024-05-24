@@ -3713,8 +3713,8 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
         size_t *pos)
 {
     struct vsir_block *current_block = NULL;
+    size_t i, defined_block_count = 0;
     enum vkd3d_result ret;
-    size_t i;
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->message_context = message_context;
@@ -3756,6 +3756,7 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
                 current_block->begin = &program->instructions.elements[i + 1];
                 if (!cfg->entry)
                     cfg->entry = current_block;
+                ++defined_block_count;
                 break;
             }
 
@@ -3783,6 +3784,8 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
 
     *pos = i;
     cfg->function_end = *pos;
+    /* program->block_count is the max in any function. Set the count for this function. */
+    cfg->block_count = defined_block_count;
 
     for (i = 0; i < cfg->block_count; ++i)
     {
