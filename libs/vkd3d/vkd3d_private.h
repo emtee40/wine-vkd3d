@@ -53,6 +53,57 @@
  * implementation detail. */
 #define VKD3D_SHADER_CACHE_OBJ_VERSION 1ull
 
+struct vkd3d_input_layout_element_cache
+{
+    UINT semantic_name_size;
+    UINT semantic_index;
+    DXGI_FORMAT format;
+    UINT input_slot;
+    UINT aligned_byte_offset;
+    D3D12_INPUT_CLASSIFICATION input_slot_class;
+    UINT instance_data_step_rate;
+};
+
+struct vkd3d_so_declaration_cache_entry
+{
+    UINT stream;
+    UINT semantic_name_size;
+    UINT semantic_index;
+    BYTE start_component;
+    BYTE component_count;
+    BYTE output_slot;
+};
+
+struct vkd3d_shader_cache_pipeline_state
+{
+    uint64_t root_signature;
+    uint32_t cs_size, vs_size, ps_size, ds_size, hs_size, gs_size;
+    uint32_t so_entries, so_strides;
+    uint32_t so_RasterizedStream;
+    uint32_t input_layout_elements;
+    D3D12_BLEND_DESC blend_state;
+    UINT sample_mask;
+    D3D12_RASTERIZER_DESC rasterizer_state;
+    D3D12_DEPTH_STENCIL_DESC1 depth_stencil_state;
+    /* Input layout is appended */
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE strip_cut_value;
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_topology_type;
+    struct D3D12_RT_FORMAT_ARRAY rtv_formats;
+    DXGI_FORMAT dsv_format;
+    DXGI_SAMPLE_DESC sample_desc;
+    UINT node_mask;
+    D3D12_PIPELINE_STATE_FLAGS flags;
+    uint8_t data[1];
+};
+
+struct vkd3d_graphics_pipeline_entry
+{
+    uint64_t state;
+    D3D12_PRIMITIVE_TOPOLOGY topology;
+    VkFormat dsv_format;
+    uint32_t strides[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+};
+
 /* End shader data structures */
 
 #define VK_CALL(f) (vk_procs->f)
@@ -1087,6 +1138,7 @@ struct d3d12_pipeline_state
         struct d3d12_compute_pipeline_state compute;
     } u;
     VkPipelineBindPoint vk_bind_point;
+    uint64_t state_hash;
 
     struct d3d12_pipeline_uav_counter_state uav_counters;
 
@@ -1882,6 +1934,7 @@ struct vkd3d_cache_struct
     struct vkd3d_mutex mutex;
     struct vkd3d_shader_cache *cache;
     struct vkd3d_dynamic_array root_signatures;
+    struct vkd3d_dynamic_array graphics_pipelines;
 };
 
 /* FIXME: Write accessory functions
@@ -1892,7 +1945,9 @@ extern struct vkd3d_cache_struct persistent_cache;
 HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance);
 void vkd3d_persistent_cache_close(void);
 void vkd3d_persistent_cache_add_root_signature(const struct d3d12_root_signature *root_signature);
+void vkd3d_persistent_cache_add_graphics_pipeline(const struct vkd3d_graphics_pipeline_entry *e);
 
 static const char vkd3d_root_signature_index[] = "root_signature.idx";
+static const char vkd3d_graphics_index[] = "graphics.idx";
 
 #endif  /* __VKD3D_PRIVATE_H */

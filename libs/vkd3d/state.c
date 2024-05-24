@@ -2489,6 +2489,135 @@ static HRESULT d3d12_pipeline_state_find_and_init_uav_counters(struct d3d12_pipe
     return hr;
 }
 
+static struct vkd3d_shader_cache_pipeline_state *vkd3d_cache_pipeline_from_d3d(
+         const struct d3d12_pipeline_state_desc *desc,
+         const struct d3d12_root_signature *root_signature, uint32_t *entry_size)
+{
+    struct vkd3d_shader_cache_pipeline_state *entry;
+    uint32_t size, pos = 0, i;
+
+    size = desc->cs.BytecodeLength;
+    size += desc->vs.BytecodeLength;
+    size += desc->ps.BytecodeLength;
+    size += desc->ds.BytecodeLength;
+    size += desc->hs.BytecodeLength;
+    size += desc->gs.BytecodeLength;
+    size += desc->stream_output.NumEntries * sizeof(struct vkd3d_so_declaration_cache_entry);
+    size += desc->stream_output.NumStrides * sizeof(*desc->stream_output.pBufferStrides);
+    /* FIXME: Dynamically handle semantic strings */
+    size += desc->input_layout.NumElements * sizeof(struct vkd3d_input_layout_element_cache);
+
+    for (i = 0; i < desc->stream_output.NumEntries; ++i)
+        size += strlen(desc->stream_output.pSODeclaration[i].SemanticName) + 1;
+    for (i = 0; i < desc->input_layout.NumElements; ++i)
+        size += strlen(desc->input_layout.pInputElementDescs[i].SemanticName) + 1;
+
+    *entry_size = offsetof(struct vkd3d_shader_cache_pipeline_state, data[size]);
+    entry = vkd3d_calloc(1, *entry_size);
+
+    entry->root_signature = root_signature->hash;
+
+    entry->cs_size = desc->cs.BytecodeLength;
+    if (entry->cs_size)
+    {
+        memcpy(entry->data + pos, desc->cs.pShaderBytecode, entry->cs_size);
+        pos += entry->cs_size;
+    }
+
+    entry->vs_size = desc->vs.BytecodeLength;
+    if (entry->vs_size)
+    {
+        memcpy(entry->data + pos, desc->vs.pShaderBytecode, entry->vs_size);
+        pos += entry->vs_size;
+    }
+
+    entry->ps_size = desc->ps.BytecodeLength;
+    if (entry->ps_size)
+    {
+        memcpy(entry->data + pos, desc->ps.pShaderBytecode, entry->ps_size);
+        pos += entry->ps_size;
+    }
+
+    entry->ds_size = desc->ds.BytecodeLength;
+    if (entry->ds_size)
+    {
+        memcpy(entry->data + pos, desc->ds.pShaderBytecode, entry->ds_size);
+        pos += entry->ds_size;
+    }
+
+    entry->hs_size = desc->hs.BytecodeLength;
+    if (entry->hs_size)
+    {
+        memcpy(entry->data + pos, desc->hs.pShaderBytecode, entry->hs_size);
+        pos += entry->hs_size;
+    }
+
+    entry->gs_size = desc->gs.BytecodeLength;
+    if (entry->gs_size)
+    {
+        memcpy(entry->data + pos, desc->gs.pShaderBytecode, entry->gs_size);
+        pos += entry->gs_size;
+    }
+
+    entry->so_entries = desc->stream_output.NumEntries;
+    for (i = 0; i < entry->so_entries; ++i)
+    {
+        struct vkd3d_so_declaration_cache_entry *e = (void *)(entry->data + pos);
+        pos += sizeof(*e);
+        e->stream = desc->stream_output.pSODeclaration[i].Stream;
+        e->semantic_name_size = strlen(desc->stream_output.pSODeclaration[i].SemanticName) + 1;
+        memcpy(entry->data + pos, desc->stream_output.pSODeclaration[i].SemanticName,
+                e->semantic_name_size);
+        pos += e->semantic_name_size;
+        e->semantic_index = desc->stream_output.pSODeclaration[i].SemanticIndex;
+        e->start_component = desc->stream_output.pSODeclaration[i].StartComponent;
+        e->component_count = desc->stream_output.pSODeclaration[i].ComponentCount;
+        e->output_slot = desc->stream_output.pSODeclaration[i].OutputSlot;
+    }
+    entry->so_strides = desc->stream_output.NumStrides;
+    if (entry->so_strides)
+    {
+        memcpy(entry->data + pos, desc->stream_output.pBufferStrides,
+                sizeof(*desc->stream_output.pBufferStrides) * entry->so_strides);
+        pos += sizeof(*desc->stream_output.pBufferStrides) * entry->so_strides;
+    }
+
+    entry->input_layout_elements = desc->input_layout.NumElements;
+    for (i = 0; i < entry->input_layout_elements; ++i)
+    {
+        struct vkd3d_input_layout_element_cache *e = (void *)(entry->data + pos);
+        pos += sizeof(*e);
+        e->semantic_name_size = strlen(desc->input_layout.pInputElementDescs[i].SemanticName) + 1;
+        memcpy(entry->data + pos, desc->input_layout.pInputElementDescs[i].SemanticName,
+                e->semantic_name_size);
+        pos += e->semantic_name_size;
+        e->semantic_index = desc->input_layout.pInputElementDescs[i].SemanticIndex;
+        e->format = desc->input_layout.pInputElementDescs[i].Format;
+        e->input_slot = desc->input_layout.pInputElementDescs[i].InputSlot;
+        e->aligned_byte_offset = desc->input_layout.pInputElementDescs[i].AlignedByteOffset;
+        e->input_slot_class = desc->input_layout.pInputElementDescs[i].InputSlotClass;
+        e->instance_data_step_rate = desc->input_layout.pInputElementDescs[i].InstanceDataStepRate;
+
+        if (strlen(desc->input_layout.pInputElementDescs[i].SemanticName) > 31)
+            FIXME("Input semantic name too long\n");
+
+    }
+
+    entry->blend_state = desc->blend_state;
+    entry->sample_mask = desc->sample_mask;
+    entry->rasterizer_state = desc->rasterizer_state;
+    entry->depth_stencil_state = desc->depth_stencil_state;
+    entry->strip_cut_value = desc->strip_cut_value;
+    entry->primitive_topology_type = desc->primitive_topology_type;
+    entry->rtv_formats = desc->rtv_formats;
+    entry->dsv_format = desc->dsv_format;
+    entry->sample_desc = desc->sample_desc;
+    entry->node_mask = desc->node_mask;
+    entry->flags = desc->flags;
+
+    return entry;
+}
+
 static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
 {
@@ -3069,6 +3198,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     uint32_t aligned_offsets[D3D12_VS_INPUT_REGISTER_COUNT];
     struct vkd3d_shader_descriptor_offset_info offset_info;
     struct vkd3d_shader_parameter ps_shader_parameters[1];
+    struct vkd3d_shader_cache_pipeline_state *cache_entry;
     struct vkd3d_shader_transform_feedback_info xfb_info;
     struct vkd3d_shader_spirv_target_info ps_target_info;
     struct vkd3d_shader_interface_info shader_interface;
@@ -3081,6 +3211,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     const struct vkd3d_format *format;
     unsigned int instance_divisor;
     VkVertexInputRate input_rate;
+    uint32_t cache_entry_size;
     unsigned int i, j;
     size_t rt_count;
     uint32_t mask;
@@ -3587,6 +3718,17 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     state->implicit_root_signature = NULL;
     d3d12_device_add_ref(state->device = device);
 
+    cache_entry = vkd3d_cache_pipeline_from_d3d(desc, root_signature, &cache_entry_size);
+    if (cache_entry)
+    {
+        uint64_t hash;
+        hash = vkd3d_shader_cache_hash_key(cache_entry, cache_entry_size);
+        vkd3d_shader_cache_put(persistent_cache.cache, &hash, sizeof(hash),
+                cache_entry, cache_entry_size, 0);
+        vkd3d_free(cache_entry);
+        state->state_hash = hash;
+    }
+
     return S_OK;
 
 fail:
@@ -3807,6 +3949,7 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
     struct d3d12_graphics_pipeline_state *graphics = &state->u.graphics;
     VkPipelineVertexInputDivisorStateCreateInfoEXT input_divisor_info;
     VkPipelineTessellationStateCreateInfo tessellation_info;
+    struct vkd3d_graphics_pipeline_entry cache_entry = {0};
     VkPipelineVertexInputStateCreateInfo input_desc;
     VkPipelineInputAssemblyStateCreateInfo ia_desc;
     VkPipelineColorBlendStateCreateInfo blend_desc;
@@ -3873,11 +4016,16 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
         b->inputRate = graphics->input_rates[binding];
 
         pipeline_key.strides[binding_count] = strides[binding];
+        cache_entry.strides[binding] = strides[binding];
 
         ++binding_count;
     }
 
     pipeline_key.dsv_format = dsv_format;
+
+    cache_entry.state = state->state_hash;
+    cache_entry.topology = topology;
+    cache_entry.dsv_format = dsv_format;
 
     if ((vk_pipeline = d3d12_pipeline_state_find_compiled_pipeline(state, &pipeline_key, vk_render_pass)))
         return vk_pipeline;
@@ -3969,6 +4117,8 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
         WARN("Failed to create Vulkan graphics pipeline, vr %d.\n", vr);
         return VK_NULL_HANDLE;
     }
+
+    vkd3d_persistent_cache_add_graphics_pipeline(&cache_entry);
 
     if (d3d12_pipeline_state_put_pipeline_to_cache(state, &pipeline_key, vk_pipeline, pipeline_desc.renderPass))
         return vk_pipeline;
