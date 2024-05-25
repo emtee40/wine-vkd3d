@@ -1066,6 +1066,8 @@ struct d3d12_root_signature *unsafe_impl_from_ID3D12RootSignature(ID3D12RootSign
 void vkd3d_root_signature_cache_init(struct vkd3d_root_signature_cache *cache);
 void vkd3d_root_signature_cache_cleanup(struct vkd3d_root_signature_cache *cache,
         struct d3d12_device *device);
+struct d3d12_root_signature *d3d12_root_signature_get(const struct vkd3d_root_signature_cache *c,
+        uint64_t hash);
 
 int vkd3d_parse_root_signature_v_1_0(const struct vkd3d_shader_code *dxbc,
         struct vkd3d_shader_versioned_root_signature_desc *desc);
@@ -1200,6 +1202,8 @@ HRESULT d3d12_pipeline_state_create_compute(struct d3d12_device *device,
         const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, struct d3d12_pipeline_state **state);
 HRESULT d3d12_pipeline_state_create_graphics(struct d3d12_device *device,
         const D3D12_GRAPHICS_PIPELINE_STATE_DESC *desc, struct d3d12_pipeline_state **state);
+HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
+        struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc);
 HRESULT d3d12_pipeline_state_create(struct d3d12_device *device,
         const D3D12_PIPELINE_STATE_STREAM_DESC *desc, struct d3d12_pipeline_state **state);
 VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_state *state,

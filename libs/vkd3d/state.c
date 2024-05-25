@@ -1533,6 +1533,16 @@ fail:
     return hr;
 }
 
+struct d3d12_root_signature *d3d12_root_signature_get(const struct vkd3d_root_signature_cache *c,
+        uint64_t hash)
+{
+    struct rb_entry *entry;
+    entry = rb_get(&c->tree, &hash);
+    if (!entry)
+        return NULL;
+    return RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+}
+
 HRESULT d3d12_root_signature_create(struct d3d12_device *device,
         const void *bytecode, size_t bytecode_length, struct d3d12_root_signature **root_signature)
 {
@@ -1543,7 +1553,6 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
         struct vkd3d_shader_versioned_root_signature_desc vkd3d;
     } root_signature_desc;
     struct d3d12_root_signature *object;
-    struct rb_entry *entry;
     uint64_t hash;
     HRESULT hr;
     int ret;
@@ -1551,10 +1560,9 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
     vkd3d_mutex_lock(&device->root_signature_cache.mutex);
 
     hash = vkd3d_shader_cache_hash_key(bytecode, bytecode_length);
-    entry = rb_get(&device->root_signature_cache.tree, &hash);
-    if (entry)
+    object = d3d12_root_signature_get(&device->root_signature_cache, hash);
+    if (object)
     {
-        object = RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
         if (object->bytecode_length == bytecode_length
                 && !memcmp(object->bytecode, bytecode, bytecode_length))
         {
@@ -3184,7 +3192,7 @@ static VkLogicOp vk_logic_op_from_d3d12(D3D12_LOGIC_OP op)
     }
 }
 
-static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
+HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
 {
     unsigned int ps_output_swizzle[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
