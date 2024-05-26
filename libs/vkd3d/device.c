@@ -5440,27 +5440,192 @@ static void device_load_cache_rs(struct d3d12_device *device, struct vkd3d_shade
     vkd3d_free(dxbc);
 }
 
-static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shader_cache *cache)
+static struct d3d12_pipeline_state *device_load_cache_state(struct d3d12_device *device,
+        struct vkd3d_shader_cache *cache, uint64_t hash, VkPipelineBindPoint bind_point)
 {
     struct vkd3d_shader_cache_pipeline_state *s = NULL;
     struct d3d12_root_signature *d3d12_root_sig;
-    struct vkd3d_graphics_pipeline_entry gfx_p;
     D3D12_INPUT_ELEMENT_DESC *il_element = NULL;
     D3D12_SO_DECLARATION_ENTRY *so_decl = NULL;
+    struct d3d12_pipeline_state *object = NULL;
     struct d3d12_pipeline_state_desc desc;
+    enum vkd3d_result ret;
+    size_t size, i, pos;
+    HRESULT hr;
+
+    ret = vkd3d_shader_cache_get(cache, &hash, sizeof(hash),
+            NULL, &size);
+    if (ret)
+    {
+        /* Not finding the graphics state referenced by a pipeline or not finding
+         * the root signature referenced by a graphics / compute state is valid.
+         * It could either have been evicted from cache or not written due to lock
+         * contention.
+         *
+         * That said, for now I want to see this kind of info because it *may*
+         * indicate a bug after all. Downgrade it to a WARN eventually.
+         *
+         * An idea to think about is a run-time configuration option that makes
+         * vkd3d_shader_cache_trylock() wait. If we want to generate a pre-seeded
+         * cache file we care about that cache to be complete and not about frame
+         * drops during cache creation. */
+        FIXME("Did not find pipeline state %#"PRIx64", %d.\n", hash, ret);
+        return NULL;
+    }
+
+    s = vkd3d_malloc(size);
+    if (!s)
+        return NULL;
+    ret = vkd3d_shader_cache_get(cache, &hash, sizeof(hash), s, &size);
+    if (ret)
+        ERR("vkd3d_shader_cache_get failed.\n");
+
+    vkd3d_mutex_unlock(&persistent_cache.mutex); //UGLY!!!
+
+    vkd3d_mutex_lock(&device->root_signature_cache.mutex);
+    d3d12_root_sig = d3d12_root_signature_get(&device->root_signature_cache, s->root_signature);
+    vkd3d_mutex_unlock(&device->root_signature_cache.mutex);
+    if (!d3d12_root_sig)
+    {
+        FIXME("Did not find created root signature with hash %#"PRIx64".\n",
+                s->root_signature);
+        goto out;
+    }
+
+    memset(&desc, 0, sizeof(desc));
+    desc.root_signature = &d3d12_root_sig->ID3D12RootSignature_iface;
+
+    desc.cs.BytecodeLength = s->cs_size;
+    desc.cs.pShaderBytecode = s->cs_size ? s->data : NULL;
+    pos = s->cs_size;
+    desc.vs.BytecodeLength = s->vs_size;
+    desc.vs.pShaderBytecode = s->vs_size ? s->data + pos : NULL;
+    pos += s->vs_size;
+    desc.ps.BytecodeLength = s->ps_size;
+    desc.ps.pShaderBytecode = s->ps_size ? s->data + pos : NULL;
+    pos += s->ps_size;
+    desc.ds.BytecodeLength = s->ds_size;
+    desc.ds.pShaderBytecode = s->ds_size ? s->data + pos : NULL;
+    pos += s->ds_size;
+    desc.hs.BytecodeLength = s->hs_size;
+    desc.hs.pShaderBytecode = s->hs_size ? s->data + pos : NULL;
+    pos += s->hs_size;
+    desc.gs.BytecodeLength = s->gs_size;
+    desc.gs.pShaderBytecode = s->gs_size ? s->data + pos : NULL;
+    pos += s->gs_size;
+
+    desc.stream_output.NumEntries = s->so_entries;
+    if (s->so_entries)
+    {
+        so_decl = vkd3d_malloc(sizeof(*so_decl) * s->so_entries);
+        if (!so_decl)
+            goto out;
+
+        for (i = 0; i < s->so_entries; ++i)
+        {
+            struct vkd3d_so_declaration_cache_entry *sod = (void *)(s->data + pos);
+            pos += sizeof(*sod);
+            so_decl[i].Stream = sod->stream;
+            so_decl[i].SemanticName = (char *)(s->data + pos);
+            pos += sod->semantic_name_size;
+            so_decl[i].SemanticIndex = sod->semantic_index;
+            so_decl[i].StartComponent = sod->start_component;
+            so_decl[i].ComponentCount = sod->component_count;
+            so_decl[i].OutputSlot = sod->output_slot;
+        }
+        desc.stream_output.pSODeclaration = so_decl;
+    }
+    desc.stream_output.NumStrides = s->so_strides;
+    desc.stream_output.pBufferStrides = (void *)(s->data + pos);
+    pos += s->so_strides * sizeof(*desc.stream_output.pBufferStrides);
+    desc.stream_output.RasterizedStream = s->so_RasterizedStream;
+
+    desc.blend_state = s->blend_state;
+    desc.sample_mask = s->sample_mask;
+    desc.rasterizer_state = s->rasterizer_state;
+    desc.depth_stencil_state = s->depth_stencil_state;
+
+    desc.input_layout.NumElements = s->input_layout_elements;
+    if (s->input_layout_elements)
+    {
+        il_element = vkd3d_malloc(sizeof(*il_element) * s->input_layout_elements);
+        if (!il_element)
+            goto out;
+
+        for (i = 0; i < s->input_layout_elements; ++i)
+        {
+            struct vkd3d_input_layout_element_cache *ile = (void *)(s->data + pos);
+            pos += sizeof(*ile);
+            il_element[i].SemanticName = (char *)(s->data + pos);
+            pos += ile->semantic_name_size;
+            il_element[i].SemanticIndex = ile->semantic_index;
+            il_element[i].Format = ile->format;
+            il_element[i].InputSlot = ile->input_slot;
+            il_element[i].AlignedByteOffset = ile->aligned_byte_offset;
+            il_element[i].InputSlotClass = ile->input_slot_class;
+            il_element[i].InstanceDataStepRate = ile->instance_data_step_rate;
+        }
+        desc.input_layout.pInputElementDescs = il_element;
+    }
+
+    desc.strip_cut_value = s->strip_cut_value;
+    desc.primitive_topology_type = s->primitive_topology_type;
+    desc.rtv_formats = s->rtv_formats;
+    desc.dsv_format = s->dsv_format;
+    desc.sample_desc = s->sample_desc;
+    desc.node_mask = s->node_mask;
+    desc.flags = s->flags;
+
+    if (!(object = vkd3d_malloc(sizeof(*object))))
+    {
+        goto out;
+    }
+
+    /* We're happy with just creating and destroying it for now. It will feed the
+     * vulkan pipeline cache, which should re-use the pipeline when the game creates it
+     * for actual use later.
+     *
+     * FIXME: The manipulation of the device refcount in init() and Release() makes it
+     * unsafe to move this function to a separate thread. We might hold and release the
+     * last reference to the device. */
+    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS)
+    {
+        hr = d3d12_pipeline_state_init_graphics(object, device, &desc);
+    }
+    else
+    {
+        hr = d3d12_pipeline_state_init_compute(object, device, &desc);
+    }
+
+    if (FAILED(hr))
+    {
+        vkd3d_free(object);
+        object = NULL;
+    }
+
+out:
+    vkd3d_mutex_lock(&persistent_cache.mutex); // UGLY
+    vkd3d_free(s);
+    vkd3d_free(so_decl);
+    vkd3d_free(il_element);
+    return object;
+}
+
+static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shader_cache *cache)
+{
+    struct vkd3d_graphics_pipeline_entry gfx_p;
     struct d3d12_pipeline_state *object;
-    size_t size, pos, count, i, j;
+    size_t size, count, i;
     enum vkd3d_result ret;
     uint64_t hash;
-    HRESULT hr;
 
     vkd3d_mutex_lock(&persistent_cache.mutex);
     count = persistent_cache.graphics_pipelines.count;
-    for (j = 0; j < count; ++j)
+    for (i = 0; i < count; ++i)
     {
         /* We may want to make a copy of this array, but we need a lock for
          * cache_get() anyway. */
-        hash = persistent_cache.graphics_pipelines.a[j];
+        hash = persistent_cache.graphics_pipelines.a[i];
 
         size = sizeof(gfx_p);
         ret = vkd3d_shader_cache_get(cache, &hash, sizeof(hash), &gfx_p, &size);
@@ -5471,144 +5636,12 @@ static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shad
         }
         else if (ret)
         {
-            ERR("unexpected error %d hash %#"PRIx64" idx %zu\n", ret, hash, j);
+            ERR("unexpected error %d hash %#"PRIx64" idx %zu\n", ret, hash, i);
             continue;
         }
 
-        ret = vkd3d_shader_cache_get(cache, &gfx_p.state, sizeof(gfx_p.state),
-                NULL, &size);
-        if (ret)
-        {
-            /* Not finding the graphics state referenced by a pipeline or not finding
-             * the root signature referenced by a graphics / compute state is valid.
-             * It could either have been evicted from cache or not written due to lock
-             * contention.
-             *
-             * That said, for now I want to see this kind of info because it *may*
-             * indicate a bug after all. Downgrade it to a WARN eventually.
-             *
-             * An idea to think about is a run-time configuration option that makes
-             * vkd3d_shader_cache_trylock() wait. If we want to generate a pre-seeded
-             * cache file we care about that cache to be complete and not about frame
-             * drops during cache creation. */
-            FIXME("Did not find graphics state %#"PRIx64", %d.\n", gfx_p.state, ret);
-            continue;
-        }
-
-        s = vkd3d_malloc(size);
-        if (!s)
-            break;
-        ret = vkd3d_shader_cache_get(cache, &gfx_p.state, sizeof(gfx_p.state), s, &size);
-        if (ret)
-            ERR("vkd3d_shader_cache_get failed.\n");
-
-        vkd3d_mutex_unlock(&persistent_cache.mutex); // UGLY
-
-        vkd3d_mutex_lock(&device->root_signature_cache.mutex);
-        d3d12_root_sig = d3d12_root_signature_get(&device->root_signature_cache, s->root_signature);
-        vkd3d_mutex_unlock(&device->root_signature_cache.mutex);
-        if (!d3d12_root_sig)
-        {
-            FIXME("Did not find created root signature with hash %#"PRIx64".\n",
-                    s->root_signature);
-            vkd3d_free(s);
-            vkd3d_mutex_lock(&persistent_cache.mutex);
-            continue;
-        }
-
-        memset(&desc, 0, sizeof(desc));
-        desc.root_signature = &d3d12_root_sig->ID3D12RootSignature_iface;
-
-        desc.vs.BytecodeLength = s->vs_size;
-        desc.vs.pShaderBytecode = s->vs_size ? s->data : NULL;
-        pos = s->vs_size;
-        desc.ps.BytecodeLength = s->ps_size;
-        desc.ps.pShaderBytecode = s->ps_size ? s->data + pos : NULL;
-        pos += s->ps_size;
-        desc.ds.BytecodeLength = s->ds_size;
-        desc.ds.pShaderBytecode = s->ds_size ? s->data + pos : NULL;
-        pos += s->ds_size;
-        desc.hs.BytecodeLength = s->hs_size;
-        desc.hs.pShaderBytecode = s->hs_size ? s->data + pos : NULL;
-        pos += s->hs_size;
-        desc.gs.BytecodeLength = s->gs_size;
-        desc.gs.pShaderBytecode = s->gs_size ? s->data + pos : NULL;
-        pos += s->gs_size;
-
-        desc.stream_output.NumEntries = s->so_entries;
-        if (s->so_entries)
-        {
-            so_decl = vkd3d_malloc(sizeof(*so_decl) * s->so_entries);
-            if (!so_decl)
-            {
-                vkd3d_mutex_lock(&persistent_cache.mutex);
-                continue;
-            }
-
-            for (i = 0; i < s->so_entries; ++i)
-            {
-                struct vkd3d_so_declaration_cache_entry *sod = (void *)(s->data + pos);
-                pos += sizeof(*sod);
-                so_decl[i].Stream = sod->stream;
-                so_decl[i].SemanticName = (char *)(s->data + pos);
-                pos += sod->semantic_name_size;
-                so_decl[i].SemanticIndex = sod->semantic_index;
-                so_decl[i].StartComponent = sod->start_component;
-                so_decl[i].ComponentCount = sod->component_count;
-                so_decl[i].OutputSlot = sod->output_slot;
-            }
-            desc.stream_output.pSODeclaration = so_decl;
-        }
-        desc.stream_output.NumStrides = s->so_strides;
-        desc.stream_output.pBufferStrides = (void *)(s->data + pos);
-        pos += s->so_strides * sizeof(*desc.stream_output.pBufferStrides);
-        desc.stream_output.RasterizedStream = s->so_RasterizedStream;
-
-        desc.blend_state = s->blend_state;
-        desc.sample_mask = s->sample_mask;
-        desc.rasterizer_state = s->rasterizer_state;
-        desc.depth_stencil_state = s->depth_stencil_state;
-
-        desc.input_layout.NumElements = s->input_layout_elements;
-        if (s->input_layout_elements)
-        {
-            il_element = vkd3d_malloc(sizeof(*il_element) * s->input_layout_elements);
-            if (!il_element)
-            {
-                vkd3d_mutex_lock(&persistent_cache.mutex);
-                continue;
-            }
-
-            for (i = 0; i < s->input_layout_elements; ++i)
-            {
-                struct vkd3d_input_layout_element_cache *ile = (void *)(s->data + pos);
-                pos += sizeof(*ile);
-                il_element[i].SemanticName = (char *)(s->data + pos);
-                pos += ile->semantic_name_size;
-                il_element[i].SemanticIndex = ile->semantic_index;
-                il_element[i].Format = ile->format;
-                il_element[i].InputSlot = ile->input_slot;
-                il_element[i].AlignedByteOffset = ile->aligned_byte_offset;
-                il_element[i].InputSlotClass = ile->input_slot_class;
-                il_element[i].InstanceDataStepRate = ile->instance_data_step_rate;
-            }
-            desc.input_layout.pInputElementDescs = il_element;
-        }
-
-        desc.strip_cut_value = s->strip_cut_value;
-        desc.primitive_topology_type = s->primitive_topology_type;
-        desc.rtv_formats = s->rtv_formats;
-        desc.dsv_format = s->dsv_format;
-        desc.sample_desc = s->sample_desc;
-        desc.node_mask = s->node_mask;
-        desc.flags = s->flags;
-
-        if (!(object = vkd3d_malloc(sizeof(*object))))
-        {
-            vkd3d_free(s);
-            vkd3d_mutex_lock(&persistent_cache.mutex);
-            continue;
-        }
+        object = device_load_cache_state(device, cache, gfx_p.state,
+                VK_PIPELINE_BIND_POINT_GRAPHICS);
 
         /* We're happy with just creating and destroying it for now. It will feed the
          * vulkan pipeline cache, which should re-use the pipeline when the game creates it
@@ -5617,21 +5650,44 @@ static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shad
          * FIXME: The manipulation of the device refcount in init() and Release() makes it
          * unsafe to move this function to a separate thread. We might hold and release the
          * last reference to the device. */
-        hr = d3d12_pipeline_state_init_graphics(object, device, &desc);
-        if (SUCCEEDED(hr))
+        if (object)
         {
             VkRenderPass pass;
+
+            vkd3d_mutex_unlock(&persistent_cache.mutex); // EVEN UGLIER
+
             d3d12_pipeline_state_get_or_create_pipeline(object,
                     gfx_p.topology, gfx_p.strides, gfx_p.dsv_format, &pass);
             ID3D12PipelineState_Release(&object->ID3D12PipelineState_iface);
             ERR("yay pipeline %llx loaded\n", hash);
+
+            vkd3d_mutex_lock(&persistent_cache.mutex);
         }
-        else
+    }
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+}
+
+static void device_load_cache_compute(struct d3d12_device *device, struct vkd3d_shader_cache *cache)
+{
+    struct d3d12_pipeline_state *object;
+    size_t count, i;
+    uint64_t hash;
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+    count = persistent_cache.compute_states.count;
+    for (i = 0; i < count; ++i)
+    {
+        /* We may want to make a copy of this array, but we need a lock for
+         * cache_get() anyway. */
+        hash = persistent_cache.compute_states.a[i];
+
+        object = device_load_cache_state(device, cache, hash,
+                VK_PIPELINE_BIND_POINT_COMPUTE);
+        if (object)
         {
-            vkd3d_free(object);
+            ID3D12PipelineState_Release(&object->ID3D12PipelineState_iface);
+            ERR("yay compute state %llx loaded\n", hash);
         }
-        vkd3d_free(s);
-        vkd3d_mutex_lock(&persistent_cache.mutex);
     }
     vkd3d_mutex_unlock(&persistent_cache.mutex);
 }
@@ -5640,6 +5696,7 @@ static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_c
 {
     device_load_cache_rs(device, cache);
     device_load_cache_gfx(device, cache);
+    device_load_cache_compute(device, cache);
 
     ERR("Creation time: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
             ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
