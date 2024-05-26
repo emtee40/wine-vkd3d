@@ -200,6 +200,7 @@ struct vkd3d_vulkan_info
     bool EXT_descriptor_indexing;
     bool EXT_fragment_shader_interlock;
     bool EXT_mutable_descriptor_type;
+    bool EXT_pipeline_creation_feedback;
     bool EXT_robustness2;
     bool EXT_shader_demote_to_helper_invocation;
     bool EXT_shader_stencil_export;
