@@ -3953,11 +3953,13 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
         VkRenderPass *vk_render_pass)
 {
     VkVertexInputBindingDescription bindings[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+    VkPipelineCreationFeedback feedback = {0}, stage_feedback[VKD3D_MAX_SHADER_STAGES];
     const struct vkd3d_vk_device_procs *vk_procs = &state->device->vk_procs;
     struct d3d12_graphics_pipeline_state *graphics = &state->u.graphics;
     VkPipelineVertexInputDivisorStateCreateInfoEXT input_divisor_info;
     VkPipelineTessellationStateCreateInfo tessellation_info;
     struct vkd3d_graphics_pipeline_entry cache_entry = {0};
+    VkPipelineCreationFeedbackCreateInfo feedback_info;
     VkPipelineVertexInputStateCreateInfo input_desc;
     VkPipelineInputAssemblyStateCreateInfo ia_desc;
     VkPipelineColorBlendStateCreateInfo blend_desc;
@@ -4117,6 +4119,15 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
             return VK_NULL_HANDLE;
     }
 
+    if (device->vk_info.EXT_pipeline_creation_feedback)
+    {
+        pipeline_desc.pNext = &feedback_info;
+        feedback_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+        feedback_info.pNext = NULL;
+        feedback_info.pPipelineCreationFeedback = &feedback;
+        feedback_info.pipelineStageCreationFeedbackCount = ARRAY_SIZE(stage_feedback);
+        feedback_info.pPipelineStageCreationFeedbacks = stage_feedback;
+    }
     *vk_render_pass = pipeline_desc.renderPass;
 
     if ((vr = VK_CALL(vkCreateGraphicsPipelines(device->vk_device, device->vk_pipeline_cache,
@@ -4127,6 +4138,14 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
     }
 
     vkd3d_persistent_cache_add_graphics_pipeline(&cache_entry);
+
+    if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)
+    {
+        if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
+            TRACE("Pipeline was found in the Vulkan pipeline cache.\n");
+        else
+            TRACE("Pipeline was not found in the Vulkan pipeline cache.\n");
+    }
 
     if (d3d12_pipeline_state_put_pipeline_to_cache(state, &pipeline_key, vk_pipeline, pipeline_desc.renderPass))
         return vk_pipeline;
