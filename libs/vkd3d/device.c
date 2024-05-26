@@ -5634,6 +5634,11 @@ static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_c
 {
     device_load_cache_rs(device, cache);
     device_load_cache_gfx(device, cache);
+
+    TRACE("Creation time: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
+            ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
+    device->cache_hit = device->cache_miss = 0;
+    device->cache_ready = true;
 }
 
 static HRESULT d3d12_device_init(struct d3d12_device *device,
@@ -5664,6 +5669,8 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     device->worker_should_exit = false;
     vkd3d_mutex_init(&device->worker_mutex);
     vkd3d_cond_init(&device->worker_cond);
+    device->cache_hit = device->cache_miss = 0;
+    device->cache_ready = false;
 
     if (FAILED(hr = vkd3d_create_vk_device(device, create_info)))
         goto out_free_instance;
