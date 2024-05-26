@@ -592,6 +592,7 @@ struct vkd3d_cache_struct persistent_cache =
     VKD3D_MUTEX_INITIALIZER, NULL,
     {0, 0, NULL},
     {0, 0, NULL},
+    {0, 0, NULL},
 };
 
 HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
@@ -731,6 +732,45 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
     }
     ERR("on load %zu graphics pipelines in array\n", persistent_cache.graphics_pipelines.count);
 
+    ret = vkd3d_shader_cache_get(persistent_cache.cache,
+            vkd3d_compute_index, sizeof(vkd3d_compute_index), hashes, &size);
+    if (ret == VKD3D_ERROR_MORE_DATA)
+    {
+        hashes = vkd3d_realloc(hashes, size);
+        if (!hashes)
+        {
+            ERR("Out of memory\n");
+            goto out;
+        }
+        if ((ret = vkd3d_shader_cache_get(persistent_cache.cache,
+                vkd3d_compute_index, sizeof(vkd3d_compute_index), hashes, &size)))
+            ERR("huh?\n");
+    }
+    else if (ret)
+    {
+        FIXME("Compute state collection not found.\n");
+        goto out;
+    }
+
+    count = size / sizeof(*hashes);
+    for (i = 0; i < count; ++i)
+    {
+        hash = hashes[i];
+
+        ret = vkd3d_shader_cache_get(persistent_cache.cache, &hash, sizeof(hash), NULL, &size);
+        if (ret == VKD3D_ERROR_NOT_FOUND)
+        {
+            FIXME("Compute state with hash %#"PRIx64" was evicted.\n", hash);
+            continue;
+        }
+        else
+        {
+            TRACE("Re-add compute state %#"PRIx64".\n", hash);
+            vkd3d_dynamic_array_put(&persistent_cache.compute_states, hash);
+        }
+    }
+    ERR("on load %zu compute states in array\n", persistent_cache.compute_states.count);
+
 out:
     vkd3d_free(hashes);
     vkd3d_free(cache_name);
@@ -761,13 +801,22 @@ void vkd3d_persistent_cache_close(void)
             persistent_cache.graphics_pipelines.count * sizeof(*persistent_cache.graphics_pipelines.a),
             VKD3D_PUT_REPLACE);
     if (ret)
-        ERR("Failed to store root signature index object.\n");
+        ERR("Failed to store graphics pipelines index object.\n");
+
+    ERR("on close %zu compute states in array\n", persistent_cache.compute_states.count);
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_compute_index,
+            sizeof(vkd3d_compute_index), persistent_cache.compute_states.a,
+            persistent_cache.compute_states.count * sizeof(*persistent_cache.compute_states.a),
+            VKD3D_PUT_REPLACE);
+    if (ret)
+        ERR("Failed to store compute states index object.\n");
 
     cache_ref = vkd3d_shader_cache_decref(persistent_cache.cache);
     if (!cache_ref)
     {
         persistent_cache.root_signatures.count = 0;
         persistent_cache.graphics_pipelines.count = 0;
+        persistent_cache.compute_states.count = 0;
         persistent_cache.cache = NULL;
     }
     vkd3d_mutex_unlock(&persistent_cache.mutex);
@@ -825,3 +874,29 @@ void vkd3d_persistent_cache_add_graphics_pipeline(const struct vkd3d_graphics_pi
     vkd3d_mutex_unlock(&persistent_cache.mutex);
 }
 
+void vkd3d_persistent_cache_add_compute_state(const struct vkd3d_shader_cache_pipeline_state *state,
+        size_t size)
+{
+    uint64_t hash = vkd3d_shader_cache_hash_key(state, size);
+    enum vkd3d_result ret;
+
+    vkd3d_mutex_lock(&persistent_cache.mutex);
+
+    ret = vkd3d_shader_cache_put(persistent_cache.cache, &hash,
+            sizeof(hash), state, size, 0);
+    if (!ret)
+    {
+        vkd3d_dynamic_array_put(&persistent_cache.compute_states, hash);
+        TRACE("Added compute state %#"PRIx64"\n", hash);
+    }
+    else if (ret == VKD3D_ERROR_KEY_ALREADY_EXISTS)
+    {
+        TRACE("Compute state %#"PRIx64" already stored in cache\n", hash);
+    }
+    else
+    {
+        ERR("Unexpected error adding compute state to cache.\n");
+    }
+
+    vkd3d_mutex_unlock(&persistent_cache.mutex);
+}

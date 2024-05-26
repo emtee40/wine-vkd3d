@@ -2487,7 +2487,7 @@ static HRESULT d3d12_pipeline_state_find_and_init_uav_counters(struct d3d12_pipe
 
 static struct vkd3d_shader_cache_pipeline_state *vkd3d_cache_pipeline_from_d3d(
          const struct d3d12_pipeline_state_desc *desc,
-         const struct d3d12_root_signature *root_signature, uint32_t *entry_size)
+         const struct d3d12_root_signature *root_signature, size_t *entry_size)
 {
     struct vkd3d_shader_cache_pipeline_state *entry;
     uint32_t size, pos = 0, i;
@@ -2614,15 +2614,17 @@ static struct vkd3d_shader_cache_pipeline_state *vkd3d_cache_pipeline_from_d3d(
     return entry;
 }
 
-static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
+HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     struct vkd3d_shader_interface_info shader_interface;
     struct vkd3d_shader_descriptor_offset_info offset_info;
+    struct vkd3d_shader_cache_pipeline_state *cache_entry;
     struct vkd3d_shader_spirv_target_info target_info;
     struct d3d12_root_signature *root_signature;
     VkPipelineLayout vk_pipeline_layout;
+    size_t cache_entry_size;
     HRESULT hr;
 
     state->ID3D12PipelineState_iface.lpVtbl = &d3d12_pipeline_state_vtbl;
@@ -2709,6 +2711,16 @@ static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *st
         if (state->implicit_root_signature)
             d3d12_root_signature_Release(state->implicit_root_signature);
         return hr;
+    }
+
+    cache_entry = vkd3d_cache_pipeline_from_d3d(desc, root_signature, &cache_entry_size);
+    if (cache_entry)
+    {
+        vkd3d_persistent_cache_add_compute_state(cache_entry, cache_entry_size);
+        vkd3d_free(cache_entry);
+        /* FIXME, this looks ugly. We don't need the hash because we don't reference it
+         * from another cache object like we do for graphics states. */
+        state->state_hash = 0;
     }
 
     state->vk_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
@@ -3207,7 +3219,7 @@ HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
     const struct vkd3d_format *format;
     unsigned int instance_divisor;
     VkVertexInputRate input_rate;
-    uint32_t cache_entry_size;
+    size_t cache_entry_size;
     unsigned int i, j;
     size_t rt_count;
     uint32_t mask;
