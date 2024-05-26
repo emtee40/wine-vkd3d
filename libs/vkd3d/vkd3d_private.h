@@ -1635,6 +1635,8 @@ struct d3d12_device
     struct vkd3d_render_pass_cache render_pass_cache;
     struct vkd3d_root_signature_cache root_signature_cache;
     VkPipelineCache vk_pipeline_cache;
+    uint32_t cache_hit, cache_miss;
+    bool cache_ready;
 
     VkPhysicalDeviceMemoryProperties memory_properties;
 

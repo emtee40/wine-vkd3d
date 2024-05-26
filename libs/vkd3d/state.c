@@ -4130,9 +4130,21 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
     if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)
     {
         if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
+        {
             TRACE("Pipeline was found in the Vulkan pipeline cache.\n");
-        else
+            device->cache_hit++;
+        }
+            else
+        {
             TRACE("Pipeline was not found in the Vulkan pipeline cache.\n");
+            device->cache_miss++;
+        }
+
+        if (device->cache_ready)
+        {
+            TRACE("runtime: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
+                    ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
+        }
     }
 
     if (d3d12_pipeline_state_put_pipeline_to_cache(state, &pipeline_key, vk_pipeline, pipeline_desc.renderPass))
