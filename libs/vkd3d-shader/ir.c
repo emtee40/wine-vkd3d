@@ -5499,10 +5499,12 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps_in_f
     return ret;
 }
 
-static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(struct vsir_program *program,
-        struct vsir_transformation_context *ctx)
+typedef enum vkd3d_result (*vsir_function_handler)(struct vsir_program *program,
+        struct vkd3d_shader_message_context *message_context, size_t *pos);
+
+static enum vkd3d_result vsir_program_iterate_functions(struct vsir_program *program,
+        vsir_function_handler handler, struct vkd3d_shader_message_context *message_context)
 {
-    struct vkd3d_shader_message_context *message_context = ctx->message_context;
     enum vkd3d_result ret;
     size_t i;
 
@@ -5516,9 +5518,8 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
         {
             case VKD3DSIH_LABEL:
                 VKD3D_ASSERT(program->shader_version.type != VKD3D_SHADER_TYPE_HULL);
-                TRACE("Materializing undominated SSAs in a non-hull shader.\n");
-                if ((ret = vsir_program_materialize_undominated_ssas_to_temps_in_function(
-                        program, message_context, &i)) < 0)
+                TRACE("Iterating program body in a non-hull shader.\n");
+                if ((ret = handler(program, message_context, &i)) < 0)
                     return ret;
                 VKD3D_ASSERT(i == program->instructions.count);
                 break;
@@ -5527,10 +5528,9 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
             case VKD3DSIH_HS_FORK_PHASE:
             case VKD3DSIH_HS_JOIN_PHASE:
                 VKD3D_ASSERT(program->shader_version.type == VKD3D_SHADER_TYPE_HULL);
-                TRACE("Materializing undominated SSAs in phase %u of a hull shader.\n", ins->opcode);
+                TRACE("Iterating phase %u of a hull shader.\n", ins->opcode);
                 ++i;
-                if ((ret = vsir_program_materialize_undominated_ssas_to_temps_in_function(
-                        program, message_context, &i)) < 0)
+                if ((ret = handler(program, message_context, &i)) < 0)
                     return ret;
                 break;
 
@@ -5541,6 +5541,13 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
     }
 
     return VKD3D_OK;
+}
+
+static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    return vsir_program_iterate_functions(program,
+            vsir_program_materialize_undominated_ssas_to_temps_in_function, ctx->message_context);
 }
 
 static bool find_colour_signature_idx(const struct shader_signature *signature, uint32_t *index)
