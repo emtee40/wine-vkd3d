@@ -2061,6 +2061,9 @@ static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_AddRef(ID3D12PipelineState *
 
     TRACE("%p increasing refcount to %u.\n", state, refcount);
 
+    if (refcount == 1)
+        d3d12_device_add_ref(state->device);
+
     return refcount;
 }
 
@@ -2097,15 +2100,8 @@ static void d3d12_pipeline_uav_counter_state_cleanup(struct d3d12_pipeline_uav_c
     vkd3d_free(uav_counters->bindings);
 }
 
-static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState *iface)
+void d3d12_pipeline_state_cleanup(struct d3d12_pipeline_state *state)
 {
-    struct d3d12_pipeline_state *state = impl_from_ID3D12PipelineState(iface);
-    unsigned int refcount = vkd3d_atomic_decrement_u32(&state->refcount);
-
-    TRACE("%p decreasing refcount to %u.\n", state, refcount);
-
-    if (!refcount)
-    {
         struct d3d12_device *device = state->device;
         const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
 
@@ -2123,6 +2119,20 @@ static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState 
 
         vkd3d_free(state);
 
+}
+
+static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState *iface)
+{
+    struct d3d12_pipeline_state *state = impl_from_ID3D12PipelineState(iface);
+    unsigned int refcount = vkd3d_atomic_decrement_u32(&state->refcount);
+
+    TRACE("%p decreasing refcount to %u.\n", state, refcount);
+
+    if (!refcount)
+    {
+        struct d3d12_device *device = state->device;
+
+        d3d12_pipeline_state_cleanup(state);
         d3d12_device_release(device);
     }
 
@@ -2628,7 +2638,7 @@ HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
     HRESULT hr;
 
     state->ID3D12PipelineState_iface.lpVtbl = &d3d12_pipeline_state_vtbl;
-    state->refcount = 1;
+    state->refcount = 0;
 
     memset(&state->uav_counters, 0, sizeof(state->uav_counters));
 
@@ -2724,7 +2734,7 @@ HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
     }
 
     state->vk_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
-    d3d12_device_add_ref(state->device = device);
+    state->device = device;
 
     return S_OK;
 }
@@ -2747,6 +2757,7 @@ HRESULT d3d12_pipeline_state_create_compute(struct d3d12_device *device,
         return hr;
     }
 
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
     TRACE("Created compute pipeline state %p.\n", object);
 
     *state = object;
@@ -3252,7 +3263,7 @@ HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
     };
 
     state->ID3D12PipelineState_iface.lpVtbl = &d3d12_pipeline_state_vtbl;
-    state->refcount = 1;
+    state->refcount = 0;
 
     memset(&state->uav_counters, 0, sizeof(state->uav_counters));
     graphics->stage_count = 0;
@@ -3724,7 +3735,7 @@ HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
 
     state->vk_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
     state->implicit_root_signature = NULL;
-    d3d12_device_add_ref(state->device = device);
+    state->device = device;
 
     cache_entry = vkd3d_cache_pipeline_from_d3d(desc, root_signature, &cache_entry_size);
     if (cache_entry)
@@ -3769,6 +3780,7 @@ HRESULT d3d12_pipeline_state_create_graphics(struct d3d12_device *device,
         return hr;
     }
 
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
     TRACE("Created graphics pipeline state %p.\n", object);
 
     *state = object;
@@ -3809,6 +3821,8 @@ HRESULT d3d12_pipeline_state_create(struct d3d12_device *device,
         vkd3d_free(object);
         return hr;
     }
+
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
 
     TRACE("Created pipeline state %p.\n", object);
 
