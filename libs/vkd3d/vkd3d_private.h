@@ -1199,6 +1199,7 @@ struct d3d12_pipeline_state_desc
     D3D12_PIPELINE_STATE_FLAGS flags;
 };
 
+void d3d12_pipeline_state_cleanup(struct d3d12_pipeline_state *state);
 HRESULT d3d12_pipeline_state_create_compute(struct d3d12_device *device,
         const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, struct d3d12_pipeline_state **state);
 HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
@@ -1640,6 +1641,8 @@ struct d3d12_device
     VkPipelineCache vk_pipeline_cache;
     uint32_t cache_hit, cache_miss;
     bool cache_ready;
+    bool cache_thread_stop;
+    union vkd3d_thread_handle cache_thread;
 
     VkPhysicalDeviceMemoryProperties memory_properties;
 

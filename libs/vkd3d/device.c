@@ -3032,6 +3032,12 @@ static HRESULT device_worker_stop(struct d3d12_device *device)
     return S_OK;
 }
 
+static void device_cache_stop(struct d3d12_device *device)
+{
+    device->cache_thread_stop = true;
+    vkd3d_join_thread(device->vkd3d_instance, &device->cache_thread);
+}
+
 static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device9 *iface)
 {
     struct d3d12_device *device = impl_from_ID3D12Device9(iface);
@@ -3047,6 +3053,7 @@ static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device9 *iface)
 
         vkd3d_private_store_destroy(&device->private_store);
 
+        device_cache_stop(device);
         vkd3d_cleanup_format_info(device);
         vkd3d_vk_descriptor_heap_layouts_cleanup(device);
         vkd3d_uav_clear_state_cleanup(&device->uav_clear_state, device);
@@ -5402,6 +5409,12 @@ static void device_load_cache_rs(struct d3d12_device *device, struct vkd3d_shade
     count = persistent_cache.root_signatures.count;
     for (i = 0; i < count; ++i)
     {
+        if (device->cache_thread_stop)
+        {
+            TRACE("Cancelling cache load due to device shutdown.\n");
+            break;
+        }
+
         /* We may want to make a copy of this array, but we need a lock for
          * cache_get() anyway. */
         hash = persistent_cache.root_signatures.a[i];
@@ -5623,6 +5636,12 @@ static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shad
     count = persistent_cache.graphics_pipelines.count;
     for (i = 0; i < count; ++i)
     {
+        if (device->cache_thread_stop)
+        {
+            TRACE("Cancelling cache load due to device shutdown.\n");
+            break;
+        }
+
         /* We may want to make a copy of this array, but we need a lock for
          * cache_get() anyway. */
         hash = persistent_cache.graphics_pipelines.a[i];
@@ -5658,7 +5677,7 @@ static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shad
 
             d3d12_pipeline_state_get_or_create_pipeline(object,
                     gfx_p.topology, gfx_p.strides, gfx_p.dsv_format, &pass);
-            ID3D12PipelineState_Release(&object->ID3D12PipelineState_iface);
+            d3d12_pipeline_state_cleanup(object);
             ERR("yay pipeline %llx loaded\n", hash);
 
             vkd3d_mutex_lock(&persistent_cache.mutex);
@@ -5677,6 +5696,12 @@ static void device_load_cache_compute(struct d3d12_device *device, struct vkd3d_
     count = persistent_cache.compute_states.count;
     for (i = 0; i < count; ++i)
     {
+        if (device->cache_thread_stop)
+        {
+            TRACE("Cancelling cache load due to device shutdown.\n");
+            break;
+        }
+
         /* We may want to make a copy of this array, but we need a lock for
          * cache_get() anyway. */
         hash = persistent_cache.compute_states.a[i];
@@ -5685,7 +5710,7 @@ static void device_load_cache_compute(struct d3d12_device *device, struct vkd3d_
                 VK_PIPELINE_BIND_POINT_COMPUTE);
         if (object)
         {
-            ID3D12PipelineState_Release(&object->ID3D12PipelineState_iface);
+            d3d12_pipeline_state_cleanup(object);
             ERR("yay compute state %llx loaded\n", hash);
         }
     }
@@ -5702,6 +5727,14 @@ static void device_load_cache(struct d3d12_device *device, struct vkd3d_shader_c
             ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
     device->cache_hit = device->cache_miss = 0;
     device->cache_ready = true;
+}
+
+static void *cache_worker_main(void *arg)
+{
+    struct d3d12_device *device = arg;
+
+    device_load_cache(device, persistent_cache.cache);
+    return NULL;
 }
 
 static HRESULT d3d12_device_init(struct d3d12_device *device,
@@ -5734,6 +5767,8 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     vkd3d_cond_init(&device->worker_cond);
     device->cache_hit = device->cache_miss = 0;
     device->cache_ready = false;
+    memset(&device->cache_thread, 0, sizeof(device->cache_thread));
+    device->cache_thread_stop = false;
 
     if (FAILED(hr = vkd3d_create_vk_device(device, create_info)))
         goto out_free_instance;
@@ -5782,7 +5817,11 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     if ((device->parent = create_info->parent))
         IUnknown_AddRef(device->parent);
 
-    device_load_cache(device, persistent_cache.cache);
+    if (FAILED(vkd3d_create_thread(device->vkd3d_instance,
+            cache_worker_main, device, &device->cache_thread)))
+    {
+        device_load_cache(device, persistent_cache.cache);
+    }
 
     return S_OK;
 
