@@ -2944,7 +2944,7 @@ static bool vk_write_descriptor_set_from_root_descriptor(VkWriteDescriptorSet *v
             vk_descriptor_write->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_SRV:
-            vk_descriptor_write->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            vk_descriptor_write->descriptorType = device->srv_raw_struct_descriptor_type;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
             vk_descriptor_write->descriptorType = device->uav_raw_struct_descriptor_type;
@@ -3005,8 +3005,7 @@ static void d3d12_command_list_update_push_descriptors(struct d3d12_command_list
         root_parameter = root_signature_get_root_descriptor(root_signature, i);
         push_descriptor = &bindings->push_descriptors[i];
 
-        if (root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_CBV || (device->use_storage_buffers
-                && root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_UAV))
+        if (root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_CBV || device->use_storage_buffers)
         {
             vk_buffer_view = NULL;
             vk_buffer_info = current_buffer_info;
@@ -4711,7 +4710,7 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     root_parameter = root_signature_get_root_descriptor(root_signature, index);
     assert(root_parameter->parameter_type != D3D12_ROOT_PARAMETER_TYPE_CBV);
 
-    if (device->use_storage_buffers && root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_UAV)
+    if (device->use_storage_buffers)
     {
         vkd3d_get_raw_buffer_info(device, gpu_address, root_parameter->parameter_type, buffer_info = &vk_buffer_info);
     }

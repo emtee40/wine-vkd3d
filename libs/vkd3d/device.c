@@ -1743,9 +1743,15 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
             && vulkan_info->EXT_robustness2
             && vulkan_info->EXT_mutable_descriptor_type;
     if (!device->use_storage_buffers)
+    {
+        device->srv_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
         device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    }
     else
+    {
+        device->srv_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
 
     vulkan_info->texel_buffer_alignment_properties = physical_device_info->texel_buffer_alignment_properties;
 

@@ -267,7 +267,7 @@ static VkDescriptorType vk_descriptor_type_from_d3d12_root_parameter(D3D12_ROOT_
     {
         /* SRV and UAV root parameters are untyped buffer views. */
         case D3D12_ROOT_PARAMETER_TYPE_SRV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            return device->srv_raw_struct_descriptor_type;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
             return device->uav_raw_struct_descriptor_type;
         case D3D12_ROOT_PARAMETER_TYPE_CBV:
@@ -2146,9 +2146,16 @@ struct d3d12_pipeline_state *unsafe_impl_from_ID3D12PipelineState(ID3D12Pipeline
     return impl_from_ID3D12PipelineState(iface);
 }
 
+static inline unsigned int buffer_srv_compile_option(const struct d3d12_device *device)
+{
+    return (device->srv_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            ? VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_BUFFER
+            : VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_TEXEL_BUFFER;
+}
+
 static inline unsigned int buffer_uav_compile_option(const struct d3d12_device *device)
 {
-    return device->use_storage_buffers
+    return (device->uav_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
             ? VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_BUFFER
             : VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_TEXEL_BUFFER;
 }
@@ -2188,6 +2195,7 @@ static HRESULT create_shader_stage(struct d3d12_device *device,
     const struct vkd3d_shader_compile_option options[] =
     {
         {VKD3D_SHADER_COMPILE_OPTION_API_VERSION, VKD3D_SHADER_API_VERSION_1_12},
+        {VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV, buffer_srv_compile_option(device)},
         {VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV, buffer_uav_compile_option(device)},
         {VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV, typed_uav_compile_option(device)},
         {VKD3D_SHADER_COMPILE_OPTION_WRITE_TESS_GEOM_POINT_SIZE, 0},

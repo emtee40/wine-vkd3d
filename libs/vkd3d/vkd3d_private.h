@@ -1539,6 +1539,7 @@ struct d3d12_device
     bool use_vk_heaps;
 
     bool use_storage_buffers;
+    VkDescriptorType srv_raw_struct_descriptor_type;
     VkDescriptorType uav_raw_struct_descriptor_type;
 
     struct d3d12_descriptor_heap **heaps;

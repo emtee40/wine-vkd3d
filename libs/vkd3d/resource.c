@@ -697,11 +697,15 @@ HRESULT vkd3d_create_buffer(struct d3d12_device *device,
     if (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)
     {
         buffer_info.usage |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
-        if (device->use_storage_buffers)
+        if (device->uav_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
             buffer_info.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     }
     if (!(desc->Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))
+    {
         buffer_info.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+        if (device->srv_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            buffer_info.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    }
 
     /* Buffers always have properties of D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS. */
     if (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
@@ -3277,6 +3281,7 @@ static void vkd3d_create_null_srv(struct d3d12_desc *descriptor,
 {
     struct vkd3d_null_resources *null_resources = &device->null_resources;
     struct vkd3d_texture_view_desc vkd3d_desc;
+    unsigned int flags;
     VkImage vk_image;
 
     if (!desc)
@@ -3290,6 +3295,14 @@ static void vkd3d_create_null_srv(struct d3d12_desc *descriptor,
         case D3D12_SRV_DIMENSION_BUFFER:
             if (!device->vk_info.EXT_robustness2)
                 WARN("Creating NULL buffer SRV %#x.\n", desc->Format);
+
+            flags = vkd3d_view_flags_from_d3d12_buffer_srv_flags(desc->u.Buffer.Flags);
+
+            if (device->use_storage_buffers && d3d12_view_is_raw_structured(desc->Format, flags))
+            {
+                vkd3d_create_buffer_desc(device, NULL, desc->Format, 0, 0, 0, flags, &descriptor->s.u.buffer_desc);
+                return;
+            }
 
             vkd3d_create_buffer_view(device, VKD3D_DESCRIPTOR_MAGIC_SRV, null_resources->vk_buffer,
                     vkd3d_get_format(device, DXGI_FORMAT_R32_UINT, false),
@@ -3355,6 +3368,14 @@ static void vkd3d_create_buffer_srv(struct d3d12_desc *descriptor,
     }
 
     flags = vkd3d_view_flags_from_d3d12_buffer_srv_flags(desc->u.Buffer.Flags);
+
+    if (device->use_storage_buffers && d3d12_view_is_raw_structured(desc->Format, flags))
+    {
+        vkd3d_create_buffer_desc(device, resource,
+                desc->Format, desc->u.Buffer.FirstElement, desc->u.Buffer.NumElements,
+                desc->u.Buffer.StructureByteStride, flags, &descriptor->s.u.buffer_desc);
+        return;
+    }
 
     vkd3d_create_buffer_view_for_resource(device, VKD3D_DESCRIPTOR_MAGIC_SRV, resource, desc->Format,
             desc->u.Buffer.FirstElement, desc->u.Buffer.NumElements,
