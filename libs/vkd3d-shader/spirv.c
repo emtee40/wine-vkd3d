@@ -2213,6 +2213,7 @@ struct vkd3d_symbol_descriptor_array_data
 {
     SpvStorageClass storage_class;
     uint32_t contained_type_id;
+    bool is_ssbo;
 };
 
 struct vkd3d_symbol
@@ -3541,13 +3542,19 @@ static bool spirv_compiler_get_register_info(struct spirv_compiler *compiler,
 }
 
 static bool spirv_compiler_enable_descriptor_indexing(struct spirv_compiler *compiler,
-        enum vkd3d_shader_register_type reg_type, enum vkd3d_shader_resource_type resource_type)
+        enum vkd3d_shader_register_type reg_type, enum vkd3d_shader_resource_type resource_type, bool is_ssbo)
 {
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
 
     if (!spirv_compiler_is_target_extension_supported(compiler,
             VKD3D_SHADER_SPIRV_EXTENSION_EXT_DESCRIPTOR_INDEXING))
         return false;
+
+    if (is_ssbo)
+    {
+        vkd3d_spirv_enable_capability(builder, SpvCapabilityStorageBufferArrayDynamicIndexing);
+        return true;
+    }
 
     switch (reg_type)
     {
@@ -3588,7 +3595,8 @@ static uint32_t spirv_compiler_get_descriptor_index(struct spirv_compiler *compi
 
     if ((push_constant_index = array_key->push_constant_index) != ~0u || index.rel_addr)
     {
-        if (!spirv_compiler_enable_descriptor_indexing(compiler, reg->type, resource_type))
+        if (!spirv_compiler_enable_descriptor_indexing(compiler, reg->type, resource_type,
+                array_symbol->info.descriptor_array.is_ssbo))
         {
             FIXME("The target environment does not support descriptor indexing.\n");
             spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_DESCRIPTOR_IDX_UNSUPPORTED,
@@ -6158,7 +6166,7 @@ struct vkd3d_descriptor_variable_info
 static uint32_t spirv_compiler_build_descriptor_variable(struct spirv_compiler *compiler,
         SpvStorageClass storage_class, uint32_t type_id, const struct vkd3d_shader_register *reg,
         const struct vkd3d_shader_register_range *range, enum vkd3d_shader_resource_type resource_type,
-        bool is_uav_counter, struct vkd3d_descriptor_variable_info *var_info)
+        bool is_ssbo, bool is_uav_counter, struct vkd3d_descriptor_variable_info *var_info)
 {
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
     struct vkd3d_descriptor_binding_address binding_address;
@@ -6212,6 +6220,7 @@ static uint32_t spirv_compiler_build_descriptor_variable(struct spirv_compiler *
     symbol.descriptor_array = NULL;
     symbol.info.descriptor_array.storage_class = storage_class;
     symbol.info.descriptor_array.contained_type_id = type_id;
+    symbol.info.descriptor_array.is_ssbo = is_ssbo;
     var_info->array_symbol = spirv_compiler_put_symbol(compiler, &symbol);
 
     return var_id;
@@ -6263,7 +6272,7 @@ static void spirv_compiler_emit_cbv_declaration(struct spirv_compiler *compiler,
     vkd3d_spirv_build_op_name(builder, struct_id, "cb%u_struct", size);
 
     var_id = spirv_compiler_build_descriptor_variable(compiler, storage_class, struct_id,
-            &reg, range, VKD3D_SHADER_RESOURCE_BUFFER, false, &var_info);
+            &reg, range, VKD3D_SHADER_RESOURCE_BUFFER, false, false, &var_info);
 
     vkd3d_symbol_make_register(&reg_symbol, &reg);
     vkd3d_symbol_set_register_info(&reg_symbol, var_id, storage_class,
@@ -6320,7 +6329,7 @@ static void spirv_compiler_emit_sampler_declaration(struct spirv_compiler *compi
 
     type_id = vkd3d_spirv_get_op_type_sampler(builder);
     var_id = spirv_compiler_build_descriptor_variable(compiler, storage_class, type_id, &reg,
-            range, VKD3D_SHADER_RESOURCE_NONE, false, &var_info);
+            range, VKD3D_SHADER_RESOURCE_NONE, false, false, &var_info);
 
     vkd3d_symbol_make_register(&reg_symbol, &reg);
     vkd3d_symbol_set_register_info(&reg_symbol, var_id, storage_class,
@@ -6568,7 +6577,7 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
     }
 
     var_id = spirv_compiler_build_descriptor_variable(compiler, storage_class, type_id, &reg,
-            range, resource_type, false, &var_info);
+            range, resource_type, is_ssbo, false, &var_info);
 
     if (is_uav)
     {
@@ -6625,7 +6634,7 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
             }
 
             counter_var_id = spirv_compiler_build_descriptor_variable(compiler, storage_class,
-                    type_id, &reg, range, resource_type, true, &counter_var_info);
+                    type_id, &reg, range, resource_type, is_ssbo, true, &counter_var_info);
         }
     }
 
