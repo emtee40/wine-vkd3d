@@ -9557,25 +9557,22 @@ static void spirv_compiler_emit_bufinfo(struct spirv_compiler *compiler,
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
     const struct vkd3d_shader_dst_param *dst = instruction->dst;
     const struct vkd3d_shader_src_param *src = instruction->src;
-    const struct vkd3d_symbol *resource_symbol;
     uint32_t type_id, val_id, stride_id;
     struct vkd3d_shader_image image;
     uint32_t constituents[2];
     unsigned int write_mask;
 
-    if (compiler->ssbo_uavs && src->reg.type == VKD3DSPR_UAV)
-    {
-        resource_symbol = spirv_compiler_find_resource(compiler, &src->reg);
+    spirv_compiler_prepare_image(compiler, &image, &src->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
 
+    if (image.is_ssbo)
+    {
         type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
-        val_id = vkd3d_spirv_build_op_array_length(builder, type_id, resource_symbol->id, 0);
+        val_id = vkd3d_spirv_build_op_array_length(builder, type_id, image.id, 0);
         write_mask = VKD3DSP_WRITEMASK_0;
     }
     else
     {
         vkd3d_spirv_enable_capability(builder, SpvCapabilityImageQuery);
-
-        spirv_compiler_prepare_image(compiler, &image, &src->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
 
         type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
         val_id = vkd3d_spirv_build_op_image_query_size(builder, type_id, image.image_id);
