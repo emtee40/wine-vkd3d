@@ -2934,7 +2934,7 @@ static void d3d12_command_list_update_descriptor_table(struct d3d12_command_list
 
 static bool vk_write_descriptor_set_from_root_descriptor(VkWriteDescriptorSet *vk_descriptor_write,
         const struct d3d12_root_parameter *root_parameter, VkDescriptorSet vk_descriptor_set,
-        VkBufferView *vk_buffer_view, const VkDescriptorBufferInfo *vk_buffer_info)
+        VkBufferView *vk_buffer_view, const VkDescriptorBufferInfo *vk_buffer_info, const struct d3d12_device *device)
 {
     const struct d3d12_root_descriptor *root_descriptor;
 
@@ -2947,7 +2947,7 @@ static bool vk_write_descriptor_set_from_root_descriptor(VkWriteDescriptorSet *v
             vk_descriptor_write->descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
             break;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
-            vk_descriptor_write->descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+            vk_descriptor_write->descriptorType = device->uav_raw_struct_descriptor_type;
             break;
         default:
             ERR("Invalid root descriptor %#x.\n", root_parameter->parameter_type);
@@ -3005,7 +3005,8 @@ static void d3d12_command_list_update_push_descriptors(struct d3d12_command_list
         root_parameter = root_signature_get_root_descriptor(root_signature, i);
         push_descriptor = &bindings->push_descriptors[i];
 
-        if (root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_CBV)
+        if (root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_CBV || (device->use_storage_buffers
+                && root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_UAV))
         {
             vk_buffer_view = NULL;
             vk_buffer_info = current_buffer_info;
@@ -3020,7 +3021,7 @@ static void d3d12_command_list_update_push_descriptors(struct d3d12_command_list
         }
 
         if (!vk_write_descriptor_set_from_root_descriptor(current_descriptor_write,
-                root_parameter, bindings->descriptor_sets[0], vk_buffer_view, vk_buffer_info))
+                root_parameter, bindings->descriptor_sets[0], vk_buffer_view, vk_buffer_info, device))
             continue;
 
         ++descriptor_count;
@@ -4625,6 +4626,7 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
     const struct vkd3d_vulkan_info *vk_info = &list->device->vk_info;
     const struct d3d12_root_parameter *root_parameter;
     struct VkWriteDescriptorSet descriptor_write;
+    struct d3d12_device *device = list->device;
     struct VkDescriptorBufferInfo buffer_info;
     struct d3d12_resource *resource;
 
@@ -4649,7 +4651,7 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
     if (vk_info->KHR_push_descriptor)
     {
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, VK_NULL_HANDLE, NULL, &buffer_info);
+                root_parameter, VK_NULL_HANDLE, NULL, &buffer_info, device);
         VK_CALL(vkCmdPushDescriptorSetKHR(list->vk_command_buffer, bindings->vk_bind_point,
                 root_signature->vk_pipeline_layout, 0, 1, &descriptor_write));
     }
@@ -4657,7 +4659,7 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
     {
         d3d12_command_list_prepare_descriptors(list, bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, bindings->descriptor_sets[0], NULL, &buffer_info);
+                root_parameter, bindings->descriptor_sets[0], NULL, &buffer_info, device);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
 
         assert(index < ARRAY_SIZE(bindings->push_descriptors));
@@ -4700,13 +4702,22 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     const struct d3d12_root_parameter *root_parameter;
     struct VkWriteDescriptorSet descriptor_write;
     VkDevice vk_device = list->device->vk_device;
-    VkBufferView vk_buffer_view;
+    VkBufferView vk_buffer_view = VK_NULL_HANDLE;
+    struct d3d12_device *device = list->device;
+    VkDescriptorBufferInfo *buffer_info = NULL;
+    VkDescriptorBufferInfo vk_buffer_info;
+    VkBufferView *buffer_view = NULL;
 
     root_parameter = root_signature_get_root_descriptor(root_signature, index);
     assert(root_parameter->parameter_type != D3D12_ROOT_PARAMETER_TYPE_CBV);
 
+    if (device->use_storage_buffers && root_parameter->parameter_type == D3D12_ROOT_PARAMETER_TYPE_UAV)
+    {
+        vkd3d_get_raw_buffer_info(device, gpu_address, root_parameter->parameter_type, buffer_info = &vk_buffer_info);
+    }
     /* FIXME: Re-use buffer views. */
-    if (!vkd3d_create_raw_buffer_view(list->device, gpu_address, root_parameter->parameter_type, &vk_buffer_view))
+    else if (!vkd3d_create_raw_buffer_view(device, gpu_address, root_parameter->parameter_type,
+            buffer_view = &vk_buffer_view))
     {
         ERR("Failed to create buffer view.\n");
         return;
@@ -4722,7 +4733,7 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     if (vk_info->KHR_push_descriptor)
     {
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, VK_NULL_HANDLE, &vk_buffer_view, NULL);
+                root_parameter, VK_NULL_HANDLE, buffer_view, buffer_info, device);
         VK_CALL(vkCmdPushDescriptorSetKHR(list->vk_command_buffer, bindings->vk_bind_point,
                 root_signature->vk_pipeline_layout, 0, 1, &descriptor_write));
     }
@@ -4730,11 +4741,19 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     {
         d3d12_command_list_prepare_descriptors(list, bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, bindings->descriptor_sets[0], &vk_buffer_view,  NULL);
+                root_parameter, bindings->descriptor_sets[0], buffer_view, buffer_info, device);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
 
         assert(index < ARRAY_SIZE(bindings->push_descriptors));
-        bindings->push_descriptors[index].u.vk_buffer_view = vk_buffer_view;
+        if (buffer_info)
+        {
+            bindings->push_descriptors[index].u.cbv.vk_buffer = vk_buffer_info.buffer;
+            bindings->push_descriptors[index].u.cbv.offset = vk_buffer_info.offset;
+        }
+        else
+        {
+            bindings->push_descriptors[index].u.vk_buffer_view = vk_buffer_view;
+        }
         bindings->push_descriptor_dirty_mask |= 1u << index;
         bindings->push_descriptor_active_mask |= 1u << index;
     }
@@ -5476,60 +5495,86 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearUnorderedAccessViewUint(ID
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     struct vkd3d_view *descriptor, *uint_view = NULL;
+    const struct vkd3d_format *uint_format = NULL;
     struct d3d12_device *device = list->device;
     struct vkd3d_texture_view_desc view_desc;
-    const struct vkd3d_format *uint_format;
     const struct vkd3d_resource_view *view;
+    struct vkd3d_buffer_desc *buffer_desc;
     struct d3d12_resource *resource_impl;
+    struct d3d12_desc *d3d12_desc;
     VkClearColorValue colour;
 
     TRACE("iface %p, gpu_handle %s, cpu_handle %s, resource %p, values %p, rect_count %u, rects %p.\n",
             iface, debug_gpu_handle(gpu_handle), debug_cpu_handle(cpu_handle), resource, values, rect_count, rects);
 
     resource_impl = unsafe_impl_from_ID3D12Resource(resource);
-    if (!(descriptor = d3d12_desc_from_cpu_handle(cpu_handle)->s.u.view))
-        return;
-    view = &descriptor->v;
+    if (!(d3d12_desc = d3d12_desc_from_cpu_handle(cpu_handle)))
+         return;
+
     memcpy(colour.uint32, values, sizeof(colour.uint32));
 
-    if (view->format->type != VKD3D_FORMAT_TYPE_UINT)
+    if (d3d12_desc->s.u.header->magic == VKD3D_DESCRIPTOR_MAGIC_SBO)
     {
-        if (!(uint_format = vkd3d_find_uint_format(device, view->format->dxgi_format))
-                && !(uint_format = vkd3d_fixup_clear_uav_uint_colour(device, view->format->dxgi_format, &colour)))
+        if (!(buffer_desc = d3d12_desc->s.u.buffer_desc))
+            return;
+        if (!buffer_desc->is_raw)
         {
-            ERR("Unhandled format %#x.\n", view->format->dxgi_format);
+            WARN("Invalid clear of a structured buffer.\n");
             return;
         }
-
-        if (d3d12_resource_is_buffer(resource_impl))
+        uint_format = vkd3d_get_format(device, DXGI_FORMAT_R32_UINT, false);
+        if (!vkd3d_create_buffer_view(device, VKD3D_DESCRIPTOR_MAGIC_UAV, buffer_desc->vk_buffer_info.buffer,
+                uint_format, buffer_desc->vk_buffer_info.offset, buffer_desc->vk_buffer_info.range, &uint_view))
         {
-            if (!vkd3d_create_buffer_view(device, VKD3D_DESCRIPTOR_MAGIC_UAV, resource_impl->u.vk_buffer,
-                    uint_format, view->info.buffer.offset, view->info.buffer.size, &uint_view))
-            {
-                ERR("Failed to create buffer view.\n");
-                return;
-            }
-        }
-        else
-        {
-            memset(&view_desc, 0, sizeof(view_desc));
-            view_desc.view_type = view->info.texture.vk_view_type;
-            view_desc.format = uint_format;
-            view_desc.miplevel_idx = view->info.texture.miplevel_idx;
-            view_desc.miplevel_count = 1;
-            view_desc.layer_idx = view->info.texture.layer_idx;
-            view_desc.layer_count = view->info.texture.layer_count;
-            view_desc.vk_image_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-            view_desc.usage = VK_IMAGE_USAGE_STORAGE_BIT;
-
-            if (!vkd3d_create_texture_view(device, VKD3D_DESCRIPTOR_MAGIC_UAV, resource_impl->u.vk_image, &view_desc,
-                    &uint_view))
-            {
-                ERR("Failed to create image view.\n");
-                return;
-            }
+            ERR("Failed to create buffer view.\n");
+            return;
         }
         descriptor = uint_view;
+    }
+    else
+    {
+        if (!(descriptor = d3d12_desc->s.u.view))
+            return;
+        view = &descriptor->v;
+        if (view->format->type != VKD3D_FORMAT_TYPE_UINT)
+        {
+            if (!(uint_format = vkd3d_find_uint_format(device, view->format->dxgi_format))
+                && !(uint_format = vkd3d_fixup_clear_uav_uint_colour(device, view->format->dxgi_format, &colour)))
+            {
+                ERR("Unhandled format %#x.\n", view->format->dxgi_format);
+                return;
+            }
+
+            if (d3d12_resource_is_buffer(resource_impl))
+            {
+                if (!vkd3d_create_buffer_view(device, VKD3D_DESCRIPTOR_MAGIC_UAV, resource_impl->u.vk_buffer,
+                        uint_format, view->info.buffer.offset, view->info.buffer.size, &uint_view))
+                {
+                    ERR("Failed to create buffer view.\n");
+                    return;
+                }
+            }
+            else
+            {
+                memset(&view_desc, 0, sizeof(view_desc));
+                view_desc.view_type = view->info.texture.vk_view_type;
+                view_desc.format = uint_format;
+                view_desc.miplevel_idx = view->info.texture.miplevel_idx;
+                view_desc.miplevel_count = 1;
+                view_desc.layer_idx = view->info.texture.layer_idx;
+                view_desc.layer_count = view->info.texture.layer_count;
+                view_desc.vk_image_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                view_desc.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+
+                if (!vkd3d_create_texture_view(device, VKD3D_DESCRIPTOR_MAGIC_UAV, resource_impl->u.vk_image, &view_desc,
+                        &uint_view))
+                {
+                    ERR("Failed to create image view.\n");
+                    return;
+                }
+            }
+            descriptor = uint_view;
+        }
     }
 
     d3d12_command_list_clear_uav(list, resource_impl, descriptor, &colour, rect_count, rects);
@@ -5544,6 +5589,7 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearUnorderedAccessViewFloat(I
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
     struct d3d12_resource *resource_impl;
+    struct d3d12_desc *d3d12_desc;
     VkClearColorValue colour;
     struct vkd3d_view *view;
 
@@ -5551,7 +5597,14 @@ static void STDMETHODCALLTYPE d3d12_command_list_ClearUnorderedAccessViewFloat(I
             iface, debug_gpu_handle(gpu_handle), debug_cpu_handle(cpu_handle), resource, values, rect_count, rects);
 
     resource_impl = unsafe_impl_from_ID3D12Resource(resource);
-    if (!(view = d3d12_desc_from_cpu_handle(cpu_handle)->s.u.view))
+    if (!(d3d12_desc = d3d12_desc_from_cpu_handle(cpu_handle)))
+         return;
+    if (d3d12_desc->s.u.header->magic == VKD3D_DESCRIPTOR_MAGIC_SBO)
+    {
+        WARN("Invalid clear of a raw/structured buffer.\n");
+        return;
+    }
+    if (!(view = d3d12_desc->s.u.view))
         return;
     memcpy(colour.float32, values, sizeof(colour.float32));
 

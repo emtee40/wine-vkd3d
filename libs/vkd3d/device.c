@@ -124,6 +124,7 @@ static HRESULT vkd3d_create_vk_descriptor_heap_layout(struct d3d12_device *devic
         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     };
 
     if (device->vk_info.EXT_mutable_descriptor_type && index && index != VKD3D_SET_INDEX_UAV_COUNTER
@@ -157,7 +158,7 @@ static HRESULT vkd3d_create_vk_descriptor_heap_layout(struct d3d12_device *devic
 
     if (binding.descriptorType == VK_DESCRIPTOR_TYPE_MUTABLE_EXT)
     {
-        type_list.descriptorTypeCount = ARRAY_SIZE(descriptor_types);
+        type_list.descriptorTypeCount = ARRAY_SIZE(descriptor_types) - !device->use_storage_buffers;
         type_list.pDescriptorTypes = descriptor_types;
         mutable_info.sType = VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT;
         mutable_info.pNext = NULL;
@@ -209,12 +210,18 @@ static HRESULT vkd3d_vk_descriptor_heap_layouts_init(struct d3d12_device *device
     if (!device->use_vk_heaps)
         return S_OK;
 
+    if (device->use_storage_buffers)
+        device->vk_descriptor_heap_layouts[VKD3D_SET_INDEX_UAV_COUNTER].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+
     for (set = 0; set < ARRAY_SIZE(device->vk_descriptor_heap_layouts); ++set)
     {
         switch (device->vk_descriptor_heap_layouts[set].type)
         {
             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                 device->vk_descriptor_heap_layouts[set].count = limits->uniform_buffer_max_descriptors;
+                break;
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                device->vk_descriptor_heap_layouts[set].count = limits->storage_buffer_max_descriptors;
                 break;
             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -1732,6 +1739,14 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
 
     physical_device_info->formats4444_features.formatA4B4G4R4 = VK_FALSE;
 
+    device->use_storage_buffers = device->vk_info.device_limits.minStorageBufferOffsetAlignment <= 4
+            && vulkan_info->EXT_robustness2
+            && vulkan_info->EXT_mutable_descriptor_type;
+    if (!device->use_storage_buffers)
+        device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    else
+        device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+
     vulkan_info->texel_buffer_alignment_properties = physical_device_info->texel_buffer_alignment_properties;
 
     if (get_spec_version(vk_extensions, vk_extension_count, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME) >= 3)
@@ -1792,10 +1807,12 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
     descriptor_indexing->shaderInputAttachmentArrayDynamicIndexing = VK_FALSE;
     descriptor_indexing->shaderInputAttachmentArrayNonUniformIndexing = VK_FALSE;
 
-    /* We do not use storage buffers currently. */
-    features->shaderStorageBufferArrayDynamicIndexing = VK_FALSE;
-    descriptor_indexing->shaderStorageBufferArrayNonUniformIndexing = VK_FALSE;
-    descriptor_indexing->descriptorBindingStorageBufferUpdateAfterBind = VK_FALSE;
+    if (!device->use_storage_buffers)
+    {
+        features->shaderStorageBufferArrayDynamicIndexing = VK_FALSE;
+        descriptor_indexing->shaderStorageBufferArrayNonUniformIndexing = VK_FALSE;
+        descriptor_indexing->descriptorBindingStorageBufferUpdateAfterBind = VK_FALSE;
+    }
 
     if (vulkan_info->EXT_descriptor_indexing && descriptor_indexing
             && (descriptor_indexing->descriptorBindingUniformBufferUpdateAfterBind
