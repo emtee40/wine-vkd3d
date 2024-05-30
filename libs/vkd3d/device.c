@@ -5394,7 +5394,7 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     vkd3d_mutex_init(&device->blocked_queues_mutex);
 
     vkd3d_desc_object_cache_init(&device->view_desc_cache, sizeof(struct vkd3d_view));
-    vkd3d_desc_object_cache_init(&device->cbuffer_desc_cache, sizeof(struct vkd3d_cbuffer_desc));
+    vkd3d_desc_object_cache_init(&device->cbuffer_desc_cache, sizeof(struct vkd3d_buffer_desc));
 
     device_init_descriptor_pool_sizes(device);
 

@@ -631,10 +631,10 @@ bool vkd3d_create_buffer_view(struct d3d12_device *device, uint32_t magic, VkBuf
 bool vkd3d_create_texture_view(struct d3d12_device *device, uint32_t magic, VkImage vk_image,
         const struct vkd3d_texture_view_desc *desc, struct vkd3d_view **view);
 
-struct vkd3d_cbuffer_desc
+struct vkd3d_buffer_desc
 {
     struct vkd3d_desc_header h;
-    VkDescriptorBufferInfo vk_cbv_info;
+    VkDescriptorBufferInfo vk_buffer_info;
 };
 
 struct d3d12_desc
@@ -645,7 +645,7 @@ struct d3d12_desc
         {
             struct vkd3d_desc_header *header;
             struct vkd3d_view *view;
-            struct vkd3d_cbuffer_desc *cb_desc;
+            struct vkd3d_buffer_desc *buffer_desc;
             void *object;
         } u;
     } s;

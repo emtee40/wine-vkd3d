@@ -2393,9 +2393,9 @@ static void vkd3d_desc_object_cache_push(struct vkd3d_desc_object_cache *cache, 
 
 #undef HEAD_INDEX_MASK
 
-static struct vkd3d_cbuffer_desc *vkd3d_cbuffer_desc_create(struct d3d12_device *device)
+static struct vkd3d_buffer_desc *vkd3d_buffer_desc_create(struct d3d12_device *device)
 {
-    struct vkd3d_cbuffer_desc *desc;
+    struct vkd3d_buffer_desc *desc;
 
     if (!(desc = vkd3d_desc_object_cache_get(&device->cbuffer_desc_cache)))
         return NULL;
@@ -2580,9 +2580,9 @@ static void d3d12_desc_write_vk_heap(struct d3d12_descriptor_heap *descriptor_he
     {
         case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
             writes->vk_descriptor_writes[i].pImageInfo = NULL;
-            writes->vk_descriptor_writes[i].pBufferInfo = &u.cb_desc->vk_cbv_info;
+            writes->vk_descriptor_writes[i].pBufferInfo = &u.buffer_desc->vk_buffer_info;
             writes->vk_descriptor_writes[i].pTexelBufferView = NULL;
-            is_null = !u.cb_desc->vk_cbv_info.buffer;
+            is_null = !u.buffer_desc->vk_buffer_info.buffer;
             break;
         case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
         case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
@@ -3147,7 +3147,7 @@ void d3d12_desc_create_cbv(struct d3d12_desc *descriptor,
         struct d3d12_device *device, const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc)
 {
     struct VkDescriptorBufferInfo *buffer_info;
-    struct vkd3d_cbuffer_desc *cb_desc;
+    struct vkd3d_buffer_desc *cb_desc;
     struct d3d12_resource *resource;
 
     if (!desc)
@@ -3156,7 +3156,7 @@ void d3d12_desc_create_cbv(struct d3d12_desc *descriptor,
         return;
     }
 
-    if (!(cb_desc = vkd3d_cbuffer_desc_create(device)))
+    if (!(cb_desc = vkd3d_buffer_desc_create(device)))
     {
         ERR("Failed to allocate descriptor object.\n");
         return;
@@ -3168,7 +3168,7 @@ void d3d12_desc_create_cbv(struct d3d12_desc *descriptor,
         return;
     }
 
-    buffer_info = &cb_desc->vk_cbv_info;
+    buffer_info = &cb_desc->vk_buffer_info;
     if (desc->BufferLocation)
     {
         resource = vkd3d_gpu_va_allocator_dereference(&device->gpu_va_allocator, desc->BufferLocation);
@@ -3184,7 +3184,7 @@ void d3d12_desc_create_cbv(struct d3d12_desc *descriptor,
         buffer_info->range = VK_WHOLE_SIZE;
     }
 
-    descriptor->s.u.cb_desc = cb_desc;
+    descriptor->s.u.buffer_desc = cb_desc;
 }
 
 static unsigned int vkd3d_view_flags_from_d3d12_buffer_srv_flags(D3D12_BUFFER_SRV_FLAGS flags)

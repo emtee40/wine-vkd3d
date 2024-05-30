@@ -2779,7 +2779,7 @@ static bool vk_write_descriptor_set_from_d3d12_desc(VkWriteDescriptorSet *vk_des
     switch (u.header->magic)
     {
         case VKD3D_DESCRIPTOR_MAGIC_CBV:
-            vk_descriptor_write->pBufferInfo = &u.cb_desc->vk_cbv_info;
+            vk_descriptor_write->pBufferInfo = &u.buffer_desc->vk_buffer_info;
             break;
 
         case VKD3D_DESCRIPTOR_MAGIC_SRV:
