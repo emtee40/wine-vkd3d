@@ -73,7 +73,7 @@ struct vkd3d_shader_cache
 
     struct vkd3d_shader_cache_info info;
     struct rb_tree tree;
-    size_t stale;
+    size_t size, stale;
 
     FILE *indices, *values;
     bool delete_on_destroy;
@@ -120,7 +120,7 @@ static void vkd3d_shader_cache_remove_entry(struct vkd3d_shader_cache *cache,
         struct shader_cache_entry *e)
 {
     rb_remove(&cache->tree, &e->entry);
-    /* TODO: Accounting */
+    cache->size -= e->h.key_size + e->h.value_size;
 }
 
 static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
@@ -155,7 +155,7 @@ static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
             ERR("Are you kidding me?\n");
     }
 
-    /* TODO: Accounting */
+    cache->size += e->h.key_size + e->h.value_size;
     return true;
 }
 
@@ -368,7 +368,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     vkd3d_mutex_init(&object->lock);
     object->info = *info;
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
-    object->stale = 0;
+    object->stale = object->size = 0;
     object->indices = object->values = NULL;
     object->delete_on_destroy = false;
     object->load_time = object->timestamp = 0;
@@ -446,11 +446,19 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
         free(blob);
 }
 
+static void vkd3d_shader_cache_make_resident(struct rb_entry *entry, void *context)
+{
+    struct shader_cache_entry *e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
+    if (!e->payload)
+        vkd3d_shader_cache_read_entry(context, e);
+}
+
 static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 {
     struct vkd3d_cache_header_v1 hdr;
     struct write_context ctx;
     char *filename, *dstname;
+    bool rewrite;
     size_t p;
     int ret;
 
@@ -479,10 +487,12 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 
     fseek(cache->values, 0, SEEK_END);
 
-    /* For now unconditionally repack. */
-    ERR("%zu overwritten bytes.\n", cache->stale);
-    if (0)
+    TRACE("%zu overwritten bytes, %zu %f%% of total\n", cache->stale, cache->size,
+            ((float)cache->stale/(float)cache->size));
+    if ((rewrite = cache->stale > 1024 && cache->stale >= cache->size / 10))
     {
+        rb_for_each_entry(&cache->tree, vkd3d_shader_cache_make_resident, cache);
+
         fclose(cache->values);
         sprintf(filename, "%s-new.val", cache->filename);
         cache->values = fopen(filename, "w+b");
@@ -506,7 +516,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     ctx.cache = cache;
 
     p = ftell(cache->indices);
-    ERR("cache index position %zu\n", p);
+    TRACE("cache index position %zu.\n", p);
     if (!p)
     {
         hdr.magic = VKD3D_SHADER_CACHE_MAGIC;
@@ -522,20 +532,20 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     fclose(cache->values);
     fclose(cache->indices);
 
-    if (0)
+    if (rewrite)
     {
-    sprintf(dstname, "%s.idx", cache->filename);
-    remove(dstname); /* msvcrt needs this. */
-    ret = rename(filename, dstname);
-    if (ret)
-        ERR("Index file rename %s -> %s failed.\n", filename, dstname);
+        sprintf(dstname, "%s.idx", cache->filename);
+        remove(dstname);
+        ret = rename(filename, dstname);
+        if (ret)
+            ERR("Index file rename %s -> %s failed.\n", filename, dstname);
 
-    sprintf(dstname, "%s.val", cache->filename);
-    sprintf(filename, "%s-new.val", cache->filename);
-    remove(dstname);
-    rename(filename, dstname);
-    if (ret)
-        ERR("Value file rename failed.\n");
+        sprintf(dstname, "%s.val", cache->filename);
+        sprintf(filename, "%s-new.val", cache->filename);
+        remove(dstname);
+        rename(filename, dstname);
+        if (ret)
+            ERR("Value file rename failed.\n");
     }
 
 out:
@@ -620,7 +630,10 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
         if (flags & VKD3D_PUT_REPLACE)
         {
             /* FIXME: This is redundant, vkd3d_shader_cache_add_entry has its own
-             * handling of this case. But doing it here avoids re-doing the search. */
+             * handling of this case. But doing it here avoids re-doing the search.
+             *
+             * We also don't bother about this if the old entry had never been
+             * written to the values file. */
             cache->stale += e->h.key_size + e->h.value_size;
             vkd3d_shader_cache_remove_entry(cache, e);
             vkd3d_free(e);
