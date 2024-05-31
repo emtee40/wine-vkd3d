@@ -8550,6 +8550,7 @@ struct vkd3d_shader_image
     uint32_t image_type_id;
     const struct vkd3d_spirv_resource_type *resource_type_info;
     unsigned int structure_stride;
+    bool is_ssbo;
     bool raw;
 };
 
@@ -8644,6 +8645,7 @@ static void spirv_compiler_prepare_image(struct spirv_compiler *compiler,
     image->sampled_type = symbol->info.resource.sampled_type;
     image->resource_type_info = symbol->info.resource.resource_type_info;
     image->structure_stride = symbol->info.resource.structure_stride;
+    image->is_ssbo = symbol->info.resource.is_ssbo;
     image->raw = symbol->info.resource.raw;
 
     if (symbol->type == VKD3D_SYMBOL_COMBINED_SAMPLER)
@@ -8656,7 +8658,7 @@ static void spirv_compiler_prepare_image(struct spirv_compiler *compiler,
         return;
     }
 
-    if (load)
+    if (load && !image->is_ssbo)
     {
         image->image_id = vkd3d_spirv_build_op_load(builder, image->image_type_id, image->id, SpvMemoryAccessMaskNone);
         if (resource_reg->non_uniform)
@@ -8667,7 +8669,7 @@ static void spirv_compiler_prepare_image(struct spirv_compiler *compiler,
         image->image_id = 0;
     }
 
-    image->image_type_id = spirv_compiler_get_image_type_id(compiler, resource_reg,
+    image->image_type_id = image->is_ssbo ? 0 : spirv_compiler_get_image_type_id(compiler, resource_reg,
             &symbol->info.resource.range, image->resource_type_info,
             image->sampled_type, image->structure_stride || image->raw, depth_comparison);
 
@@ -9020,7 +9022,6 @@ static void spirv_compiler_emit_ld_raw_structured_srv_uav(struct spirv_compiler 
     const struct vkd3d_shader_dst_param *dst = instruction->dst;
     const struct vkd3d_shader_src_param *src = instruction->src;
     const struct vkd3d_shader_src_param *resource;
-    const struct vkd3d_symbol *resource_symbol;
     uint32_t base_coordinate_id, component_idx;
     uint32_t constituents[VKD3D_VEC4_SIZE];
     struct vkd3d_shader_image image;
@@ -9029,17 +9030,16 @@ static void spirv_compiler_emit_ld_raw_structured_srv_uav(struct spirv_compiler 
     SpvOp op;
 
     resource = &src[instruction->src_count - 1];
-    resource_symbol = spirv_compiler_find_resource(compiler, &resource->reg);
+    spirv_compiler_prepare_image(compiler, &image, &resource->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
 
-    if (resource_symbol->info.resource.is_ssbo)
+    type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
+    base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
+            type_id, image.structure_stride, &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
+
+    if (image.is_ssbo)
     {
-        texel_type_id = vkd3d_spirv_get_type_id(builder, resource_symbol->info.resource.sampled_type, 1);
+        texel_type_id = vkd3d_spirv_get_type_id(builder, image.sampled_type, 1);
         ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, SpvStorageClassUniform, texel_type_id);
-
-        type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
-        base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
-                type_id, resource_symbol->info.resource.structure_stride,
-                &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
 
         assert(dst->write_mask & VKD3DSP_WRITEMASK_ALL);
         for (i = 0, j = 0; i < VKD3D_VEC4_SIZE; ++i)
@@ -9055,7 +9055,7 @@ static void spirv_compiler_emit_ld_raw_structured_srv_uav(struct spirv_compiler 
             indices[0] = spirv_compiler_get_constant_uint(compiler, 0);
             indices[1] = coordinate_id;
 
-            ptr_id = vkd3d_spirv_build_op_access_chain(builder, ptr_type_id, resource_symbol->id, indices, 2);
+            ptr_id = vkd3d_spirv_build_op_access_chain(builder, ptr_type_id, image.id, indices, 2);
             constituents[j++] = vkd3d_spirv_build_op_load(builder, texel_type_id, ptr_id, SpvMemoryAccessMaskNone);
         }
     }
@@ -9065,12 +9065,6 @@ static void spirv_compiler_emit_ld_raw_structured_srv_uav(struct spirv_compiler 
             op = SpvOpImageFetch;
         else
             op = SpvOpImageRead;
-
-        spirv_compiler_prepare_image(compiler, &image, &resource->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
-
-        type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
-        base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
-                type_id, image.structure_stride, &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
 
         texel_type_id = vkd3d_spirv_get_type_id(builder, image.sampled_type, VKD3D_VEC4_SIZE);
         assert(dst->write_mask & VKD3DSP_WRITEMASK_ALL);
