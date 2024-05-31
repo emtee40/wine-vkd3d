@@ -863,7 +863,7 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
             vkd3d_dynamic_array_put(&persistent_cache.root_signatures, hash);
         }
     }
-    ERR("on load %zu root signatures in array\n", persistent_cache.root_signatures.count);
+    TRACE("on load %zu root signatures in array\n", persistent_cache.root_signatures.count);
 
     size = alloc_size;
     ret = vkd3d_shader_cache_get(persistent_cache.cache,
@@ -906,7 +906,7 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
             vkd3d_dynamic_array_put(&persistent_cache.graphics_pipelines, hash);
         }
     }
-    ERR("on load %zu graphics pipelines in array\n", persistent_cache.graphics_pipelines.count);
+    TRACE("on load %zu graphics pipelines in array\n", persistent_cache.graphics_pipelines.count);
 
     size = alloc_size;
     ret = vkd3d_shader_cache_get(persistent_cache.cache,
@@ -947,7 +947,7 @@ HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance)
             vkd3d_dynamic_array_put(&persistent_cache.compute_states, hash);
         }
     }
-    ERR("on load %zu compute states in array\n", persistent_cache.compute_states.count);
+    TRACE("on load %zu compute states in array\n", persistent_cache.compute_states.count);
 
 out:
     vkd3d_free(hashes);
@@ -965,7 +965,7 @@ void vkd3d_persistent_cache_close(void)
 
     /* FIXME: We don't need to close the cache here, but at this point closing
      * it is the only way to initiate a write to disk. */
-    ERR("on close %zu root sigs in array\n", persistent_cache.root_signatures.count);
+    TRACE("on close %zu root sigs in array\n", persistent_cache.root_signatures.count);
     ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_root_signature_index,
             sizeof(vkd3d_root_signature_index), persistent_cache.root_signatures.a,
             persistent_cache.root_signatures.count * sizeof(*persistent_cache.root_signatures.a),
@@ -973,7 +973,7 @@ void vkd3d_persistent_cache_close(void)
     if (ret)
         ERR("Failed to store root signature index object.\n");
 
-    ERR("on close %zu gfx pipes in array\n", persistent_cache.graphics_pipelines.count);
+    TRACE("on close %zu gfx pipes in array\n", persistent_cache.graphics_pipelines.count);
     ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_graphics_index,
             sizeof(vkd3d_graphics_index), persistent_cache.graphics_pipelines.a,
             persistent_cache.graphics_pipelines.count * sizeof(*persistent_cache.graphics_pipelines.a),
@@ -981,7 +981,7 @@ void vkd3d_persistent_cache_close(void)
     if (ret)
         ERR("Failed to store graphics pipelines index object.\n");
 
-    ERR("on close %zu compute states in array\n", persistent_cache.compute_states.count);
+    TRACE("on close %zu compute states in array\n", persistent_cache.compute_states.count);
     ret = vkd3d_shader_cache_put(persistent_cache.cache, vkd3d_compute_index,
             sizeof(vkd3d_compute_index), persistent_cache.compute_states.a,
             persistent_cache.compute_states.count * sizeof(*persistent_cache.compute_states.a),
