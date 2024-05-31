@@ -73,9 +73,11 @@ struct vkd3d_shader_cache
 
     struct vkd3d_shader_cache_info info;
     struct rb_tree tree;
+    size_t stale;
 
     FILE *indices, *values;
     bool delete_on_destroy;
+    uint64_t load_time, timestamp;
 
     char filename[];
 };
@@ -84,6 +86,7 @@ struct shader_cache_entry
 {
     struct vkd3d_cache_entry_header_v1 h;
     struct rb_entry entry;
+    uint64_t write_time;
     uint8_t *payload;
 };
 
@@ -113,16 +116,47 @@ static int vkd3d_shader_cache_compare_key(const void *key, const struct rb_entry
     return ret;
 }
 
-static void vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
-        struct shader_cache_entry *e)
-{
-    rb_put(&cache->tree, &e->h.hash, &e->entry);
-}
-
 static void vkd3d_shader_cache_remove_entry(struct vkd3d_shader_cache *cache,
         struct shader_cache_entry *e)
 {
     rb_remove(&cache->tree, &e->entry);
+    /* TODO: Accounting */
+}
+
+static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
+        struct shader_cache_entry *e)
+{
+    struct shader_cache_key k;
+
+    k.hash = e->h.hash;
+    k.key = e->payload;
+    k.key_size = e->h.key_size;
+
+    /* Entries can be replaced in on-disk files by adding a superseding entry
+     * with the same hash in the index. That way we avoid rewriting index files
+     * in their entirety. This should only happen while reading a cache file
+     * from disk since vkd3d_shader_cache_put has its own handling of duplicates.
+     *
+     * Option 2: Keep track of the offset in the index file a value was read
+     * from to replace / remove a single line. */
+    if (rb_put(&cache->tree, &k, &e->entry) < 0)
+    {
+        struct shader_cache_entry *old;
+        struct rb_entry *e2;
+
+        TRACE("Replacing item\n");
+        e2 = rb_get(&cache->tree, &k);
+        old = RB_ENTRY_VALUE(e2, struct shader_cache_entry, entry);
+        cache->stale += old->h.key_size + old->h.value_size;
+        vkd3d_shader_cache_remove_entry(cache, old);
+        vkd3d_free(old);
+
+        if (rb_put(&cache->tree, &e->h.hash, &e->entry) < 0)
+            ERR("Are you kidding me?\n");
+    }
+
+    /* TODO: Accounting */
+    return true;
 }
 
 static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, struct shader_cache_entry *e)
@@ -161,6 +195,7 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
         {
             WARN("out of memory\n");
             vkd3d_free(e->payload);
+            e->payload = NULL;
             return false;
         }
     }
@@ -173,6 +208,7 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
         ERR("Failed to read cached object data len %#"PRIx64" offset %#"PRIx64".\n",
                 e->h.disk_size, e->h.offset);
         vkd3d_free(e->payload);
+        e->payload = NULL;
         if (blob != e->payload)
             vkd3d_free(blob);
         return false;
@@ -199,10 +235,29 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
     struct shader_cache_entry *e = NULL;
     struct vkd3d_cache_header_v1 hdr;
     char *filename;
-    FILE *indices;
     size_t len;
 
     filename = vkd3d_malloc(strlen(cache->filename) + 5);
+
+    sprintf(filename, "%s.idx", cache->filename);
+    cache->indices = fopen(filename, ro ? "rb" : "r+b");
+    if (!cache->indices)
+    {
+        if (ro)
+        {
+            WARN("Read only cache file %s not found.\n", filename);
+            return;
+        }
+        cache->indices = fopen(filename, "w+b");
+        if (!cache->indices)
+        {
+            WARN("Index file %s not found and could not be created.\n", filename);
+            /* Convert to mem only. */
+            cache->filename[0] = '\0';
+            vkd3d_free(filename);
+            return;
+        }
+    }
 
     sprintf(filename, "%s.val", cache->filename);
     cache->values = fopen(filename, ro ? "rb" : "r+b");
@@ -210,7 +265,10 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
     {
         if (ro)
         {
-            WARN("Read only cache file %s not found.\n", filename);
+            FIXME("Index file opened but values file %s not found.\n", filename);
+            vkd3d_free(filename);
+            fclose(cache->indices);
+            cache->indices = NULL;
             return;
         }
 
@@ -218,29 +276,21 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
         if (!cache->values)
         {
             WARN("Value file %s not found and could not be created.\n", filename);
-             /* Convert to mem only. */
+            /* Convert to mem only. */
             cache->filename[0] = '\0';
             vkd3d_free(filename);
+            fclose(cache->indices);
+            cache->indices = NULL;
             return;
         }
-    }
-
-    sprintf(filename, "%s.idx", cache->filename);
-    indices = fopen(filename, "rb");
-    if (!indices)
-    {
-        /* This happens when the cache files did not exist. Keep the opened
-         * values file, we'll use it later. */
-        WARN("Index file %s not found.\n", filename);
-        vkd3d_free(filename);
-        return;
     }
 
     vkd3d_free(filename);
 
     TRACE("Reading cache %s.{idx, val}.\n", cache->filename);
 
-    len = fread(&hdr, sizeof(hdr), 1, indices);
+    fseek(cache->indices, 0, SEEK_SET);
+    len = fread(&hdr, sizeof(hdr), 1, cache->indices);
     if (len != 1)
     {
         WARN("Failed to read cache header.\n");
@@ -269,7 +319,7 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
         goto done;
     }
 
-    while (!feof(indices))
+    while (!feof(cache->indices))
     {
         e = vkd3d_calloc(1, sizeof(*e));
         if (!e)
@@ -278,10 +328,10 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
             break;
         }
 
-        len = fread(&e->h, sizeof(e->h), 1, indices);
+        len = fread(&e->h, sizeof(e->h), 1, cache->indices);
         if (len != 1)
         {
-            if (!feof(indices))
+            if (!feof(cache->indices))
                 ERR("Failed to read object header.\n");
             break;
         }
@@ -290,14 +340,15 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
             break;
 
         vkd3d_shader_cache_add_entry(cache, e);
+        cache->timestamp = max(cache->timestamp, e->h.access);
 
         TRACE("Loaded an entry.\n");
         e = NULL;
     }
+    cache->load_time = cache->timestamp;
 
 done:
     vkd3d_free(e);
-    fclose(indices);
 }
 
 int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
@@ -317,8 +368,10 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     vkd3d_mutex_init(&object->lock);
     object->info = *info;
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
+    object->stale = 0;
     object->indices = object->values = NULL;
     object->delete_on_destroy = false;
+    object->load_time = object->timestamp = 0;
     object->filename[0] = '\0';
 
     if (info->filename)
@@ -350,7 +403,6 @@ static void vkd3d_shader_cache_destroy_entry(struct rb_entry *entry, void *conte
 struct write_context
 {
     struct vkd3d_shader_cache *cache;
-    FILE *indices;
 };
 
 static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context)
@@ -360,6 +412,18 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     struct vkd3d_shader_cache *cache = ctx->cache;
     size_t comp_len;
     void *blob;
+
+    /* FIXME: Do we want to flush updated read times back to disk? Presumably we do, once
+     * eviction is implemented. We need to keep track of when a cached item is used in some way.
+     * In this case though try to write only the index entry and not the unchanged content. */
+    if (e->write_time < cache->load_time)
+    {
+        TRACE("Skipping entry %#"PRIx64": load time %#"PRIx64", last change %#"PRIx64".\n", 
+                e->h.hash, cache->load_time, e->write_time);
+        return;
+    }
+    TRACE("Writing entry %#"PRIx64": load time %#"PRIx64", last change %#"PRIx64".\n", 
+            e->h.hash, cache->load_time, e->write_time);
 
     blob = tdefl_compress_mem_to_heap(e->payload, e->h.key_size + e->h.value_size, &comp_len, 0);
     if (!blob || comp_len >= (e->h.key_size + e->h.value_size))
@@ -371,9 +435,11 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     else
         e->h.disk_size = comp_len;
 
+    /* FIXME: Check if the entry had been written already, and if yes if it fits into
+     * its old place. */
     e->h.offset = ftell(cache->values);
 
-    fwrite(&e->h, sizeof(e->h), 1, ctx->indices);
+    fwrite(&e->h, sizeof(e->h), 1, cache->indices);
     fwrite(blob, e->h.disk_size, 1, cache->values);
 
     if (blob != e->payload)
@@ -385,6 +451,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     struct vkd3d_cache_header_v1 hdr;
     struct write_context ctx;
     char *filename, *dstname;
+    size_t p;
     int ret;
 
     if (cache->info.flags & VKD3D_SHADER_CACHE_FLAGS_READ_ONLY)
@@ -401,6 +468,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     if (cache->delete_on_destroy)
     {
         fclose(cache->values);
+        fclose(cache->indices);
 
         sprintf(filename, "%s.idx", cache->filename);
         remove(filename);
@@ -412,38 +480,50 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     fseek(cache->values, 0, SEEK_END);
 
     /* For now unconditionally repack. */
-    fclose(cache->values);
-    sprintf(filename, "%s-new.val", cache->filename);
-    cache->values = fopen(filename, "w+b");
-    if (!cache->values)
+    ERR("%zu overwritten bytes.\n", cache->stale);
+    if (0)
     {
-        WARN("Failed to open %s\n", filename);
-        goto out;
-    }
-
-    sprintf(filename, "%s-new.idx", cache->filename);
-    ctx.indices = fopen(filename, "wb");
-    if (!ctx.indices)
-    {
-        WARN("Failed to open %s\n", filename);
         fclose(cache->values);
-        goto out;
+        sprintf(filename, "%s-new.val", cache->filename);
+        cache->values = fopen(filename, "w+b");
+        if (!cache->values)
+        {
+            WARN("Failed to open %s\n", filename);
+            goto out;
+        }
+
+        fclose(cache->indices);
+        sprintf(filename, "%s-new.idx", cache->filename);
+        cache->indices = fopen(filename, "wb");
+        if (!cache->indices)
+        {
+            WARN("Failed to open %s\n", filename);
+            fclose(cache->values);
+            goto out;
+        }
     }
 
     ctx.cache = cache;
-    hdr.magic = VKD3D_SHADER_CACHE_MAGIC;
-    hdr.struct_size = sizeof(hdr);
-    hdr.vkd3d_version = VKD3D_SHADER_CACHE_VERSION;
-    hdr.app_version = cache->info.version;
 
-    fwrite(&hdr, sizeof(hdr), 1, ctx.indices);
+    p = ftell(cache->indices);
+    ERR("cache index position %zu\n", p);
+    if (!p)
+    {
+        hdr.magic = VKD3D_SHADER_CACHE_MAGIC;
+        hdr.struct_size = sizeof(hdr);
+        hdr.vkd3d_version = VKD3D_SHADER_CACHE_VERSION;
+        hdr.app_version = cache->info.version;
+        fwrite(&hdr, sizeof(hdr), 1, cache->indices);
+    }
 
     rb_for_each_entry(&cache->tree, vkd3d_shader_cache_write_entry, &ctx);
 
     fseek(cache->values, 0, SEEK_END);
     fclose(cache->values);
-    fclose(ctx.indices);
+    fclose(cache->indices);
 
+    if (0)
+    {
     sprintf(dstname, "%s.idx", cache->filename);
     remove(dstname); /* msvcrt needs this. */
     ret = rename(filename, dstname);
@@ -456,6 +536,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     rename(filename, dstname);
     if (ret)
         ERR("Value file rename failed.\n");
+    }
 
 out:
     vkd3d_free(filename);
@@ -538,6 +619,9 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
     {
         if (flags & VKD3D_PUT_REPLACE)
         {
+            /* FIXME: This is redundant, vkd3d_shader_cache_add_entry has its own
+             * handling of this case. But doing it here avoids re-doing the search. */
+            cache->stale += e->h.key_size + e->h.value_size;
             vkd3d_shader_cache_remove_entry(cache, e);
             vkd3d_free(e);
         }
@@ -567,8 +651,8 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
     e->h.value_size = value_size;
     e->h.hash = k.hash;
     e->h.disk_size = 0;
-    e->h.access = 0;
     e->h.offset = 0;
+    e->write_time = e->h.access = ++cache->timestamp;
     memcpy(e->payload, key, key_size);
     memcpy(e->payload + key_size, value, value_size);
 
@@ -609,6 +693,15 @@ int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
     }
 
     e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
+
+    /* FIXME: This is probably not good enough. We'll update the access timestamp of all items
+     * in our own pipeline cache when the cache gets compiled into vulkan objects. When the game
+     * is running, we have no way to tell the cache that the game used a previously cached object.
+     *
+     * So maybe we want some flags to control the timestamp behavior: Set it by default in get(),
+     * but with a flag to not set it and/or a flag to only update the timestamp in an otherwise
+     * redundant put() call. */
+    e->h.access = ++cache->timestamp;
 
     *value_size = e->h.value_size;
     if (!value)
