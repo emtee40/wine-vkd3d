@@ -9153,30 +9153,29 @@ static void spirv_compiler_emit_store_uav_raw_structured(struct spirv_compiler *
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
     const struct vkd3d_shader_dst_param *dst = instruction->dst;
     const struct vkd3d_shader_src_param *src = instruction->src;
-    const struct vkd3d_symbol *resource_symbol;
     uint32_t base_coordinate_id, component_idx;
     const struct vkd3d_shader_src_param *data;
     struct vkd3d_shader_image image;
     unsigned int component_count;
     uint32_t indices[2];
 
-    resource_symbol = spirv_compiler_find_resource(compiler, &dst->reg);
+    spirv_compiler_prepare_image(compiler, &image, &dst->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
 
-    if (resource_symbol->info.resource.is_ssbo)
+    type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
+    base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
+            type_id, image.structure_stride, &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
+
+    data = &src[instruction->src_count - 1];
+    assert(data->reg.data_type == VKD3D_DATA_UINT);
+    val_id = spirv_compiler_emit_load_src(compiler, data, dst->write_mask);
+
+    component_count = vsir_write_mask_component_count(dst->write_mask);
+
+    if (image.is_ssbo)
     {
-        type_id = vkd3d_spirv_get_type_id(builder, resource_symbol->info.resource.sampled_type, 1);
-        ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, SpvStorageClassUniform, type_id);
+        ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, SpvStorageClassUniform,
+                vkd3d_spirv_get_type_id(builder, image.sampled_type, 1));
 
-        type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
-        base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
-                type_id, resource_symbol->info.resource.structure_stride,
-                &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
-
-        data = &src[instruction->src_count - 1];
-        assert(data->reg.data_type == VKD3D_DATA_UINT);
-        val_id = spirv_compiler_emit_load_src(compiler, data, dst->write_mask);
-
-        component_count = vsir_write_mask_component_count(dst->write_mask);
         for (component_idx = 0; component_idx < component_count; ++component_idx)
         {
             data_id = component_count > 1 ?
@@ -9189,22 +9188,12 @@ static void spirv_compiler_emit_store_uav_raw_structured(struct spirv_compiler *
             indices[0] = spirv_compiler_get_constant_uint(compiler, 0);
             indices[1] = coordinate_id;
 
-            ptr_id = vkd3d_spirv_build_op_access_chain(builder, ptr_type_id, resource_symbol->id, indices, 2);
+            ptr_id = vkd3d_spirv_build_op_access_chain(builder, ptr_type_id, image.id, indices, 2);
             vkd3d_spirv_build_op_store(builder, ptr_id, data_id, SpvMemoryAccessMaskNone);
         }
     }
     else
     {
-        type_id = vkd3d_spirv_get_type_id(builder, VKD3D_SHADER_COMPONENT_UINT, 1);
-        spirv_compiler_prepare_image(compiler, &image, &dst->reg, NULL, VKD3D_IMAGE_FLAG_NONE);
-        base_coordinate_id = spirv_compiler_emit_raw_structured_addressing(compiler,
-                type_id, image.structure_stride, &src[0], VKD3DSP_WRITEMASK_0, &src[1], VKD3DSP_WRITEMASK_0);
-
-        data = &src[instruction->src_count - 1];
-        assert(data->reg.data_type == VKD3D_DATA_UINT);
-        val_id = spirv_compiler_emit_load_src(compiler, data, dst->write_mask);
-
-        component_count = vsir_write_mask_component_count(dst->write_mask);
         for (component_idx = 0; component_idx < component_count; ++component_idx)
         {
             /* Mesa Vulkan drivers require the texel parameter to be a vector. */
