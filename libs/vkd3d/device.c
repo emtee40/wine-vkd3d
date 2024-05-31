@@ -4566,15 +4566,34 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_GetDeviceRemovedReason(ID3D12Devic
     return device->removed_reason;
 }
 
+static unsigned int dxgi_format_plane_count(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R32G8X24_TYPELESS:
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+        case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:
+        case DXGI_FORMAT_R24G8_TYPELESS:
+        case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+        case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+            return 2;
+        default:
+            return 1;
+    }
+}
+
 static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
         const D3D12_RESOURCE_DESC1 *desc, unsigned int first_sub_resource, unsigned int sub_resource_count,
         uint64_t base_offset, D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *row_counts,
         UINT64 *row_sizes, UINT64 *total_bytes)
 {
-    unsigned int i, sub_resource_idx, miplevel_idx, row_count, row_size, row_pitch;
+    unsigned int i, sub_resource_idx, plane_idx, miplevel_idx, row_count, row_size, row_pitch;
     unsigned int width, height, depth, plane_count, sub_resources_per_plane;
     const struct vkd3d_format *format;
     uint64_t offset, size, total;
+    DXGI_FORMAT plane_format;
 
     if (layouts)
         memset(layouts, 0xff, sizeof(*layouts) * sub_resource_count);
@@ -4597,8 +4616,7 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
         return;
     }
 
-    plane_count = ((format->vk_aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT)
-            && (format->vk_aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT)) ? 2 : 1;
+    plane_count = dxgi_format_plane_count(desc->Format);
     sub_resources_per_plane = d3d12_resource_desc_get_sub_resource_count(desc);
 
     if (!vkd3d_bound_range(first_sub_resource, sub_resource_count, sub_resources_per_plane * plane_count))
@@ -4609,10 +4627,19 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
 
     offset = 0;
     total = 0;
+    plane_format = desc->Format;
     for (i = 0; i < sub_resource_count; ++i)
     {
         sub_resource_idx = (first_sub_resource + i) % sub_resources_per_plane;
+        plane_idx = (first_sub_resource + i) / sub_resources_per_plane;
         miplevel_idx = sub_resource_idx % desc->MipLevels;
+
+        if (plane_count > 1)
+        {
+            plane_format = !plane_idx ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_R8_TYPELESS;
+            format = vkd3d_get_format(device, plane_format, true);
+        }
+
         width = align(d3d12_resource_desc_get_width(desc, miplevel_idx), format->block_width);
         height = align(d3d12_resource_desc_get_height(desc, miplevel_idx), format->block_height);
         depth = d3d12_resource_desc_get_depth(desc, miplevel_idx);
@@ -4623,7 +4650,7 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
         if (layouts)
         {
             layouts[i].Offset = base_offset + offset;
-            layouts[i].Footprint.Format = desc->Format;
+            layouts[i].Footprint.Format = plane_format;
             layouts[i].Footprint.Width = width;
             layouts[i].Footprint.Height = height;
             layouts[i].Footprint.Depth = depth;
