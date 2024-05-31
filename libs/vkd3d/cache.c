@@ -79,7 +79,7 @@ struct vkd3d_shader_cache
 
     struct vkd3d_shader_cache_info info;
     struct rb_tree tree;
-    size_t stale;
+    size_t size, stale;
 
     FILE *file;
     bool delete_on_destroy;
@@ -126,7 +126,7 @@ static void vkd3d_shader_cache_remove_entry(struct vkd3d_shader_cache *cache,
         struct shader_cache_entry *e)
 {
     rb_remove(&cache->tree, &e->entry);
-    /* TODO: Accounting */
+    cache->size -= e->h.key_size + e->h.value_size;
 }
 
 static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
@@ -161,7 +161,7 @@ static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
             ERR("Are you kidding me?\n");
     }
 
-    /* TODO: Accounting */
+    cache->size += e->h.key_size + e->h.value_size;
     return true;
 }
 
@@ -369,7 +369,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     object->info = *info;
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
     object->file = NULL;
-    object->stale = 0;
+    object->stale = object->size = 0;
     object->delete_on_destroy = false;
     object->load_time = object->timestamp = 0;
     object->filename[0] = '\0';
@@ -443,10 +443,18 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
         free(blob);
 }
 
+static void vkd3d_shader_cache_make_resident(struct rb_entry *entry, void *context)
+{
+    struct shader_cache_entry *e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
+    if (!e->payload)
+        vkd3d_shader_cache_read_entry(context, e);
+}
+
 static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 {
     struct vkd3d_cache_header_v1 hdr;
     char *filename, *dstname;
+    bool rewrite;
     off64_t p;
     int ret;
 
@@ -463,10 +471,16 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
         goto done;
     }
 
-    /* TODO: I need the rewrite path to pass the tests, so merge some patches. */
-    ERR("%zu overwritten bytes.\n", cache->stale);
-    if (0)
+    /* TODO: I need the rewrite path to pass the tests, so merge some patches.
+     *
+     * ERR 2: This also throws away data and has rather useless logic. Merge with
+     * the thing that rewrites on load error. */
+    TRACE("%zu overwritten bytes, %zu %f%% of total\n", cache->stale, cache->size,
+            ((float)cache->stale/(float)cache->size));
+    if ((rewrite = (cache->stale > 1024 && cache->stale >= cache->size / 10)))
     {
+        rb_for_each_entry(&cache->tree, vkd3d_shader_cache_make_resident, cache);
+
         fclose(cache->file);
         sprintf(filename, "%s-new.bin", cache->filename);
         cache->file = fopen_wrapper(filename, "wb");
@@ -496,7 +510,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 
     fclose(cache->file);
 
-    if (0)
+    if (rewrite)
     {
         sprintf(dstname, "%s.bin", cache->filename);
         remove(dstname); /* msvcrt needs this. */
@@ -568,7 +582,10 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
         if (flags & VKD3D_PUT_REPLACE)
         {
             /* FIXME: This is redundant, vkd3d_shader_cache_add_entry has its own
-             * handling of this case. But doing it here avoids re-doing the search. */
+             * handling of this case. But doing it here avoids re-doing the search.
+             *
+             * We also don't bother about this if the old entry had never been
+             * written to the values file. */
             cache->stale += e->h.key_size + e->h.value_size;
             vkd3d_shader_cache_remove_entry(cache, e);
             vkd3d_free(e);
