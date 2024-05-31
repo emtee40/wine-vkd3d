@@ -5686,7 +5686,7 @@ static void device_load_cache_gfx(struct d3d12_device *device, struct vkd3d_shad
             d3d12_pipeline_state_get_or_create_pipeline(object,
                     gfx_p.topology, gfx_p.strides, gfx_p.dsv_format, &pass);
             d3d12_pipeline_state_cleanup(object);
-            ERR("yay pipeline %llx loaded\n", hash);
+            TRACE("Pipeline %#"PRIx64" loaded.\n", hash);
 
             vkd3d_mutex_lock(&persistent_cache.mutex);
         }
@@ -5719,7 +5719,7 @@ static void device_load_cache_compute(struct d3d12_device *device, struct vkd3d_
         if (object)
         {
             d3d12_pipeline_state_cleanup(object);
-            ERR("yay compute state %llx loaded\n", hash);
+            TRACE("Compute state %#"PRIx64" loaded.\n", hash);
         }
     }
     vkd3d_mutex_unlock(&persistent_cache.mutex);
