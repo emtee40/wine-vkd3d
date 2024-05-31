@@ -6550,7 +6550,7 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
 
         type_id = vkd3d_spirv_get_type_id(builder, sampled_type, 1);
 
-        array_type_id = vkd3d_spirv_get_op_type_runtime_array(builder, type_id);
+        array_type_id = vkd3d_spirv_build_op_type_runtime_array(builder, type_id);
         vkd3d_spirv_build_op_decorate1(builder, array_type_id, SpvDecorationArrayStride, 4);
 
         struct_id = vkd3d_spirv_build_op_type_struct(builder, &array_type_id, 1);
