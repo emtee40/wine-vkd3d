@@ -21935,6 +21935,7 @@ static void test_typed_buffer_uav(void)
     };
     static const struct vec4 expected = {0.5f, 0.625f, 0.75f, 1.0f};
     static const struct vec4 expected_ld = {0.625f, 0.5f, 1.0f, 0.75f};
+    static const D3D12_BOX box_r8g8b8a8 = {0, 0, 0, 16, 1, 1};
 
     if (!init_compute_test_context(&context))
         return;
@@ -22018,9 +22019,31 @@ static void test_typed_buffer_uav(void)
     reset_command_list(command_list, context.allocator);
     transition_sub_resource_state(command_list, resource, 0,
             D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    uav_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ID3D12Device_CreateUnorderedAccessView(device, resource, NULL, &uav_desc, cpu_descriptor_handle);
+
+    ID3D12GraphicsCommandList_SetPipelineState(command_list, pipeline_state);
+    ID3D12GraphicsCommandList_SetComputeRootSignature(command_list, root_signature);
+    ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(command_list, 0, gpu_descriptor_handle);
+    ID3D12GraphicsCommandList_Dispatch(command_list, 2, 1, 1);
+
+    transition_sub_resource_state(command_list, resource, 0,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+    get_buffer_readback_with_command_list(resource, uav_desc.Format, &rb, queue, command_list);
+    check_readback_data_uint(&rb.rb, &box_r8g8b8a8, 0xffbf9f80, 0);
+    release_resource_readback(&rb);
+
+    reset_command_list(command_list, context.allocator);
+    transition_sub_resource_state(command_list, resource, 0,
+            D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ID3D12PipelineState_Release(pipeline_state);
     pipeline_state = create_compute_pipeline_state(device, root_signature,
             shader_bytecode(cs_vec4_load_code, sizeof(cs_vec4_load_code)));
+
+    uav_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    ID3D12Device_CreateUnorderedAccessView(device, resource, NULL, &uav_desc, cpu_descriptor_handle);
 
     ID3D12GraphicsCommandList_SetPipelineState(command_list, pipeline_state);
     ID3D12GraphicsCommandList_SetComputeRootSignature(command_list, root_signature);
