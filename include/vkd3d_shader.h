@@ -110,6 +110,20 @@ enum vkd3d_shader_structure_type
 };
 
 /**
+ * Determines how buffer SRVs are stored.
+ * \since 1.13
+ */
+enum vkd3d_shader_compile_option_buffer_srv
+{
+    /** Use buffer textures for buffer SRVs. This is the default value. */
+    VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_TEXEL_BUFFER = 0x00000000,
+    /** Use storage buffers for buffer SRVs. */
+    VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_BUFFER       = 0x00000001,
+
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV),
+};
+
+/**
  * Determines how buffer UAVs are stored.
  *
  * This also affects UAV counters in Vulkan environments. In OpenGL
@@ -340,6 +354,9 @@ enum vkd3d_shader_compile_option_name
      * \since 1.12
      */
     VKD3D_SHADER_COMPILE_OPTION_INCLUDE_EMPTY_BUFFERS_IN_EFFECTS = 0x0000000d,
+
+    /** \a value is a member of enum vkd3d_shader_compile_option_buffer_srv. \since 1.13 */
+    VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV  = 0x0000000e,
 
     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_COMPILE_OPTION_NAME),
 };

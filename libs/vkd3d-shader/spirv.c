@@ -2415,6 +2415,7 @@ struct spirv_compiler
     bool failed;
 
     bool strip_debug;
+    bool ssbo_srvs;
     bool ssbo_uavs;
     bool uav_read_without_format;
     SpvExecutionMode fragment_coordinate_origin;
@@ -2602,6 +2603,15 @@ static struct spirv_compiler *spirv_compiler_create(const struct vsir_program *p
         {
             case VKD3D_SHADER_COMPILE_OPTION_STRIP_DEBUG:
                 compiler->strip_debug = !!option->value;
+                break;
+
+            case VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV:
+                if (option->value == VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_TEXEL_BUFFER)
+                    compiler->ssbo_srvs = false;
+                else if (option->value == VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_BUFFER)
+                    compiler->ssbo_srvs = true;
+                else
+                    WARN("Ignoring unrecognised value %#x for option %#x.\n", option->value, option->name);
                 break;
 
             case VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV:
@@ -6553,7 +6563,8 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
         return;
     }
 
-    if (compiler->ssbo_uavs && is_uav && (structure_stride || raw) && resource_type == VKD3D_SHADER_RESOURCE_BUFFER)
+    if ((is_uav ? compiler->ssbo_uavs : compiler->ssbo_srvs) && (structure_stride || raw)
+            && resource_type == VKD3D_SHADER_RESOURCE_BUFFER)
     {
         uint32_t array_type_id, struct_id;
 
@@ -6636,6 +6647,10 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
             counter_var_id = spirv_compiler_build_descriptor_variable(compiler, storage_class,
                     type_id, &reg, range, resource_type, is_ssbo, true, &counter_var_info);
         }
+    }
+    else if (is_ssbo)
+    {
+        vkd3d_spirv_build_op_decorate(builder, var_id, SpvDecorationNonWritable, NULL, 0);
     }
 
     vkd3d_symbol_make_resource(&resource_symbol, &reg);
