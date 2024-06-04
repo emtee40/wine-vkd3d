@@ -92,6 +92,7 @@ struct shader_cache_entry
 {
     struct vkd3d_cache_entry_header_v1 h;
     struct rb_entry entry;
+    uint64_t offset;
     uint64_t write_time;
     uint8_t *payload;
 };
@@ -113,6 +114,12 @@ static int vkd3d_shader_cache_compare_key(const void *key, const struct rb_entry
         return ret;
     if ((ret = vkd3d_u64_compare(k->key_size, e->h.key_size)))
         return ret;
+
+    if (!e->payload)
+    {
+        TRACE("Hash-only comparison.\n");
+        return 0;
+    }
 
     /* Until now we have not seen an actual hash collision. If the key didn't match it was always
      * due to a bug in the serialization code or memory corruption. If you see this FIXME please
@@ -149,6 +156,9 @@ static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
     {
         struct shader_cache_entry *old;
         struct rb_entry *e2;
+
+        if (!e->payload)
+            WARN("Replacing based on hash only.\n");
 
         TRACE("Replacing item\n");
         e2 = rb_get(&cache->tree, &k);
@@ -206,6 +216,7 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
         }
     }
 
+    fseeko64(cache->file, e->offset, SEEK_SET);
     len = fread(blob, e->h.disk_size, 1, cache->file);
     if (len != 1)
     {
@@ -330,16 +341,15 @@ static bool vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
             break;
         }
 
-        p = ftello64(cache->file);
+        e->offset = ftello64(cache->file);
         if (e->h.disk_size > cache_file_size || p > (cache_file_size - e->h.disk_size))
         {
             FIXME("Cache corrupt: Offset %#"PRIx64", size %#"PRIx64", file size %#"PRIx64".\n",
-                    p, e->h.disk_size, cache_file_size);
+                    e->offset, e->h.disk_size, cache_file_size);
             break;
         }
 
-        if (!vkd3d_shader_cache_read_entry(cache, e))
-            break;
+        fseeko64(cache->file, e->h.disk_size, SEEK_CUR);
 
         vkd3d_shader_cache_add_entry(cache, e);
         cache->timestamp = max(cache->timestamp, e->h.access);
@@ -427,6 +437,9 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     TRACE("Writing entry %#"PRIx64": load time %#"PRIx64", last change %#"PRIx64".\n",
             e->h.hash, cache->load_time, e->write_time);
 
+    if (!e->payload)
+        ERR("Writing back item %#"PRIx64", which is not loaded to memory.\n", e->h.hash);
+
     blob = tdefl_compress_mem_to_heap(e->payload, e->h.key_size + e->h.value_size, &comp_len, 0);
     if (!blob || comp_len >= (e->h.key_size + e->h.value_size))
     {
@@ -493,6 +506,8 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
             WARN("Failed to open %s\n", filename);
             goto done;
         }
+
+        cache->write_all = true;
     }
     else
     {
@@ -578,8 +593,21 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
 
     vkd3d_shader_cache_lock(cache);
 
-    entry = rb_get(&cache->tree, &k);
-    e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+    for (;;)
+    {
+        entry = rb_get(&cache->tree, &k);
+        e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+        if (!e || e->payload)
+            break;
+
+        if (!vkd3d_shader_cache_read_entry(cache, e))
+        {
+            FIXME("On-demand disk read failed.\n");
+            ret = VKD3D_ERROR;
+            goto done;
+        }
+        /* Search again to compare the full key. */
+    }
 
     if (e)
     {
@@ -652,15 +680,28 @@ int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
 
     vkd3d_shader_cache_lock(cache);
 
-    entry = rb_get(&cache->tree, &k);
-    if (!entry)
+    for (;;)
+    {
+        entry = rb_get(&cache->tree, &k);
+        e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+        if (!e || e->payload)
+            break;
+
+        if (!vkd3d_shader_cache_read_entry(cache, e))
+        {
+            FIXME("On-demand disk read failed.\n");
+            ret = VKD3D_ERROR;
+            goto done;
+        }
+        /* Search again to compare the full key. */
+    }
+
+    if (!e)
     {
         WARN("Entry not found.\n");
         ret = VKD3D_ERROR_NOT_FOUND;
         goto done;
     }
-
-    e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
 
     /* FIXME: This is probably not good enough. We'll update the access timestamp of all items
      * in our own pipeline cache when the cache gets compiled into vulkan objects. When the game
