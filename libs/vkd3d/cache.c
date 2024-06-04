@@ -76,7 +76,7 @@ struct vkd3d_shader_cache
     size_t size, stale;
 
     FILE *indices, *values;
-    bool delete_on_destroy;
+    bool delete_on_destroy, write_all;
     uint64_t load_time, timestamp;
 
     char filename[];
@@ -107,6 +107,12 @@ static int vkd3d_shader_cache_compare_key(const void *key, const struct rb_entry
         return ret;
     if ((ret = vkd3d_u64_compare(k->key_size, e->h.key_size)))
         return ret;
+
+    if (!e->payload)
+    {
+        TRACE("Hash-only comparison.\n");
+        return 0;
+    }
 
     /* Until now we have not seen an actual hash collision. If the key didn't match it was always
      * due to a bug in the serialization code or memory corruption. If you see this FIXME please
@@ -143,6 +149,9 @@ static bool vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
     {
         struct shader_cache_entry *old;
         struct rb_entry *e2;
+
+        if (!e->payload)
+            WARN("Replacing based on hash only.\n");
 
         TRACE("Replacing item\n");
         e2 = rb_get(&cache->tree, &k);
@@ -207,6 +216,7 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
         /* I suppose this could be handled better. */
         ERR("Failed to read cached object data len %#"PRIx64" offset %#"PRIx64".\n",
                 e->h.disk_size, e->h.offset);
+        exit(1);
         vkd3d_free(e->payload);
         e->payload = NULL;
         if (blob != e->payload)
@@ -336,9 +346,6 @@ static void vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
             break;
         }
 
-        if (!vkd3d_shader_cache_read_entry(cache, e))
-            break;
-
         vkd3d_shader_cache_add_entry(cache, e);
         cache->timestamp = max(cache->timestamp, e->h.access);
 
@@ -371,6 +378,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     object->stale = object->size = 0;
     object->indices = object->values = NULL;
     object->delete_on_destroy = false;
+    object->write_all = false;
     object->load_time = object->timestamp = 0;
     object->filename[0] = '\0';
 
@@ -416,7 +424,7 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     /* FIXME: Do we want to flush updated read times back to disk? Presumably we do, once
      * eviction is implemented. We need to keep track of when a cached item is used in some way.
      * In this case though try to write only the index entry and not the unchanged content. */
-    if (e->write_time < cache->load_time)
+    if (e->write_time < cache->load_time && !cache->write_all)
     {
         TRACE("Skipping entry %#"PRIx64": load time %#"PRIx64", last change %#"PRIx64".\n", 
                 e->h.hash, cache->load_time, e->write_time);
@@ -506,11 +514,9 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
         sprintf(filename, "%s-new.idx", cache->filename);
         cache->indices = fopen(filename, "wb");
         if (!cache->indices)
-        {
-            WARN("Failed to open %s\n", filename);
-            fclose(cache->values);
-            goto out;
-        }
+            ERR("Reopen fail\n");
+
+        cache->write_all = true;
     }
 
     ctx.cache = cache;
@@ -622,8 +628,21 @@ int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, si
 
     vkd3d_shader_cache_lock(cache);
 
-    entry = rb_get(&cache->tree, &k);
-    e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+    for (;;)
+    {
+        entry = rb_get(&cache->tree, &k);
+        e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+        if (!e || e->payload)
+            break;
+
+        if (!vkd3d_shader_cache_read_entry(cache, e))
+        {
+            FIXME("On-demand disk read failed.\n");
+            ret = VKD3D_ERROR;
+            goto done;
+        }
+        /* Search again to compare the full key. */
+    }
 
     if (e)
     {
@@ -697,15 +716,28 @@ int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
 
     vkd3d_shader_cache_lock(cache);
 
-    entry = rb_get(&cache->tree, &k);
-    if (!entry)
+    for (;;)
+    {
+        entry = rb_get(&cache->tree, &k);
+        e = entry ? RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry) : NULL;
+        if (!e || e->payload)
+            break;
+
+        if (!vkd3d_shader_cache_read_entry(cache, e))
+        {
+            FIXME("On-demand disk read failed.\n");
+            ret = VKD3D_ERROR;
+            goto done;
+        }
+        /* Search again to compare the full key. */
+    }
+
+    if (!e)
     {
         WARN("Entry not found.\n");
         ret = VKD3D_ERROR_NOT_FOUND;
         goto done;
     }
-
-    e = RB_ENTRY_VALUE(entry, struct shader_cache_entry, entry);
 
     /* FIXME: This is probably not good enough. We'll update the access timestamp of all items
      * in our own pipeline cache when the cache gets compiled into vulkan objects. When the game
