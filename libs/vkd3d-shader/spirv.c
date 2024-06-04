@@ -4170,13 +4170,13 @@ static unsigned int shader_component_type_size(enum vkd3d_shader_component_type 
 
 static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler,
         const struct vkd3d_shader_register *reg, enum vkd3d_shader_component_type component_type,
-        uint32_t swizzle)
+        uint32_t swizzle, uint32_t write_mask)
 {
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    uint32_t type_id, val_id, components[VKD3D_VEC4_SIZE];
     enum vkd3d_shader_component_type reg_component_type;
+    unsigned int i, j, component_idx, component_count;
     const struct ssa_register_info *ssa;
-    unsigned int component_idx;
-    uint32_t type_id, val_id;
 
     ssa = spirv_compiler_get_ssa_register_info(compiler, reg);
     val_id = ssa->id;
@@ -4186,7 +4186,6 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         assert(compiler->failed);
         return 0;
     }
-    assert(vkd3d_swizzle_is_scalar(swizzle, reg));
 
     reg_component_type = vkd3d_component_type_from_data_type(ssa->data_type);
 
@@ -4201,17 +4200,31 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         return val_id;
     }
 
+    component_count = vsir_write_mask_component_count(write_mask);
+
+    type_id = vkd3d_spirv_get_type_id(builder, reg_component_type, component_count);
+    if (component_count > 1)
+    {
+        /* We have no component count for the reg because it may be forward referenced. This would
+         * emit a nop shuffle if the counts are equal, but DXIL doesn't emit vector extractions. */
+        for (i = 0, j = 0; i < VKD3D_VEC4_SIZE; ++i)
+            if (write_mask & (VKD3DSP_WRITEMASK_0 << i))
+                components[j++] = vsir_swizzle_get_component(swizzle, i);
+        val_id = vkd3d_spirv_build_op_vector_shuffle(builder, type_id, val_id, val_id, components, component_count);
+    }
+    else
+    {
+        component_idx = vsir_swizzle_get_component(swizzle, vsir_write_mask_get_component_idx(write_mask));
+        val_id = vkd3d_spirv_build_op_composite_extract1(builder, type_id, val_id, component_idx);
+    }
+
     if (component_type != reg_component_type)
     {
-        /* Required for resource loads with sampled type int, because DXIL has no signedness.
-         * Only 128-bit vector sizes are used. */
-        type_id = vkd3d_spirv_get_type_id(builder, component_type, VKD3D_VEC4_SIZE);
+        type_id = vkd3d_spirv_get_type_id(builder, component_type, component_count);
         val_id = vkd3d_spirv_build_op_bitcast(builder, type_id, val_id);
     }
 
-    type_id = vkd3d_spirv_get_type_id(builder, component_type, 1);
-    component_idx = vsir_swizzle_get_component(swizzle, 0);
-    return vkd3d_spirv_build_op_composite_extract1(builder, type_id, val_id, component_idx);
+    return val_id;
 }
 
 static uint32_t spirv_compiler_sm6_emit_load_cbuffer_reg(struct spirv_compiler *compiler,
@@ -4261,7 +4274,7 @@ static uint32_t spirv_compiler_emit_load_reg(struct spirv_compiler *compiler,
     component_type = vkd3d_component_type_from_data_type(reg->data_type);
 
     if (reg->type == VKD3DSPR_SSA)
-        return spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle);
+        return spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle, write_mask);
 
     if (!spirv_compiler_get_register_info(compiler, reg, &reg_info))
     {
@@ -7638,6 +7651,26 @@ static void spirv_compiler_emit_swapc(struct spirv_compiler *compiler,
     spirv_compiler_emit_store_dst(compiler, &dst[1], val_id);
 }
 
+static void spirv_compiler_emit_composite_construct(struct spirv_compiler *compiler,
+        const struct vkd3d_shader_instruction *instruction)
+{
+    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    const struct vkd3d_shader_dst_param *dst = instruction->dst;
+    const struct vkd3d_shader_src_param *src = instruction->src;
+    uint32_t components[VKD3D_VEC4_SIZE];
+    unsigned int i, component_count;
+    uint32_t type_id, val_id;
+
+    component_count = instruction->src_count;
+    type_id = vkd3d_spirv_get_type_id_for_data_type(builder, dst->reg.data_type, component_count);
+
+    for (i = 0; i < component_count; ++i)
+        components[i] = spirv_compiler_emit_load_reg(compiler, &src[i].reg, 0, VKD3DSP_WRITEMASK_0);
+
+    val_id = vkd3d_spirv_build_op_composite_construct(builder, type_id, components, component_count);
+    spirv_compiler_emit_store_dst(compiler, dst, val_id);
+}
+
 static void spirv_compiler_emit_dot(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
@@ -10355,6 +10388,9 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
             break;
         case VKD3DSIH_SWAPC:
             spirv_compiler_emit_swapc(compiler, instruction);
+            break;
+        case VKD3DSIH_COMPOSITE_CONSTRUCT:
+            spirv_compiler_emit_composite_construct(compiler, instruction);
             break;
         case VKD3DSIH_ADD:
         case VKD3DSIH_AND:

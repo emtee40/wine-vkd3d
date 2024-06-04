@@ -58,6 +58,7 @@ static const char * const shader_opcode_names[] =
     [VKD3DSIH_CHECK_ACCESS_FULLY_MAPPED       ] = "check_access_fully_mapped",
     [VKD3DSIH_CMP                             ] = "cmp",
     [VKD3DSIH_CND                             ] = "cnd",
+    [VKD3DSIH_COMPOSITE_CONSTRUCT             ] = "composite_construct",
     [VKD3DSIH_CONTINUE                        ] = "continue",
     [VKD3DSIH_CONTINUEP                       ] = "continuec",
     [VKD3DSIH_COUNTBITS                       ] = "countbits",
