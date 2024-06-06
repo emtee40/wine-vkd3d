@@ -58,6 +58,7 @@ static const char * const shader_opcode_names[] =
     [VKD3DSIH_CHECK_ACCESS_FULLY_MAPPED       ] = "check_access_fully_mapped",
     [VKD3DSIH_CMP                             ] = "cmp",
     [VKD3DSIH_CND                             ] = "cnd",
+    [VKD3DSIH_COMPOSITE_CONSTRUCT             ] = "composite_construct",
     [VKD3DSIH_CONTINUE                        ] = "continue",
     [VKD3DSIH_CONTINUEP                       ] = "continuec",
     [VKD3DSIH_COUNTBITS                       ] = "countbits",
@@ -93,6 +94,7 @@ static const char * const shader_opcode_names[] =
     [VKD3DSIH_DCL_RESOURCE_RAW                ] = "dcl_resource_raw",
     [VKD3DSIH_DCL_RESOURCE_STRUCTURED         ] = "dcl_resource_structured",
     [VKD3DSIH_DCL_SAMPLER                     ] = "dcl_sampler",
+    [VKD3DSIH_DCL_TYPED_TEMP                  ] = "dcl_typed_temp",
     [VKD3DSIH_DCL_STREAM                      ] = "dcl_stream",
     [VKD3DSIH_DCL_TEMPS                       ] = "dcl_temps",
     [VKD3DSIH_DCL_TESSELLATOR_DOMAIN          ] = "dcl_tessellator_domain",
@@ -254,6 +256,10 @@ static const char * const shader_opcode_names[] =
     [VKD3DSIH_PHASE                           ] = "phase",
     [VKD3DSIH_PHI                             ] = "phi",
     [VKD3DSIH_POW                             ] = "pow",
+    [VKD3DSIH_QUAD_READ_ACROSS_D              ] = "quad_read_across_d",
+    [VKD3DSIH_QUAD_READ_ACROSS_X              ] = "quad_read_across_x",
+    [VKD3DSIH_QUAD_READ_ACROSS_Y              ] = "quad_read_across_y",
+    [VKD3DSIH_QUAD_READ_LANE_AT               ] = "quad_read_lane_at",
     [VKD3DSIH_RCP                             ] = "rcp",
     [VKD3DSIH_REP                             ] = "rep",
     [VKD3DSIH_RESINFO                         ] = "resinfo",
@@ -2050,6 +2056,15 @@ static void shader_dump_instruction(struct vkd3d_d3d_asm_compiler *compiler,
             shader_print_register(compiler, " ", &ins->declaration.sampler.src.reg, true,
                     ins->flags == VKD3DSI_SAMPLER_COMPARISON_MODE ? ", comparisonMode" : "");
             shader_dump_register_space(compiler, ins->declaration.sampler.range.space);
+            break;
+
+        case VKD3DSIH_DCL_TYPED_TEMP:
+            vkd3d_string_buffer_printf(buffer, " %sa%u%s", compiler->colours.reg,
+                    ins->declaration.typed_temp.register_idx, compiler->colours.reset);
+            if (ins->declaration.typed_temp.alignment)
+                shader_print_uint_literal(compiler, ", align ", ins->declaration.typed_temp.alignment, "");
+            if (ins->declaration.typed_temp.initialiser.type != VKD3DSPR_NULL)
+                shader_print_register(compiler, ", init ", &ins->declaration.typed_temp.initialiser, false, "");
             break;
 
         case VKD3DSIH_DCL_TEMPS:

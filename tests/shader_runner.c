@@ -147,6 +147,9 @@ static bool check_qualifier_args_conjunction(struct shader_runner *runner, const
         {"sm<4",  SHADER_MODEL_2_0, SHADER_MODEL_4_0 - 1},
         {"sm<6",  SHADER_MODEL_2_0, SHADER_MODEL_6_0 - 1},
         {"glsl", 0, 0, true},
+        {"warp", 0, 0, true},
+        {"radv", 0, 0, true},
+        {"mvk",  0, 0, true},
     };
 
     while (*line != ')' && *line != '|')
@@ -345,6 +348,14 @@ static void parse_require_directive(struct shader_runner *runner, const char *li
     {
         runner->require_wave_ops = true;
     }
+    else if (match_string(line, "non-warp", &line))
+    {
+        runner->crashes_on_warp = true;
+    }
+    else if (match_string(line, "array index in vertex and tessellation", &line))
+    {
+        runner->require_array_index_in_vertex_and_tessellation = true;
+    }
     else
     {
         fatal_error("Unknown require directive '%s'.\n", line);
@@ -374,6 +385,7 @@ static DXGI_FORMAT parse_format(const char *line, enum texture_data_type *data_t
         {"r32 float",           TEXTURE_DATA_FLOAT,  4, DXGI_FORMAT_R32_FLOAT},
         {"r32 sint",            TEXTURE_DATA_SINT,   4, DXGI_FORMAT_R32_SINT},
         {"r32 uint",            TEXTURE_DATA_UINT,   4, DXGI_FORMAT_R32_UINT},
+        {"r32 typeless",        TEXTURE_DATA_UINT,   4, DXGI_FORMAT_R32_TYPELESS},
     };
     unsigned int i;
 
@@ -510,11 +522,19 @@ static void parse_resource_directive(struct resource_params *resource, const cha
         {
             resource->dimension = RESOURCE_DIMENSION_BUFFER;
             resource->height = 1;
+            resource->depth_or_array_size = 1;
+        }
+        else if (sscanf(line, "( raw_buffer , %u ) ", &resource->width) == 1)
+        {
+            resource->dimension = RESOURCE_DIMENSION_BUFFER;
+            resource->height = 1;
+            resource->is_raw = true;
         }
         else if (sscanf(line, "( counter_buffer , %u ) ", &resource->width) == 1)
         {
             resource->dimension = RESOURCE_DIMENSION_BUFFER;
             resource->height = 1;
+            resource->depth_or_array_size = 1;
             resource->is_uav_counter = true;
             resource->stride = sizeof(uint32_t);
             resource->texel_size = resource->stride;
@@ -523,8 +543,15 @@ static void parse_resource_directive(struct resource_params *resource, const cha
         else if (sscanf(line, "( 2d , %u , %u ) ", &resource->width, &resource->height) == 2)
         {
             resource->dimension = RESOURCE_DIMENSION_2D;
+            resource->depth_or_array_size = 1;
         }
         else if (sscanf(line, "( 2dms , %u , %u , %u ) ", &resource->sample_count, &resource->width, &resource->height) == 3)
+        {
+            resource->dimension = RESOURCE_DIMENSION_2D;
+            resource->depth_or_array_size = 1;
+        }
+        else if (sscanf(line, "( 2darray , %u , %u , %u ) ", &resource->width, &resource->height,
+                &resource->depth_or_array_size) == 3)
         {
             resource->dimension = RESOURCE_DIMENSION_2D;
         }
@@ -573,6 +600,9 @@ static void parse_resource_directive(struct resource_params *resource, const cha
             if (rest == line)
                 break;
 
+            if (resource->depth_or_array_size > 1)
+                fatal_error("Upload not implemented for 2d arrays.\n");
+
             vkd3d_array_reserve((void **)&resource->data, &resource->data_capacity, resource->data_size + sizeof(u), 1);
             memcpy(resource->data + resource->data_size, &u, sizeof(u));
             resource->data_size += sizeof(u);
@@ -619,6 +649,7 @@ void init_resource(struct resource *resource, const struct resource_params *para
     resource->texel_size = params->texel_size;
     resource->width = params->width;
     resource->height = params->height;
+    resource->depth_or_array_size = params->depth_or_array_size;
     resource->sample_count = params->sample_count;
 }
 
@@ -797,6 +828,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
     int ret;
 
     runner->is_todo = false;
+    runner->is_bugged = false;
+    runner->is_broken = false;
 
     while (match)
     {
@@ -805,6 +838,16 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
         if (match_string_with_args(runner, line, "todo", &line))
         {
             runner->is_todo = true;
+            match = true;
+        }
+        if (match_string_with_args(runner, line, "bug", &line))
+        {
+            runner->is_bugged = true;
+            match = true;
+        }
+        if (match_string_with_args(runner, line, "broken", &line))
+        {
+            runner->is_broken = true;
             match = true;
         }
 
@@ -905,6 +948,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             params.texel_size = 16;
             params.width = RENDER_TARGET_WIDTH;
             params.height = RENDER_TARGET_HEIGHT;
+            params.depth_or_array_size = 1;
             params.level_count = 1;
 
             set_resource(runner, &params);
@@ -958,12 +1002,15 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             params.texel_size = 16;
             params.width = RENDER_TARGET_WIDTH;
             params.height = RENDER_TARGET_HEIGHT;
+            params.depth_or_array_size = 1;
             params.level_count = 1;
 
             set_resource(runner, &params);
         }
 
-        if (match_string(line, "triangle list", &line))
+        if (match_string(line, "point list", &line))
+            topology = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+        else if (match_string(line, "triangle list", &line))
             topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
         else if (match_string(line, "triangle strip", &line))
             topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
@@ -991,7 +1038,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
     }
     else if (match_string(line, "probe", &line))
     {
-        unsigned int left, top, right, bottom, ulps, slot;
+        unsigned int left, top, right, bottom, ulps, slot, array_layer = 0;
         struct resource_readback *rb;
         struct resource *resource;
         bool is_signed = false;
@@ -1020,6 +1067,15 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             line = rest;
 
             resource = shader_runner_get_resource(runner, RESOURCE_TYPE_RENDER_TARGET, slot);
+
+            if (resource->depth_or_array_size > 1)
+            {
+                array_layer = strtoul(line, &rest, 10);
+
+                if (rest == line)
+                    fatal_error("Malformed render target array layer '%s'.\n", line);
+                line = rest;
+            }
         }
         else if (match_string(line, "dsv", &line))
         {
@@ -1030,7 +1086,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             resource = shader_runner_get_resource(runner, RESOURCE_TYPE_RENDER_TARGET, 0);
         }
 
-        rb = runner->ops->get_resource_readback(runner, resource);
+        rb = runner->ops->get_resource_readback(runner, resource, array_layer);
 
         if (match_string(line, "all", &line))
         {
@@ -1065,7 +1121,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             ++line;
             read_uint4(&line, &v, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) check_readback_data_uvec4(rb, &rect, &v);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uvec4(rb, &rect, &v);
         }
         else if (match_string(line, "rgbai", &line))
         {
@@ -1076,7 +1133,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             ++line;
             read_int4(&line, &v, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) check_readback_data_ivec4(rb, &rect, &v);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_ivec4(rb, &rect, &v);
         }
         else if (match_string(line, "rgba", &line))
         {
@@ -1087,7 +1145,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 5)
                 ulps = 0;
-            todo_if(runner->is_todo) check_readback_data_vec4(rb, &rect, &v, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_vec4(rb, &rect, &v, ulps);
         }
         else if (match_string(line, "rui", &line) || (is_signed = match_string(line, "ri", &line)))
         {
@@ -1108,7 +1167,20 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             else
                 read_uint(&line, &expect, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) check_readback_data_uint(rb, &box, expect, 0);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uint(rb, &box, expect, 0);
+        }
+        else if (match_string(line, "rgui64", &line))
+        {
+            struct u64vec2 v;
+
+            if (*line != '(')
+                fatal_error("Malformed probe arguments '%s'.\n", line);
+            ++line;
+            read_uint64(&line, &v.x, false);
+            read_uint64(&line, &v.y, false);
+            line = close_parentheses(line);
+            todo_if(runner->is_todo) check_readback_data_u64vec2(rb, &rect, &v);
         }
         else if (match_string(line, "rui64", &line) || (is_signed = match_string(line, "ri64", &line)))
         {
@@ -1129,7 +1201,19 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             else
                 read_uint64(&line, &expect, false);
             line = close_parentheses(line);
-            todo_if(runner->is_todo) check_readback_data_uint64(rb, &box, expect, 0);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_uint64(rb, &box, expect, 0);
+        }
+        else if (match_string(line, "rgd", &line))
+        {
+            struct dvec2 v;
+
+            ret = sscanf(line, "( %lf , %lf ) %u", &v.x, &v.y, &ulps);
+            if (ret < 2)
+                fatal_error("Malformed probe arguments '%s'.\n", line);
+            if (ret < 3)
+                ulps = 0;
+            todo_if(runner->is_todo) check_readback_data_dvec2(rb, &rect, &v, ulps);
         }
         else if (match_string(line, "rd", &line))
         {
@@ -1140,7 +1224,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 2)
                 ulps = 0;
-            todo_if(runner->is_todo) check_readback_data_double(rb, &rect, expect, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_double(rb, &rect, expect, ulps);
         }
         else if (match_string(line, "r", &line))
         {
@@ -1151,7 +1236,8 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
                 fatal_error("Malformed probe arguments '%s'.\n", line);
             if (ret < 2)
                 ulps = 0;
-            todo_if(runner->is_todo) check_readback_data_float(rb, &rect, expect, ulps);
+            todo_if(runner->is_todo) bug_if(runner->is_bugged) broken_if(runner->is_broken)
+            check_readback_data_float(rb, &rect, expect, ulps);
         }
         else
         {
@@ -1245,6 +1331,20 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
 
         read_uint(&line, &sample_mask, false);
         runner->sample_mask = sample_mask;
+    }
+    else if (match_string(line, "viewport", &line))
+    {
+        unsigned int i;
+
+        read_uint(&line, &i, false);
+        if (i >= ARRAY_SIZE(runner->viewports))
+            fatal_error("Unhandled viewport index %u.\n", i);
+
+        if (sscanf(line, "%f %f %f %f", &runner->viewports[i].x, &runner->viewports[i].y,
+                &runner->viewports[i].width, &runner->viewports[i].height) < 4)
+            fatal_error("Malformed viewport '%s'.\n", line);
+
+        runner->viewport_count = max(runner->viewport_count, i + 1);
     }
     else
     {
@@ -1559,6 +1659,10 @@ static bool check_requirements(const struct shader_runner *runner, const struct 
         return false;
     if (runner->require_wave_ops && !caps->wave_ops)
         return false;
+    if (runner->crashes_on_warp && test_options.use_warp_device)
+        return false;
+    if (runner->require_array_index_in_vertex_and_tessellation && !caps->array_index_in_vertex_and_tessellation)
+        return false;
 
     return true;
 }
@@ -1623,6 +1727,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     trace("   float64: %u.\n", caps->float64);
     trace("     int64: %u.\n", caps->int64);
     trace("       rov: %u.\n", caps->rov);
+    trace("array index in vertex and tessellation: %u.\n", caps->array_index_in_vertex_and_tessellation);
 
     if (!test_options.filename)
         fatal_error("No filename specified.\n");
@@ -1868,6 +1973,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
                 runner->require_int64 = false;
                 runner->require_rov = false;
                 runner->require_wave_ops = false;
+                runner->crashes_on_warp = false;
                 runner->compile_options = 0;
                 skip_tests = false;
             }

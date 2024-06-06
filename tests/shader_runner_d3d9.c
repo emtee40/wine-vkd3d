@@ -117,6 +117,11 @@ static bool init_test_context(struct d3d9_shader_runner *runner)
     D3DCAPS9 caps;
     HRESULT hr;
 
+    static const char *const warp_tag[] =
+    {
+        "warp",
+    };
+
     memset(runner, 0, sizeof(*runner));
 
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -150,6 +155,11 @@ static bool init_test_context(struct d3d9_shader_runner *runner)
     }
 
     runner->caps.runner = "d3d9.dll";
+    if (test_options.use_warp_device)
+    {
+        runner->caps.tags = warp_tag;
+        runner->caps.tag_count = 1;
+    }
     runner->caps.minimum_shader_model = SHADER_MODEL_2_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_3_0;
 
@@ -345,6 +355,8 @@ static bool d3d9_runner_draw(struct shader_runner *r,
 
     if (instance_count > 1)
         fatal_error("Unhandled instance count %u.\n", instance_count);
+    if (r->viewport_count)
+        fatal_error("Unhandled viewports.\n");
 
     if (!(vs_code = compile_shader(runner, runner->r.vs_source, "vs")))
         return false;
@@ -498,7 +510,8 @@ struct d3d9_resource_readback
     IDirect3DSurface9 *surface;
 };
 
-static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d9_shader_runner *runner = d3d9_shader_runner(r);
     struct d3d9_resource_readback *rb = malloc(sizeof(*rb));

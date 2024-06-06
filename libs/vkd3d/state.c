@@ -260,15 +260,16 @@ static VkDescriptorType vk_descriptor_type_from_vkd3d_descriptor_type(enum vkd3d
     }
 }
 
-static VkDescriptorType vk_descriptor_type_from_d3d12_root_parameter(D3D12_ROOT_PARAMETER_TYPE type)
+static VkDescriptorType vk_descriptor_type_from_d3d12_root_parameter(D3D12_ROOT_PARAMETER_TYPE type,
+        const struct d3d12_device *device)
 {
     switch (type)
     {
-        /* SRV and UAV root parameters are buffer views. */
+        /* SRV and UAV root parameters are untyped buffer views. */
         case D3D12_ROOT_PARAMETER_TYPE_SRV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            return device->srv_raw_struct_descriptor_type;
         case D3D12_ROOT_PARAMETER_TYPE_UAV:
-            return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+            return device->uav_raw_struct_descriptor_type;
         case D3D12_ROOT_PARAMETER_TYPE_CBV:
             return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         default:
@@ -1174,6 +1175,7 @@ static HRESULT d3d12_root_signature_init_root_descriptors(struct d3d12_root_sign
         const D3D12_ROOT_SIGNATURE_DESC *desc, struct vkd3d_descriptor_set_context *context)
 {
     VkDescriptorSetLayoutBinding *cur_binding = context->current_binding;
+    const struct d3d12_device *device = root_signature->device;
     unsigned int i;
 
     root_signature->push_descriptor_mask = 0;
@@ -1192,7 +1194,7 @@ static HRESULT d3d12_root_signature_init_root_descriptors(struct d3d12_root_sign
                 vkd3d_descriptor_type_from_d3d12_root_parameter_type(p->ParameterType),
                 p->u.Descriptor.RegisterSpace, p->u.Descriptor.ShaderRegister, 1, true, false,
                 vkd3d_shader_visibility_from_d3d12(p->ShaderVisibility), context);
-        cur_binding->descriptorType = vk_descriptor_type_from_d3d12_root_parameter(p->ParameterType);
+        cur_binding->descriptorType = vk_descriptor_type_from_d3d12_root_parameter(p->ParameterType, device);
         cur_binding->descriptorCount = 1;
         cur_binding->stageFlags = stage_flags_from_visibility(p->ShaderVisibility);
         cur_binding->pImmutableSamplers = NULL;
@@ -2144,6 +2146,20 @@ struct d3d12_pipeline_state *unsafe_impl_from_ID3D12PipelineState(ID3D12Pipeline
     return impl_from_ID3D12PipelineState(iface);
 }
 
+static inline unsigned int buffer_srv_compile_option(const struct d3d12_device *device)
+{
+    return (device->srv_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            ? VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_BUFFER
+            : VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV_STORAGE_TEXEL_BUFFER;
+}
+
+static inline unsigned int buffer_uav_compile_option(const struct d3d12_device *device)
+{
+    return (device->uav_raw_struct_descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+            ? VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_BUFFER
+            : VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_TEXEL_BUFFER;
+}
+
 static inline unsigned int typed_uav_compile_option(const struct d3d12_device *device)
 {
     return device->vk_info.uav_read_without_format
@@ -2179,6 +2195,8 @@ static HRESULT create_shader_stage(struct d3d12_device *device,
     const struct vkd3d_shader_compile_option options[] =
     {
         {VKD3D_SHADER_COMPILE_OPTION_API_VERSION, VKD3D_SHADER_API_VERSION_1_12},
+        {VKD3D_SHADER_COMPILE_OPTION_BUFFER_SRV, buffer_srv_compile_option(device)},
+        {VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV, buffer_uav_compile_option(device)},
         {VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV, typed_uav_compile_option(device)},
         {VKD3D_SHADER_COMPILE_OPTION_WRITE_TESS_GEOM_POINT_SIZE, 0},
         {VKD3D_SHADER_COMPILE_OPTION_FEATURE, feature_flags_compile_option(device)},

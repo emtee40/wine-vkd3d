@@ -263,6 +263,11 @@ static BOOL init_test_context(struct d3d11_shader_runner *runner)
     HRESULT hr;
     RECT rect;
 
+    static const char *const warp_tag[] =
+    {
+        "warp",
+    };
+
     memset(runner, 0, sizeof(*runner));
 
     if (!(runner->device = create_device()))
@@ -272,6 +277,11 @@ static BOOL init_test_context(struct d3d11_shader_runner *runner)
     }
 
     runner->caps.runner = "d3d11.dll";
+    if (test_options.use_warp_device)
+    {
+        runner->caps.tags = warp_tag;
+        runner->caps.tag_count = 1;
+    }
     runner->caps.minimum_shader_model = SHADER_MODEL_4_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_5_0;
 
@@ -333,7 +343,7 @@ static void destroy_test_context(struct d3d11_shader_runner *runner)
 }
 
 static ID3D11Buffer *create_buffer(ID3D11Device *device, unsigned int bind_flags, unsigned int size,
-        unsigned int stride, const void *data)
+        bool is_raw, unsigned int stride, const void *data)
 {
     D3D11_SUBRESOURCE_DATA resource_data;
     D3D11_BUFFER_DESC buffer_desc;
@@ -344,7 +354,12 @@ static ID3D11Buffer *create_buffer(ID3D11Device *device, unsigned int bind_flags
     buffer_desc.Usage = D3D11_USAGE_DEFAULT;
     buffer_desc.BindFlags = bind_flags;
     buffer_desc.CPUAccessFlags = 0;
-    buffer_desc.MiscFlags = stride ? D3D11_RESOURCE_MISC_BUFFER_STRUCTURED : 0;
+    if (is_raw)
+        buffer_desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+    else if (stride)
+        buffer_desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    else
+        buffer_desc.MiscFlags = 0;
     buffer_desc.StructureByteStride = stride;
 
     resource_data.pSysMem = data;
@@ -443,7 +458,8 @@ static void init_resource_srv_buffer(struct d3d11_shader_runner *runner, struct 
     ID3D11Device *device = runner->device;
     HRESULT hr;
 
-    resource->buffer = create_buffer(device, D3D11_BIND_SHADER_RESOURCE, params->data_size, params->stride, params->data);
+    resource->buffer = create_buffer(device, D3D11_BIND_SHADER_RESOURCE, params->data_size, params->is_raw,
+            params->stride, params->data);
     resource->resource = (ID3D11Resource *)resource->buffer;
 
     srv_desc.Format = params->format;
@@ -461,7 +477,8 @@ static void init_resource_uav_buffer(struct d3d11_shader_runner *runner, struct 
     ID3D11Device *device = runner->device;
     HRESULT hr;
 
-    resource->buffer = create_buffer(device, D3D11_BIND_UNORDERED_ACCESS, params->data_size, params->stride, params->data);
+    resource->buffer = create_buffer(device, D3D11_BIND_UNORDERED_ACCESS, params->data_size, params->is_raw,
+            params->stride, params->data);
     resource->resource = (ID3D11Resource *)resource->buffer;
     resource->is_uav_counter = params->is_uav_counter;
 
@@ -469,7 +486,12 @@ static void init_resource_uav_buffer(struct d3d11_shader_runner *runner, struct 
     uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
     uav_desc.Buffer.FirstElement = 0;
     uav_desc.Buffer.NumElements = params->data_size / params->texel_size;
-    uav_desc.Buffer.Flags = params->is_uav_counter ? D3D11_BUFFER_UAV_FLAG_COUNTER : 0;
+    if (params->is_raw)
+        uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    else if (params->is_uav_counter)
+        uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_COUNTER;
+    else
+        uav_desc.Buffer.Flags = 0;
     hr = ID3D11Device_CreateUnorderedAccessView(device, resource->resource, &uav_desc, &resource->uav);
     ok(hr == S_OK, "Failed to create view, hr %#lx.\n", hr);
 }
@@ -502,7 +524,8 @@ static struct resource *d3d11_runner_create_resource(struct shader_runner *r, co
             break;
 
         case RESOURCE_TYPE_VERTEX_BUFFER:
-            resource->buffer = create_buffer(device, D3D11_BIND_VERTEX_BUFFER, params->data_size, params->stride, params->data);
+            resource->buffer = create_buffer(device, D3D11_BIND_VERTEX_BUFFER, params->data_size, params->is_raw,
+                    params->stride, params->data);
             resource->resource = (ID3D11Resource *)resource->buffer;
             break;
     }
@@ -568,7 +591,7 @@ static bool d3d11_runner_dispatch(struct shader_runner *r, unsigned int x, unsig
         ID3D11Buffer *cb;
 
         cb = create_buffer(device, D3D11_BIND_CONSTANT_BUFFER,
-                runner->r.uniform_count * sizeof(*runner->r.uniforms), 0, runner->r.uniforms);
+                runner->r.uniform_count * sizeof(*runner->r.uniforms), false, 0, runner->r.uniforms);
         ID3D11DeviceContext_CSSetConstantBuffers(context, 0, 1, &cb);
         ID3D11Buffer_Release(cb);
     }
@@ -730,7 +753,7 @@ static bool d3d11_runner_draw(struct shader_runner *r,
     if (runner->r.uniform_count)
     {
         cb = create_buffer(device, D3D11_BIND_CONSTANT_BUFFER,
-                runner->r.uniform_count * sizeof(*runner->r.uniforms), 0, runner->r.uniforms);
+                runner->r.uniform_count * sizeof(*runner->r.uniforms), false, 0, runner->r.uniforms);
         ID3D11DeviceContext_VSSetConstantBuffers(context, 0, 1, &cb);
         ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &cb);
         if (hs_code)
@@ -834,6 +857,21 @@ static bool d3d11_runner_draw(struct shader_runner *r,
         ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
     ID3D11DeviceContext_RSSetState(context, runner->rasterizer_state);
 
+    if (r->viewport_count)
+    {
+        D3D11_VIEWPORT viewports[ARRAY_SIZE(r->viewports)];
+        for (i = 0; i < r->viewport_count; ++i)
+        {
+            viewports[i].TopLeftX = r->viewports[i].x;
+            viewports[i].TopLeftY = r->viewports[i].y;
+            viewports[i].Width = r->viewports[i].width;
+            viewports[i].Height = r->viewports[i].height;
+            viewports[i].MinDepth = 0.0f;
+            viewports[i].MaxDepth = 1.0f;
+        }
+        ID3D11DeviceContext_RSSetViewports(runner->immediate_context, r->viewport_count, viewports);
+    }
+
     ID3D11DeviceContext_DrawInstanced(context, vertex_count, instance_count, 0, 0);
 
     ID3D11PixelShader_Release(ps);
@@ -858,7 +896,8 @@ struct d3d11_resource_readback
     ID3D11Resource *resource;
 };
 
-static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d11_shader_runner *runner = d3d11_shader_runner(r);
     struct d3d11_resource_readback *rb = malloc(sizeof(*rb));

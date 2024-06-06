@@ -92,11 +92,12 @@ struct resource_params
 
     DXGI_FORMAT format;
     bool is_shadow;
+    bool is_raw;
     bool is_uav_counter;
     enum texture_data_type data_type;
     unsigned int texel_size;
     unsigned int stride;
-    unsigned int width, height;
+    unsigned int width, height, depth_or_array_size;
     unsigned int level_count;
     unsigned int sample_count;
     uint8_t *data;
@@ -112,9 +113,14 @@ struct resource
     DXGI_FORMAT format;
     unsigned int size;
     unsigned int texel_size;
-    unsigned int width, height;
+    unsigned int width, height, depth_or_array_size;
     unsigned int sample_count;
 };
+
+static inline unsigned int resource_get_layer_count(const struct resource *res)
+{
+    return res->depth_or_array_size;
+}
 
 struct input_element
 {
@@ -123,6 +129,14 @@ struct input_element
     DXGI_FORMAT format;
     unsigned int texel_size;
     unsigned int index;
+};
+
+struct rect_float
+{
+    float x;
+    float y;
+    float width;
+    float height;
 };
 
 #define MAX_RESOURCES 32
@@ -139,6 +153,7 @@ struct shader_runner_caps
     bool int64;
     bool rov;
     bool wave_ops;
+    bool array_index_in_vertex_and_tessellation;
 };
 
 static inline unsigned int shader_runner_caps_get_feature_flags(const struct shader_runner_caps *caps)
@@ -159,6 +174,8 @@ struct shader_runner
     const struct shader_runner_caps *caps;
 
     bool is_todo;
+    bool is_bugged;
+    bool is_broken;
 
     char *vs_source;
     char *ps_source;
@@ -173,6 +190,8 @@ struct shader_runner
     bool require_int64;
     bool require_rov;
     bool require_wave_ops;
+    bool crashes_on_warp;
+    bool require_array_index_in_vertex_and_tessellation;
 
     bool last_render_failed;
 
@@ -195,6 +214,9 @@ struct shader_runner
     unsigned int compile_options;
 
     D3D12_COMPARISON_FUNC depth_func;
+
+    struct rect_float viewports[4];
+    unsigned int viewport_count;
 };
 
 struct shader_runner_ops
@@ -205,7 +227,8 @@ struct shader_runner_ops
     bool (*draw)(struct shader_runner *runner, D3D_PRIMITIVE_TOPOLOGY primitive_topology, unsigned int vertex_count,
             unsigned int instance_count);
     bool (*dispatch)(struct shader_runner *runner, unsigned int x, unsigned int y, unsigned int z);
-    struct resource_readback *(*get_resource_readback)(struct shader_runner *runner, struct resource *resource);
+    struct resource_readback *(*get_resource_readback)(struct shader_runner *runner, struct resource *resource,
+            unsigned int subresource);
     void (*release_readback)(struct shader_runner *runner, struct resource_readback *rb);
 };
 

@@ -464,12 +464,14 @@ static void get_resource_readback_with_command_list_and_states(ID3D12Resource *r
         D3D12_RESOURCE_STATES initial_state, D3D12_RESOURCE_STATES final_state)
 {
     D3D12_HEAP_PROPERTIES heap_properties;
+    D3D12_RESOURCE_STATES readback_state;
     D3D12_RESOURCE_DESC resource_desc;
     ID3D12Resource *src_resource;
     D3D12_RANGE read_range;
     unsigned int miplevel;
     ID3D12Device *device;
     uint64_t buffer_size;
+    bool is_ms;
     HRESULT hr;
 
     hr = ID3D12Resource_GetDevice(resource, &IID_ID3D12Device, (void **)&device);
@@ -489,11 +491,14 @@ static void get_resource_readback_with_command_list_and_states(ID3D12Resource *r
         rb->rb.row_pitch = align(rb->rb.row_pitch, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
     rb->rb.data = NULL;
 
+    is_ms = resource_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER && resource_desc.SampleDesc.Count > 1;
+    readback_state = is_ms ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE : D3D12_RESOURCE_STATE_COPY_SOURCE;
+
     if (initial_state != RESOURCE_STATE_DO_NOT_CHANGE)
-        transition_sub_resource_state(command_list, resource, sub_resource, initial_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition_sub_resource_state(command_list, resource, sub_resource, initial_state, readback_state);
 
     src_resource = resource;
-    if (resource_desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER && resource_desc.SampleDesc.Count > 1)
+    if (is_ms)
     {
         memset(&heap_properties, 0, sizeof(heap_properties));
         heap_properties.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -543,7 +548,7 @@ static void get_resource_readback_with_command_list_and_states(ID3D12Resource *r
     }
 
     if (final_state != RESOURCE_STATE_DO_NOT_CHANGE)
-        transition_sub_resource_state(command_list, resource, sub_resource, D3D12_RESOURCE_STATE_COPY_SOURCE, final_state);
+        transition_sub_resource_state(command_list, resource, sub_resource, readback_state, final_state);
 
     hr = ID3D12GraphicsCommandList_Close(command_list);
     assert_that(hr == S_OK, "Failed to close command list, hr %#x.\n", hr);

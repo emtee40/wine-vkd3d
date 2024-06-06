@@ -259,6 +259,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_CHECK_ACCESS_FULLY_MAPPED,
     VKD3DSIH_CMP,
     VKD3DSIH_CND,
+    VKD3DSIH_COMPOSITE_CONSTRUCT,
     VKD3DSIH_CONTINUE,
     VKD3DSIH_CONTINUEP,
     VKD3DSIH_COUNTBITS,
@@ -294,6 +295,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_DCL_RESOURCE_RAW,
     VKD3DSIH_DCL_RESOURCE_STRUCTURED,
     VKD3DSIH_DCL_SAMPLER,
+    VKD3DSIH_DCL_TYPED_TEMP,
     VKD3DSIH_DCL_STREAM,
     VKD3DSIH_DCL_TEMPS,
     VKD3DSIH_DCL_TESSELLATOR_DOMAIN,
@@ -455,6 +457,10 @@ enum vkd3d_shader_opcode
     VKD3DSIH_PHASE,
     VKD3DSIH_PHI,
     VKD3DSIH_POW,
+    VKD3DSIH_QUAD_READ_ACROSS_D,
+    VKD3DSIH_QUAD_READ_ACROSS_X,
+    VKD3DSIH_QUAD_READ_ACROSS_Y,
+    VKD3DSIH_QUAD_READ_LANE_AT,
     VKD3DSIH_RCP,
     VKD3DSIH_REP,
     VKD3DSIH_RESINFO,
@@ -613,6 +619,7 @@ enum vkd3d_shader_register_type
     VKD3DSPR_SSA,
     VKD3DSPR_WAVELANECOUNT,
     VKD3DSPR_WAVELANEINDEX,
+    VKD3DSPR_TYPEDTEMP,
 
     VKD3DSPR_COUNT,
 
@@ -850,9 +857,19 @@ enum vkd3d_shader_type
 
     VKD3D_SHADER_TYPE_COMPUTE = VKD3D_SHADER_TYPE_GRAPHICS_COUNT,
 
+    VKD3D_SHADER_TYPE_LIBRARY,
+    VKD3D_SHADER_TYPE_RAY_GENERATION,
+    VKD3D_SHADER_TYPE_INTERSECTION,
+    VKD3D_SHADER_TYPE_ANY_HIT,
+    VKD3D_SHADER_TYPE_CLOSEST_HIT,
+    VKD3D_SHADER_TYPE_MISS,
+    VKD3D_SHADER_TYPE_CALLABLE,
+    VKD3D_SHADER_TYPE_MESH,
+    VKD3D_SHADER_TYPE_AMPLIFICATION,
+
     VKD3D_SHADER_TYPE_EFFECT,
     VKD3D_SHADER_TYPE_TEXTURE,
-    VKD3D_SHADER_TYPE_LIBRARY,
+
     VKD3D_SHADER_TYPE_COUNT,
 };
 
@@ -1151,6 +1168,15 @@ struct vkd3d_shader_function_table_pointer
     unsigned int table_count;
 };
 
+struct vkd3d_shader_typed_temp
+{
+    unsigned int register_idx;
+    unsigned int alignment;
+    enum vkd3d_data_type data_type;
+    bool has_function_scope;
+    struct vkd3d_shader_register initialiser;
+};
+
 struct vkd3d_shader_texel_offset
 {
     signed char u, v, w;
@@ -1225,6 +1251,7 @@ struct vkd3d_shader_instruction
         struct vkd3d_shader_index_range index_range;
         struct vkd3d_shader_indexable_temp indexable_temp;
         struct vkd3d_shader_function_table_pointer fp;
+        struct vkd3d_shader_typed_temp typed_temp;
     } declaration;
 };
 
@@ -1361,6 +1388,7 @@ struct vsir_program
     unsigned int temp_count;
     unsigned int ssa_count;
     bool use_vocp;
+    bool use_scalar_cbuffers;
 
     const char **block_names;
     size_t block_name_count;

@@ -124,6 +124,7 @@ static HRESULT vkd3d_create_vk_descriptor_heap_layout(struct d3d12_device *devic
         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
         VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     };
 
     if (device->vk_info.EXT_mutable_descriptor_type && index && index != VKD3D_SET_INDEX_UAV_COUNTER
@@ -157,7 +158,7 @@ static HRESULT vkd3d_create_vk_descriptor_heap_layout(struct d3d12_device *devic
 
     if (binding.descriptorType == VK_DESCRIPTOR_TYPE_MUTABLE_EXT)
     {
-        type_list.descriptorTypeCount = ARRAY_SIZE(descriptor_types);
+        type_list.descriptorTypeCount = ARRAY_SIZE(descriptor_types) - !device->use_storage_buffers;
         type_list.pDescriptorTypes = descriptor_types;
         mutable_info.sType = VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT;
         mutable_info.pNext = NULL;
@@ -209,12 +210,18 @@ static HRESULT vkd3d_vk_descriptor_heap_layouts_init(struct d3d12_device *device
     if (!device->use_vk_heaps)
         return S_OK;
 
+    if (device->use_storage_buffers)
+        device->vk_descriptor_heap_layouts[VKD3D_SET_INDEX_UAV_COUNTER].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+
     for (set = 0; set < ARRAY_SIZE(device->vk_descriptor_heap_layouts); ++set)
     {
         switch (device->vk_descriptor_heap_layouts[set].type)
         {
             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                 device->vk_descriptor_heap_layouts[set].count = limits->uniform_buffer_max_descriptors;
+                break;
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                device->vk_descriptor_heap_layouts[set].count = limits->storage_buffer_max_descriptors;
                 break;
             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -1732,6 +1739,20 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
 
     physical_device_info->formats4444_features.formatA4B4G4R4 = VK_FALSE;
 
+    device->use_storage_buffers = device->vk_info.device_limits.minStorageBufferOffsetAlignment <= 4
+            && vulkan_info->EXT_robustness2
+            && vulkan_info->EXT_mutable_descriptor_type;
+    if (!device->use_storage_buffers)
+    {
+        device->srv_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+        device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    }
+    else
+    {
+        device->srv_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        device->uav_raw_struct_descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+
     vulkan_info->texel_buffer_alignment_properties = physical_device_info->texel_buffer_alignment_properties;
 
     if (get_spec_version(vk_extensions, vk_extension_count, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME) >= 3)
@@ -1792,10 +1813,12 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
     descriptor_indexing->shaderInputAttachmentArrayDynamicIndexing = VK_FALSE;
     descriptor_indexing->shaderInputAttachmentArrayNonUniformIndexing = VK_FALSE;
 
-    /* We do not use storage buffers currently. */
-    features->shaderStorageBufferArrayDynamicIndexing = VK_FALSE;
-    descriptor_indexing->shaderStorageBufferArrayNonUniformIndexing = VK_FALSE;
-    descriptor_indexing->descriptorBindingStorageBufferUpdateAfterBind = VK_FALSE;
+    if (!device->use_storage_buffers)
+    {
+        features->shaderStorageBufferArrayDynamicIndexing = VK_FALSE;
+        descriptor_indexing->shaderStorageBufferArrayNonUniformIndexing = VK_FALSE;
+        descriptor_indexing->descriptorBindingStorageBufferUpdateAfterBind = VK_FALSE;
+    }
 
     if (vulkan_info->EXT_descriptor_indexing && descriptor_indexing
             && (descriptor_indexing->descriptorBindingUniformBufferUpdateAfterBind
@@ -3806,7 +3829,8 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CheckFeatureSupport(ID3D12Device9 
                 return E_INVALIDARG;
             }
 
-            data->UnalignedBlockTexturesSupported = FALSE;
+            /* Vulkan does not restrict these. */
+            data->UnalignedBlockTexturesSupported = TRUE;
 
             TRACE("Unaligned block texture support %#x.\n", data->UnalignedBlockTexturesSupported);
             return S_OK;
@@ -4248,7 +4272,7 @@ static void d3d12_device_get_resource1_allocation_info(struct d3d12_device *devi
     {
         desc = &resource_descs[i];
 
-        if (FAILED(d3d12_resource_validate_desc(desc, device)))
+        if (FAILED(d3d12_resource_validate_desc(desc, device, false)))
         {
             WARN("Invalid resource desc.\n");
             goto invalid;
@@ -4574,15 +4598,34 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_GetDeviceRemovedReason(ID3D12Devic
     return device->removed_reason;
 }
 
+static unsigned int dxgi_format_plane_count(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R32G8X24_TYPELESS:
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+        case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:
+        case DXGI_FORMAT_R24G8_TYPELESS:
+        case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+        case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+            return 2;
+        default:
+            return 1;
+    }
+}
+
 static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
         const D3D12_RESOURCE_DESC1 *desc, unsigned int first_sub_resource, unsigned int sub_resource_count,
         uint64_t base_offset, D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *row_counts,
         UINT64 *row_sizes, UINT64 *total_bytes)
 {
-    unsigned int i, sub_resource_idx, miplevel_idx, row_count, row_size, row_pitch;
+    unsigned int i, sub_resource_idx, plane_idx, miplevel_idx, row_count, row_size, row_pitch;
     unsigned int width, height, depth, plane_count, sub_resources_per_plane;
     const struct vkd3d_format *format;
     uint64_t offset, size, total;
+    DXGI_FORMAT plane_format;
 
     if (layouts)
         memset(layouts, 0xff, sizeof(*layouts) * sub_resource_count);
@@ -4593,20 +4636,19 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
     if (total_bytes)
         *total_bytes = ~(uint64_t)0;
 
-    if (!(format = vkd3d_format_from_d3d12_resource_desc(device, desc, 0)))
+    if (!(format = vkd3d_get_format(device, desc->Format, dxgi_format_is_depth_stencil(desc->Format))))
     {
         WARN("Invalid format %#x.\n", desc->Format);
         return;
     }
 
-    if (FAILED(d3d12_resource_validate_desc(desc, device)))
+    if (FAILED(d3d12_resource_validate_desc(desc, device, true)))
     {
         WARN("Invalid resource desc.\n");
         return;
     }
 
-    plane_count = ((format->vk_aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT)
-            && (format->vk_aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT)) ? 2 : 1;
+    plane_count = dxgi_format_plane_count(desc->Format);
     sub_resources_per_plane = d3d12_resource_desc_get_sub_resource_count(desc);
 
     if (!vkd3d_bound_range(first_sub_resource, sub_resource_count, sub_resources_per_plane * plane_count))
@@ -4617,21 +4659,31 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
 
     offset = 0;
     total = 0;
+    plane_format = desc->Format;
     for (i = 0; i < sub_resource_count; ++i)
     {
         sub_resource_idx = (first_sub_resource + i) % sub_resources_per_plane;
+        plane_idx = (first_sub_resource + i) / sub_resources_per_plane;
         miplevel_idx = sub_resource_idx % desc->MipLevels;
+
+        if (plane_count > 1)
+        {
+            plane_format = !plane_idx ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_R8_TYPELESS;
+            format = vkd3d_get_format(device, plane_format, true);
+        }
+
         width = align(d3d12_resource_desc_get_width(desc, miplevel_idx), format->block_width);
         height = align(d3d12_resource_desc_get_height(desc, miplevel_idx), format->block_height);
         depth = d3d12_resource_desc_get_depth(desc, miplevel_idx);
         row_count = height / format->block_height;
         row_size = (width / format->block_width) * format->byte_count * format->block_byte_count;
-        row_pitch = align(row_size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+        /* D3D12 requires double the alignment for dual planes. */
+        row_pitch = align(row_size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT * plane_count);
 
         if (layouts)
         {
             layouts[i].Offset = base_offset + offset;
-            layouts[i].Footprint.Format = desc->Format;
+            layouts[i].Footprint.Format = plane_format;
             layouts[i].Footprint.Width = width;
             layouts[i].Footprint.Height = height;
             layouts[i].Footprint.Depth = depth;
@@ -4643,7 +4695,7 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
             row_sizes[i] = row_size;
 
         size = max(0, row_count - 1) * row_pitch + row_size;
-        size = max(0, depth - 1) * align(size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) + size;
+        size = max(0, depth - 1) * align(size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT * plane_count) + size;
 
         total = offset + size;
         offset = align(total, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
@@ -5365,7 +5417,7 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
     vkd3d_mutex_init(&device->blocked_queues_mutex);
 
     vkd3d_desc_object_cache_init(&device->view_desc_cache, sizeof(struct vkd3d_view));
-    vkd3d_desc_object_cache_init(&device->cbuffer_desc_cache, sizeof(struct vkd3d_cbuffer_desc));
+    vkd3d_desc_object_cache_init(&device->cbuffer_desc_cache, sizeof(struct vkd3d_buffer_desc));
 
     device_init_descriptor_pool_sizes(device);
 

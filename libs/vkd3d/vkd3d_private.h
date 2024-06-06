@@ -48,6 +48,7 @@
 #define VKD3D_DESCRIPTOR_MAGIC_CBV     VKD3D_MAKE_TAG('C', 'B', 'V', 0)
 #define VKD3D_DESCRIPTOR_MAGIC_SRV     VKD3D_MAKE_TAG('S', 'R', 'V', 0)
 #define VKD3D_DESCRIPTOR_MAGIC_UAV     VKD3D_MAKE_TAG('U', 'A', 'V', 0)
+#define VKD3D_DESCRIPTOR_MAGIC_SBO     VKD3D_MAKE_TAG('S', 'B', 'O', 0)
 #define VKD3D_DESCRIPTOR_MAGIC_SAMPLER VKD3D_MAKE_TAG('S', 'M', 'P', 0)
 #define VKD3D_DESCRIPTOR_MAGIC_DSV     VKD3D_MAKE_TAG('D', 'S', 'V', 0)
 #define VKD3D_DESCRIPTOR_MAGIC_RTV     VKD3D_MAKE_TAG('R', 'T', 'V', 0)
@@ -526,7 +527,8 @@ struct vkd3d_resource_allocation_info
 };
 
 bool d3d12_resource_is_cpu_accessible(const struct d3d12_resource *resource);
-HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device);
+HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device,
+        bool for_footprints);
 void d3d12_resource_get_tiling(struct d3d12_device *device, const struct d3d12_resource *resource,
         UINT *total_tile_count, D3D12_PACKED_MIP_INFO *packed_mip_info, D3D12_TILE_SHAPE *standard_tile_shape,
         UINT *sub_resource_tiling_count, UINT first_sub_resource_tiling,
@@ -630,10 +632,12 @@ bool vkd3d_create_buffer_view(struct d3d12_device *device, uint32_t magic, VkBuf
 bool vkd3d_create_texture_view(struct d3d12_device *device, uint32_t magic, VkImage vk_image,
         const struct vkd3d_texture_view_desc *desc, struct vkd3d_view **view);
 
-struct vkd3d_cbuffer_desc
+struct vkd3d_buffer_desc
 {
     struct vkd3d_desc_header h;
-    VkDescriptorBufferInfo vk_cbv_info;
+    VkDescriptorBufferInfo vk_buffer_info;
+    VkDescriptorBufferInfo vk_counter_info;
+    bool is_raw;
 };
 
 struct d3d12_desc
@@ -644,7 +648,7 @@ struct d3d12_desc
         {
             struct vkd3d_desc_header *header;
             struct vkd3d_view *view;
-            struct vkd3d_cbuffer_desc *cb_desc;
+            struct vkd3d_buffer_desc *buffer_desc;
             void *object;
         } u;
     } s;
@@ -726,6 +730,8 @@ void d3d12_desc_write_atomic(struct d3d12_desc *dst, const struct d3d12_desc *sr
 
 bool vkd3d_create_raw_buffer_view(struct d3d12_device *device,
         D3D12_GPU_VIRTUAL_ADDRESS gpu_address, D3D12_ROOT_PARAMETER_TYPE parameter_type, VkBufferView *vk_buffer_view);
+void vkd3d_get_raw_buffer_info(struct d3d12_device *device, D3D12_GPU_VIRTUAL_ADDRESS gpu_address,
+        D3D12_ROOT_PARAMETER_TYPE parameter_type, VkDescriptorBufferInfo *vk_buffer_info);
 HRESULT vkd3d_create_static_sampler(struct d3d12_device *device,
         const D3D12_STATIC_SAMPLER_DESC *desc, VkSampler *vk_sampler);
 
@@ -784,7 +790,7 @@ extern const enum vkd3d_vk_descriptor_set_index vk_descriptor_set_index_table[];
 static inline enum vkd3d_vk_descriptor_set_index vkd3d_vk_descriptor_set_index_from_vk_descriptor_type(
         VkDescriptorType type)
 {
-    assert(type <= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    assert(type <= VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     assert(vk_descriptor_set_index_table[type] < VKD3D_SET_INDEX_COUNT);
 
     return vk_descriptor_set_index_table[type];
@@ -1532,6 +1538,10 @@ struct d3d12_device
     struct vkd3d_vk_descriptor_heap_layout vk_descriptor_heap_layouts[VKD3D_SET_INDEX_COUNT];
     bool use_vk_heaps;
 
+    bool use_storage_buffers;
+    VkDescriptorType srv_raw_struct_descriptor_type;
+    VkDescriptorType uav_raw_struct_descriptor_type;
+
     struct d3d12_descriptor_heap **heaps;
     size_t heap_capacity;
     size_t heap_count;
@@ -1612,6 +1622,8 @@ static inline unsigned int d3d12_device_get_descriptor_handle_increment_size(str
 {
     return ID3D12Device9_GetDescriptorHandleIncrementSize(&device->ID3D12Device9_iface, descriptor_type);
 }
+
+bool dxgi_format_is_depth_stencil(DXGI_FORMAT dxgi_format);
 
 /* utils */
 enum vkd3d_format_type

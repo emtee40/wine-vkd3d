@@ -104,6 +104,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/effect-technique-fx_5.shader_test \
 	tests/hlsl/effect-variables-fx_2.shader_test \
 	tests/hlsl/entry-point-semantics.shader_test \
+	tests/hlsl/eval-attrib.shader_test \
 	tests/hlsl/exp.shader_test \
 	tests/hlsl/expr-indexing.shader_test \
 	tests/hlsl/float-comparison.shader_test \
@@ -140,6 +141,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/invalid.shader_test \
 	tests/hlsl/inverse-trig.shader_test \
 	tests/hlsl/is-front-face.shader_test \
+	tests/hlsl/is-helper-lane.shader_test \
 	tests/hlsl/ldexp.shader_test \
 	tests/hlsl/length.shader_test \
 	tests/hlsl/lerp.shader_test \
@@ -172,6 +174,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/pointer-cast.shader_test \
 	tests/hlsl/pow.shader_test \
 	tests/hlsl/precise-modifier.shader_test \
+	tests/hlsl/primitive-id.shader_test \
 	tests/hlsl/rasteriser-ordered-views.shader_test \
 	tests/hlsl/reflect.shader_test \
 	tests/hlsl/refract.shader_test \
@@ -182,6 +185,7 @@ vkd3d_shader_tests = \
 	tests/hlsl/return-implicit-conversion.shader_test \
 	tests/hlsl/return.shader_test \
 	tests/hlsl/round.shader_test \
+	tests/hlsl/rt-array-index.shader_test \
 	tests/hlsl/rt-get-sample-info.shader_test \
 	tests/hlsl/sample-bias.shader_test \
 	tests/hlsl/sample-cmp.shader_test \
@@ -241,6 +245,8 @@ vkd3d_shader_tests = \
 	tests/hlsl/vector-indexing-uniform.shader_test \
 	tests/hlsl/vector-indexing.shader_test \
 	tests/hlsl/vertex-shader-ops.shader_test \
+	tests/hlsl/vp-array-index.shader_test \
+	tests/hlsl/wave-ops-64-bit.shader_test \
 	tests/hlsl/wave-ops-float.shader_test \
 	tests/hlsl/wave-ops-int.shader_test \
 	tests/hlsl/wave-ops-uint.shader_test \

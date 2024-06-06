@@ -39,17 +39,18 @@ uniform 0 uint4 0 0 0 0
 todo(glsl) draw quad
 probe all rgbaui (0x7fff, 0xffff, 0, 0)
 
-[require]
-shader model >= 6.0
-
-[test]
-uniform 0 uint4 0 0 0 0
-draw quad
-probe all rgbaui (0x7fff, 0xffffffff, 0, 0)
+% [test]
+% uniform 0 uint4 0 0 0 0
+% draw quad
+% Todo: shader model 6 results depend on whether 16-bit execution actually occurs.
+% probe all rgbaui (0x7fff, 0xffffffff, 0, 0)
 
 
 % The code d3dcompiler_47 produces for this appears correct, but the result
 % is still zero in Windows.
+
+[require]
+shader model >= 6.0
 
 [pixel shader]
 uniform min16uint4 u;
