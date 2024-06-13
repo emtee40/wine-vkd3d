@@ -6480,6 +6480,7 @@ static void d3d12_command_queue_destroy_op(struct vkd3d_cs_op_data *op)
 
         case VKD3D_CS_OP_UPDATE_MAPPINGS:
         case VKD3D_CS_OP_COPY_MAPPINGS:
+        case VKD3D_CS_OP_SWAPCHAIN_PRESENT:
             break;
     }
 }
@@ -6779,6 +6780,72 @@ static void d3d12_command_queue_execute(struct d3d12_command_queue *command_queu
         ERR("Failed to submit queue(s), vr %d.\n", vr);
 
     vkd3d_queue_release(vkd3d_queue);
+}
+
+static void d3d12_command_queue_present(struct d3d12_command_queue *command_queue,
+    VkSwapchainKHR vk_swapchain, VkCommandBuffer vk_cmd_buffer, VkSemaphore vk_semaphore, uint32_t vk_image_index,
+    ID3D12Fence *frame_latency_fence, HANDLE frame_latency_event,
+    uint64_t biased_frame_number, uint64_t frame_latency)
+{
+    const struct vkd3d_vk_device_procs *vk_procs = &command_queue->device->vk_procs;
+    struct vkd3d_queue *vkd3d_queue = command_queue->vkd3d_queue;
+    VkPresentInfoKHR present_info;
+    VkSubmitInfo submit_info;
+    VkQueue vk_queue;
+    VkResult vr;
+
+    if (!(vk_queue = vkd3d_queue_acquire(vkd3d_queue)))
+    {
+        ERR("Failed to acquire queue %p.\n", vkd3d_queue);
+        return;
+    }
+
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = NULL;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = NULL;
+    submit_info.pWaitDstStageMask = NULL;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &vk_cmd_buffer;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores = &vk_semaphore;
+
+    if ((vr = VK_CALL(vkQueueSubmit(vk_queue, 1, &submit_info, VK_NULL_HANDLE))) < 0)
+    {
+        ERR("Failed to blit swapchain buffer, vr %d.\n", vr);
+        vkd3d_queue_release(vkd3d_queue);
+        return;
+    }
+
+    present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    present_info.pNext = NULL;
+    present_info.waitSemaphoreCount = 1;
+    present_info.pWaitSemaphores = &vk_semaphore;
+    present_info.swapchainCount = 1;
+    present_info.pSwapchains = &vk_swapchain;
+    present_info.pImageIndices = &vk_image_index;
+    present_info.pResults = NULL;
+
+    vr = VK_CALL(vkQueuePresentKHR(vk_queue, &present_info));
+
+    vkd3d_queue_release(vkd3d_queue);
+
+    if (vr < 0)
+    {
+        /* Out of date will be handled on the DXGI side when vkAcquireNextImageKHR() is called. */
+        if (vr != VK_ERROR_OUT_OF_DATE_KHR)
+            ERR("Failed to present, vr %d.\n", vr);
+        return;
+    }
+
+    if (frame_latency_event)
+    {
+        struct d3d12_fence *fence = unsafe_impl_from_ID3D12Fence(frame_latency_fence);
+
+        d3d12_command_queue_signal(command_queue, fence, biased_frame_number);
+        d3d12_fence_SetEventOnCompletion((ID3D12Fence1 *)frame_latency_fence,
+                biased_frame_number - frame_latency, frame_latency_event);
+    }
 }
 
 static void d3d12_command_queue_submit_locked(struct d3d12_command_queue *queue)
@@ -7458,6 +7525,7 @@ static HRESULT d3d12_command_queue_flush_ops(struct d3d12_command_queue *queue, 
 /* flushed_any is initialised by the caller. */
 static HRESULT d3d12_command_queue_flush_ops_locked(struct d3d12_command_queue *queue, bool *flushed_any)
 {
+    struct vkd3d_cs_swapchain_present *present;
     struct vkd3d_cs_op_data *op;
     struct d3d12_fence *fence;
     unsigned int i;
@@ -7505,6 +7573,13 @@ static HRESULT d3d12_command_queue_flush_ops_locked(struct d3d12_command_queue *
 
                 case VKD3D_CS_OP_COPY_MAPPINGS:
                     FIXME("Tiled resource mapping copying is not supported yet.\n");
+                    break;
+
+                case VKD3D_CS_OP_SWAPCHAIN_PRESENT:
+                    present = &op->u.swapchain_present;
+                    d3d12_command_queue_present(queue, present->vk_swapchain, present->vk_cmd_buffer,
+                            present->vk_semaphore, present->vk_image_index, present->frame_latency_fence,
+                            present->frame_latency_event, present->biased_frame_number, present->frame_latency);
                     break;
 
                 default:
@@ -7634,6 +7709,48 @@ void vkd3d_release_vk_queue(ID3D12CommandQueue *queue)
     struct d3d12_command_queue *d3d12_queue = impl_from_ID3D12CommandQueue(queue);
 
     return vkd3d_queue_release(d3d12_queue->vkd3d_queue);
+}
+
+HRESULT vkd3d_swapchain_queue_present(ID3D12CommandQueue *queue,
+        const struct vkd3d_swapchain_queue_present_parameters *params)
+{
+    struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(queue);
+    struct vkd3d_cs_op_data *op;
+    HRESULT hr = S_OK;
+
+    if (params->type != VKD3D_STRUCTURE_TYPE_SWAPCHAIN_QUEUE_PRESENT_PARAMETERS)
+    {
+        WARN("Incorrect struct type %u.\n", params->type);
+        return E_INVALIDARG;
+    }
+
+    if (params->next)
+        WARN("Ignoring chained structure; vkd3d version too old?\n");
+
+    vkd3d_mutex_lock(&command_queue->op_mutex);
+
+    if (!(op = d3d12_command_queue_op_array_require_space(&command_queue->op_queue)))
+    {
+        ERR("Failed to add op.\n");
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+
+    op->opcode = VKD3D_CS_OP_SWAPCHAIN_PRESENT;
+    op->u.swapchain_present.vk_swapchain = params->vk_swapchain;
+    op->u.swapchain_present.vk_cmd_buffer = params->vk_blit_cmd_buffer;
+    op->u.swapchain_present.vk_semaphore = params->vk_semaphore;
+    op->u.swapchain_present.vk_image_index = params->vk_image_index;
+    op->u.swapchain_present.frame_latency_fence = params->frame_latency_fence;
+    op->u.swapchain_present.frame_latency_event = params->frame_latency_event;
+    op->u.swapchain_present.biased_frame_number = params->biased_frame_number;
+    op->u.swapchain_present.frame_latency = params->frame_latency;
+
+    d3d12_command_queue_submit_locked(command_queue);
+
+done:
+    vkd3d_mutex_unlock(&command_queue->op_mutex);
+    return hr;
 }
 
 /* ID3D12CommandSignature */

@@ -195,6 +195,9 @@ VK_DEVICE_EXT_PFN(vkGetDescriptorSetLayoutSupportKHR)
 /* VK_KHR_push_descriptor */
 VK_DEVICE_EXT_PFN(vkCmdPushDescriptorSetKHR)
 
+/* VK_KHR_swapchain */
+VK_DEVICE_EXT_PFN(vkQueuePresentKHR)
+
 /* VK_KHR_timeline_semaphore */
 VK_DEVICE_EXT_PFN(vkGetSemaphoreCounterValueKHR)
 VK_DEVICE_EXT_PFN(vkWaitSemaphoresKHR)

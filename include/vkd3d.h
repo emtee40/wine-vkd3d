@@ -79,6 +79,12 @@ enum vkd3d_structure_type
      */
     VKD3D_STRUCTURE_TYPE_HOST_TIME_DOMAIN_INFO,
 
+    /**
+     * The structure is a vkd3d_swapchain_queue_present_parameters structure.
+     * \since 1.13
+     */
+    VKD3D_STRUCTURE_TYPE_SWAPCHAIN_QUEUE_PRESENT_PARAMETERS,
+
     VKD3D_FORCE_32_BIT_ENUM(VKD3D_STRUCTURE_TYPE),
 };
 
@@ -369,6 +375,26 @@ struct vkd3d_image_resource_create_info
     D3D12_RESOURCE_STATES present_state;
 };
 
+/**
+ * A chained structure containing the parameters to present a Vulkan swapchain via a command queue.
+ */
+struct vkd3d_swapchain_queue_present_parameters
+{
+    /** Must be set to VKD3D_STRUCTURE_TYPE_SWAPCHAIN_QUEUE_PRESENT_PARAMETERS. */
+    enum vkd3d_structure_type type;
+    /** Optional pointer to a structure containing further parameters. */
+    const void *next;
+
+    VkSwapchainKHR vk_swapchain;
+    VkCommandBuffer vk_blit_cmd_buffer;
+    VkSemaphore vk_semaphore;
+    uint32_t vk_image_index;
+    ID3D12Fence *frame_latency_fence;
+    HANDLE frame_latency_event;
+    uint64_t biased_frame_number;
+    uint64_t frame_latency;
+};
+
 #ifdef LIBVKD3D_SOURCE
 # define VKD3D_API VKD3D_EXPORT
 #else
@@ -464,6 +490,9 @@ VKD3D_API HRESULT vkd3d_create_versioned_root_signature_deserializer(const void 
  */
 VKD3D_API void vkd3d_set_log_callback(PFN_vkd3d_log callback);
 
+VKD3D_API HRESULT vkd3d_swapchain_queue_present(ID3D12CommandQueue *queue,
+        const struct vkd3d_swapchain_queue_present_parameters *params);
+
 #endif  /* VKD3D_NO_PROTOTYPES */
 
 /*
@@ -509,6 +538,9 @@ typedef HRESULT (*PFN_vkd3d_create_versioned_root_signature_deserializer)(const 
 
 /** Type of vkd3d_set_log_callback(). \since 1.4 */
 typedef void (*PFN_vkd3d_set_log_callback)(PFN_vkd3d_log callback);
+
+typedef HRESULT (*PFN_vkd3d_swapchain_queue_present)(ID3D12CommandQueue *queue,
+        const struct vkd3d_swapchain_queue_present_parameters *params);
 
 #ifdef __cplusplus
 }

@@ -1324,6 +1324,7 @@ enum vkd3d_cs_op
     VKD3D_CS_OP_EXECUTE,
     VKD3D_CS_OP_UPDATE_MAPPINGS,
     VKD3D_CS_OP_COPY_MAPPINGS,
+    VKD3D_CS_OP_SWAPCHAIN_PRESENT,
 };
 
 struct vkd3d_cs_wait
@@ -1368,6 +1369,18 @@ struct vkd3d_cs_copy_mappings
     D3D12_TILE_MAPPING_FLAGS flags;
 };
 
+struct vkd3d_cs_swapchain_present
+{
+    VkSwapchainKHR vk_swapchain;
+    VkCommandBuffer vk_cmd_buffer;
+    VkSemaphore vk_semaphore;
+    uint32_t vk_image_index;
+    ID3D12Fence *frame_latency_fence;
+    HANDLE frame_latency_event;
+    uint64_t biased_frame_number;
+    uint64_t frame_latency;
+};
+
 struct vkd3d_cs_op_data
 {
     enum vkd3d_cs_op opcode;
@@ -1378,6 +1391,7 @@ struct vkd3d_cs_op_data
         struct vkd3d_cs_execute execute;
         struct vkd3d_cs_update_mappings update_mappings;
         struct vkd3d_cs_copy_mappings copy_mappings;
+        struct vkd3d_cs_swapchain_present swapchain_present;
     } u;
 };
 
