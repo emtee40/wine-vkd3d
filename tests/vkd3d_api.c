@@ -1194,6 +1194,142 @@ static void test_application_info(void)
     ID3D12Device_Release(device);
 }
 
+enum vkd3d_shader_cache_flags
+{
+    VKD3D_SHADER_CACHE_FLAGS_NONE =             0x00000000,
+    VKD3D_SHADER_CACHE_FLAGS_NO_SERIALIZE =     0x00000001,
+    VKD3D_SHADER_CACHE_FLAGS_READ_ONLY =        0x00000002,
+
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_CACHE_FLAGS),
+};
+
+struct vkd3d_shader_cache_info
+{
+    const char *filename;
+    enum vkd3d_shader_cache_flags flags;
+    uint64_t version;
+};
+
+enum vkd3d_shader_cache_put_flags
+{
+    VKD3D_PUT_REPLACE =                         0x00000001,
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_PUT_REPLACE),
+};
+
+static void test_cache_file(void)
+{
+    struct
+    {
+        uint64_t magic;
+        uint64_t struct_size;
+        uint64_t vkd3d_version;
+        uint64_t app_version;
+    }
+    header =
+    {
+        0x564B443344534843ull, sizeof(header), 1, 0,
+    };
+    struct
+    {
+        uint64_t hash;
+        uint64_t access;
+        uint64_t offset;
+        uint64_t disk_size;
+        uint64_t key_size;
+        uint64_t value_size;
+    } entry = {0};
+
+    struct vkd3d_shader_cache_info cache_info = {0};
+    static const char *blob = "12345678abcdefgh";
+    char idx_name[256], val_name[256];
+    struct vkd3d_shader_cache *cache;
+    char blob2[256];
+    char *temp_name;
+    size_t s;
+    int ret;
+    FILE *f;
+
+    entry.disk_size = strlen(blob);
+    entry.key_size = strlen("12345678");
+    entry.hash = vkd3d_shader_cache_hash_key(blob, entry.key_size);
+    entry.value_size = strlen("abcdefgh");
+
+    /* FIXME: Linux whines that this is insecure. Is there a function that works
+     * on Windows and Linux? */
+    temp_name = tempnam(NULL, NULL);
+    if (strlen(temp_name) > 250)
+        goto out;
+
+    sprintf(idx_name, "%s.idx", temp_name);
+    sprintf(val_name, "%s.val", temp_name);
+
+    f = fopen(idx_name, "wb");
+    fwrite(&header, sizeof(header), 1, f);
+    fwrite(&entry, sizeof(entry), 1, f);
+    fwrite(&entry, 3, 1, f); /* Add a corrupt entry. */
+    fclose (f);
+
+    f = fopen(val_name, "wb");
+    fwrite(blob, entry.disk_size, 1, f);
+    fclose (f);
+
+    cache_info.filename = temp_name;
+    ret = vkd3d_shader_open_cache(&cache_info, &cache);
+    ok(!ret, "Failed to open cache, ret=%d.\n", ret);
+
+    s = sizeof(blob2);
+    ret = vkd3d_shader_cache_get(cache, blob, entry.key_size, blob2, &s);
+    ok(!ret, "Failed to get value, ret=%d.\n", ret);
+    ok(s == 0x8, "Got unexpected size %#zx.\n", s);
+    ok(!memcmp(blob2, blob + entry.key_size, s), "Got value %8s\n", blob2);
+
+    vkd3d_shader_cache_decref(cache);
+
+    /* Write a corrupt file. The cache is still supposed to be opened, but without content. */
+    header.magic = 12345;
+    f = fopen(idx_name, "wb");
+    fwrite(&header, sizeof(header), 1, f);
+    fwrite(&entry, sizeof(entry), 1, f);
+    fclose (f);
+
+    ret = vkd3d_shader_open_cache(&cache_info, &cache);
+    ok(!ret, "Failed to open cache, ret=%d.\n", ret);
+    ret = vkd3d_shader_cache_get(cache, blob, entry.key_size, blob2, &s);
+    ok(ret == VKD3D_ERROR_NOT_FOUND, "Got unexpected result %d.\n", ret);
+
+    /* Writing a new file to replace the corrupt one should work. */
+    ret = vkd3d_shader_cache_put(cache, blob, entry.key_size, blob + entry.key_size, 8, 0);
+    ok(!ret, "Failed to put value, ret=%d.\n", ret);
+
+    vkd3d_shader_cache_decref(cache);
+
+    ret = vkd3d_shader_open_cache(&cache_info, &cache);
+    ok(!ret, "Failed to open cache, ret=%d.\n", ret);
+    ret = vkd3d_shader_cache_get(cache, blob, entry.key_size, blob2, &s);
+    ok(!ret, "Failed to get value, ret=%d.\n", ret);
+    ok(s == 0x8, "Got unexpected size %#zx.\n", s);
+    vkd3d_shader_cache_decref(cache);
+
+    /* Missing values file. */
+    header.magic = 0x564B443344534843ull;
+    f = fopen(idx_name, "wb");
+    fwrite(&header, sizeof(header), 1, f);
+    fwrite(&entry, sizeof(entry), 1, f);
+    fclose (f);
+    remove(val_name);
+
+    ret = vkd3d_shader_open_cache(&cache_info, &cache);
+    ok(!ret, "Failed to open cache, ret=%d.\n", ret);
+    ret = vkd3d_shader_cache_get(cache, blob, entry.key_size, blob2, &s);
+    ok(ret == VKD3D_ERROR_NOT_FOUND, "Got unexpected result %d.\n", ret);
+    vkd3d_shader_cache_decref(cache);
+
+    remove(idx_name);
+    remove(val_name);
+out:
+    free(temp_name);
+}
+
 static bool have_d3d12_device(void)
 {
     ID3D12Device *device;
@@ -1241,4 +1377,5 @@ LOAD_VK_PFN(vkGetInstanceProcAddr)
     run_test(test_external_resource_present_state);
     run_test(test_formats);
     run_test(test_application_info);
+    run_test(test_cache_file);
 }

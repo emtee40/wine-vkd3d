@@ -464,6 +464,24 @@ VKD3D_API HRESULT vkd3d_create_versioned_root_signature_deserializer(const void 
  */
 VKD3D_API void vkd3d_set_log_callback(PFN_vkd3d_log callback);
 
+/* These are only exported for testing purposes. Do not use them yet, they will be moved to
+ * vkd3d-shader later. */
+struct vkd3d_shader_cache_info;
+struct vkd3d_shader_cache;
+enum vkd3d_shader_cache_put_flags;
+
+VKD3D_API int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
+        struct vkd3d_shader_cache **cache);
+VKD3D_API unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
+VKD3D_API unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache);
+VKD3D_API int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, size_t key_size,
+        const void *value, size_t value_size, enum vkd3d_shader_cache_put_flags flags);
+VKD3D_API int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
+        const void *key, size_t key_size, void *value, size_t *value_size);
+/* extra NO-NO-NO. Used by the tests to synthesize cache files. */
+VKD3D_API uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size);
+/* end temporary shader cache exports. */
+
 #endif  /* VKD3D_NO_PROTOTYPES */
 
 /*
