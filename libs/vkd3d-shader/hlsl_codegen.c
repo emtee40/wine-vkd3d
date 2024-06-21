@@ -4378,8 +4378,7 @@ static void allocate_temp_registers_recurse(struct hlsl_ctx *ctx,
 
     LIST_FOR_EACH_ENTRY(instr, &block->instrs, struct hlsl_ir_node, entry)
     {
-        /* In SM4 all constants are inlined. */
-        if (ctx->profile->major_version >= 4 && instr->type == HLSL_IR_CONSTANT)
+        if (instr->type == HLSL_IR_CONSTANT)
             continue;
 
         if (!instr->reg.allocated && instr->last_read)
@@ -4432,6 +4431,25 @@ static void allocate_temp_registers_recurse(struct hlsl_ctx *ctx,
                 {
                     allocate_temp_registers_recurse(ctx, &c->body, allocator);
                 }
+                break;
+            }
+
+            case HLSL_IR_RESOURCE_LOAD:
+            {
+                struct hlsl_ir_node *coords = hlsl_ir_resource_load(instr)->coords.node;
+
+                if (!instr->last_read || ctx->profile->major_version >= 3)
+                    break;
+                /* src0 of the tex instructions in ps_2_* can't have swizzles. */
+                if (coords->type == HLSL_IR_CONSTANT && !coords->reg.allocated
+                        && hlsl_ir_constant(coords)->reg.writemask != VKD3DSP_WRITEMASK_ALL)
+                {
+                    coords->reg = allocate_register(ctx, allocator, coords->index, coords->last_read,
+                            4, 4);
+                    TRACE("Allocated anonymous expression @%u to %s (liveness %u-%u).\n", coords->index,
+                            debug_register('r', coords->reg, coords->data_type), coords->index, coords->last_read);
+                }
+
                 break;
             }
 

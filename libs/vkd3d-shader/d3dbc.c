@@ -1904,9 +1904,19 @@ static void sm1_map_src_swizzle(struct sm1_src_register *src, unsigned int map_w
 static void sm1_src_from_node(struct hlsl_ctx *ctx, struct sm1_src_register *src,
         const struct hlsl_ir_node *instr)
 {
-    src->type = D3DSPR_TEMP;
-    src->swizzle = hlsl_swizzle_from_writemask(instr->reg.writemask);
-    src->reg = instr->reg.id;
+    if (instr->type == HLSL_IR_CONSTANT && !instr->reg.allocated)
+    {
+        struct hlsl_ir_constant *constant = hlsl_ir_constant(instr);
+        src->type = D3DSPR_CONST;
+        src->swizzle = hlsl_swizzle_from_writemask(constant->reg.writemask);
+        src->reg = constant->reg.id;
+    }
+    else
+    {
+        src->type = D3DSPR_TEMP;
+        src->swizzle = hlsl_swizzle_from_writemask(instr->reg.writemask);
+        src->reg = instr->reg.id;
+    }
 }
 
 static void write_sm1_dp2add(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *buffer,
@@ -2695,6 +2705,12 @@ static void write_sm1_block(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *
             {
                 hlsl_fixme(ctx, &instr->loc, "Class %#x should have been lowered or removed.", instr->data_type->class);
                 break;
+            }
+
+            if (!instr->reg.allocated)
+            {
+                assert(instr->type == HLSL_IR_CONSTANT);
+                continue;
             }
         }
 
