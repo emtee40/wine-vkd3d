@@ -82,7 +82,7 @@ struct vkd3d_shader_cache
     size_t size, stale;
 
     FILE *file;
-    bool delete_on_destroy;
+    bool delete_on_destroy, write_all;
     uint64_t load_time, timestamp;
 
     char filename[];
@@ -279,6 +279,7 @@ static bool vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
     vkd3d_free(filename);
 
     len = fread(&hdr, sizeof(hdr), 1, cache->file);
+    cache->write_all = true;
     if (len != 1)
     {
         WARN("Failed to read cache header.\n");
@@ -316,7 +317,9 @@ static bool vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
         len = fread(&e->h, sizeof(e->h), 1, cache->file);
         if (len != 1)
         {
-            if (!feof(cache->file))
+            if (feof(cache->file))
+                cache->write_all = false;
+            else
                 ERR("Failed to read object header.\n");
             break;
         }
@@ -371,6 +374,7 @@ int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
     object->file = NULL;
     object->stale = object->size = 0;
     object->delete_on_destroy = false;
+    object->write_all = false;
     object->load_time = object->timestamp = 0;
     object->filename[0] = '\0';
 
@@ -414,7 +418,7 @@ static void vkd3d_shader_cache_write_entry(struct rb_entry *entry, void *context
     /* FIXME: Do we want to flush updated read times back to disk? Presumably we do, once
      * eviction is implemented. We need to keep track of when a cached item is used in some way.
      * In this case though try to write only the index entry and not the unchanged content. */
-    if (e->write_time <= cache->load_time)
+    if (!cache->write_all && e->write_time <= cache->load_time)
     {
         TRACE("Skipping entry %#"PRIx64": load time %#"PRIx64", last change %#"PRIx64".\n",
                 e->h.hash, cache->load_time, e->write_time);
@@ -454,7 +458,6 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 {
     struct vkd3d_cache_header_v1 hdr;
     char *filename, *dstname;
-    bool rewrite;
     off64_t p;
     int ret;
 
@@ -477,8 +480,9 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
      * the thing that rewrites on load error. */
     TRACE("%zu overwritten bytes, %zu %f%% of total\n", cache->stale, cache->size,
             ((float)cache->stale/(float)cache->size));
-    if ((rewrite = (cache->stale > 1024 && cache->stale >= cache->size / 10)))
+    if (cache->write_all || (cache->stale > 1024 && cache->stale >= cache->size / 10))
     {
+        cache->write_all = true;
         rb_for_each_entry(&cache->tree, vkd3d_shader_cache_make_resident, cache);
 
         fclose(cache->file);
@@ -510,7 +514,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
 
     fclose(cache->file);
 
-    if (rewrite)
+    if (cache->write_all)
     {
         sprintf(dstname, "%s.bin", cache->filename);
         remove(dstname); /* msvcrt needs this. */
