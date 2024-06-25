@@ -66,11 +66,19 @@ typedef int HRESULT;
 
 struct test_options test_options = {0};
 
+struct shader_test_options
+{
+    const char *filename;
+    enum shader_model minimum_shader_model, maximum_shader_model;
+};
+struct shader_test_options shader_test_options = {0};
+
 #ifdef VKD3D_CROSSTEST
 static const char HLSL_COMPILER[] = "d3dcompiler47.dll";
 #else
 static const char HLSL_COMPILER[] = "vkd3d-shader";
 #endif
+
 static const char *const model_strings[] =
 {
     [SHADER_MODEL_2_0] = "2.0",
@@ -1689,6 +1697,7 @@ enum test_action
 void run_shader_tests(struct shader_runner *runner, const struct shader_runner_caps *caps,
         const struct shader_runner_ops *ops, void *dxc_compiler)
 {
+    enum shader_model minimum_shader_model, maximum_shader_model;
     size_t shader_source_size = 0, shader_source_len = 0;
     struct resource_params current_resource;
     struct sampler *current_sampler = NULL;
@@ -1701,8 +1710,11 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     const char *testname;
     FILE *f;
 
+    minimum_shader_model = max(caps->minimum_shader_model, shader_test_options.minimum_shader_model);
+    maximum_shader_model = min(caps->maximum_shader_model, shader_test_options.maximum_shader_model);
+
     trace("Compiling SM%s-SM%s shaders with %s and executing with %s.\n",
-            model_strings[caps->minimum_shader_model], model_strings[caps->maximum_shader_model],
+            model_strings[minimum_shader_model], model_strings[maximum_shader_model],
             dxc_compiler ? "dxcompiler" : HLSL_COMPILER, caps->runner);
     if (caps->tag_count)
         trace_tags(caps);
@@ -1712,25 +1724,32 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     trace("  wave_ops: %u.\n", caps->wave_ops);
     trace_format_cap(caps, FORMAT_CAP_UAV_LOAD, "uav-load");
 
-    if (!test_options.filename)
+    if (minimum_shader_model > maximum_shader_model)
+    {
+        trace("Empty shader model range\n");
+        return;
+    }
+
+    if (!shader_test_options.filename)
         fatal_error("No filename specified.\n");
 
-    if (!(f = fopen(test_options.filename, "r")))
-        fatal_error("Unable to open '%s' for reading: %s\n", test_options.filename, strerror(errno));
+    if (!(f = fopen(shader_test_options.filename, "r")))
+        fatal_error("Unable to open '%s' for reading: %s\n",
+                shader_test_options.filename, strerror(errno));
 
     memset(runner, 0, sizeof(*runner));
     runner->ops = ops;
     runner->caps = caps;
-    runner->minimum_shader_model = caps->minimum_shader_model;
-    runner->maximum_shader_model = caps->maximum_shader_model;
+    runner->minimum_shader_model = minimum_shader_model;
+    runner->maximum_shader_model = maximum_shader_model;
     runner->alpha_test_func = VKD3D_SHADER_COMPARISON_FUNC_ALWAYS;
 
     runner->sample_mask = ~0u;
 
-    if ((testname = strrchr(test_options.filename, '/')))
+    if ((testname = strrchr(shader_test_options.filename, '/')))
         ++testname;
     else
-        testname = test_options.filename;
+        testname = shader_test_options.filename;
 
     vkd3d_test_push_context("%s:%u", testname, line_number);
 
@@ -2291,11 +2310,47 @@ static IDxcCompiler3 *dxcompiler_create(void)
 }
 #endif
 
+static bool parse_shader_model(const char *str, enum shader_model *sm)
+{
+    for (enum shader_model model = SHADER_MODEL_2_0; model <= SHADER_MODEL_6_0; model++)
+        if (!strcmp(str, model_strings[model]))
+        {
+            *sm = model;
+            return true;
+        }
+    trace("Ignoring invalid shader model string '%s'\n", str);
+    return false;
+}
+
+static inline void parse_shader_test_args(int argc, char **argv)
+{
+    unsigned int i;
+
+    shader_test_options.minimum_shader_model = SHADER_MODEL_2_0;
+    shader_test_options.maximum_shader_model = SHADER_MODEL_6_0;
+
+    for (i = 1; i < argc; i++)
+    {
+        if (!strcmp(argv[i], "--sm-min"))
+            parse_shader_model(argv[++i],
+                    &shader_test_options.minimum_shader_model);
+        else if (!strcmp(argv[i], "--sm-max"))
+            parse_shader_model(argv[++i],
+                    &shader_test_options.maximum_shader_model);
+        else if (argv[i][0] != '-')
+            shader_test_options.filename = argv[i];
+    }
+}
+
 START_TEST(shader_runner)
 {
     IDxcCompiler3 *dxc_compiler;
 
     parse_args(argc, argv);
+    parse_shader_test_args(argc, argv);
+    trace("Running shader models where %s <= sm <= %s\n",
+                model_strings[shader_test_options.minimum_shader_model],
+                model_strings[shader_test_options.maximum_shader_model]);
 
 #if defined(VKD3D_CROSSTEST)
     trace("Running tests from a Windows cross build\n");
