@@ -18,6 +18,10 @@
 
 #include "vkd3d_private.h"
 
+#ifdef HAVE_SHARE_H
+#include <share.h>
+#endif
+
 /* Data structures used in the serialized files. Changing these will break compatibility with
  * existing cache files, so bump the cache version if doing so.
  *
@@ -163,6 +167,15 @@ static bool vkd3d_shader_cache_read_entry(struct vkd3d_shader_cache *cache, stru
     return true;
 }
 
+static FILE *fopen_wrapper(const char *filename, const char *mode)
+{
+#if defined(HAVE__FSOPEN) && defined(HAVE_SHARE_H)
+    return _fsopen(filename, mode, _SH_DENYRW);
+#else
+    return fopen(filename, mode);
+#endif
+}
+
 static bool vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
 {
     struct shader_cache_entry *e = NULL;
@@ -176,10 +189,10 @@ static bool vkd3d_shader_cache_read(struct vkd3d_shader_cache *cache)
         return false;
 
     sprintf(filename, "%s.bin", cache->filename);
-    cache->file = fopen(filename, "r+b");
+    cache->file = fopen_wrapper(filename, "r+b");
     if (!cache->file)
     {
-        cache->file = fopen(filename, "w+b");
+        cache->file = fopen_wrapper(filename, "w+b");
         if (!cache->file)
         {
             WARN("Shader cache file %s not found and could not be created.\n", filename);
@@ -351,7 +364,7 @@ static void vkd3d_shader_cache_write(struct vkd3d_shader_cache *cache)
     /* For now unconditionally repack. */
     fclose(cache->file);
     sprintf(filename, "%s-new.bin", cache->filename);
-    cache->file = fopen(filename, "wb");
+    cache->file = fopen_wrapper(filename, "wb");
     if (!cache->file)
     {
         WARN("Failed to open %s\n", filename);
