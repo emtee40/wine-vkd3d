@@ -21,6 +21,7 @@
 
 #include <vkd3d.h>
 #include <vkd3d_d3dcompiler_types.h>
+#include <vkd3d_d3dx9shader.h>
 
 #ifndef VKD3D_UTILS_API_VERSION
 #define VKD3D_UTILS_API_VERSION VKD3D_API_VERSION_1_0
@@ -143,6 +144,13 @@ VKD3D_UTILS_API HRESULT WINAPI D3DCompile2VKD3D(const void *data, SIZE_T data_si
         const char *target, UINT flags, UINT effect_flags, UINT secondary_flags,
         const void *secondary_data, SIZE_T secondary_data_size, ID3DBlob **shader,
         ID3DBlob **error_messages, unsigned int compiler_version);
+
+/** \since 1.13 */
+VKD3D_UTILS_API HRESULT WINAPI D3DXGetShaderConstantTable(const DWORD *byte_code,
+        ID3DXConstantTable **constant_table);
+/** \since 1.13 */
+VKD3D_UTILS_API HRESULT WINAPI D3DXGetShaderConstantTableEx(const DWORD *byte_code,
+        DWORD flags, ID3DXConstantTable **constant_table);
 
 #ifdef __cplusplus
 }
