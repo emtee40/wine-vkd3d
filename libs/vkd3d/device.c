@@ -96,6 +96,8 @@ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
     VK_EXTENSION(KHR_PORTABILITY_SUBSET, KHR_portability_subset),
     VK_EXTENSION(KHR_PUSH_DESCRIPTOR, KHR_push_descriptor),
     VK_EXTENSION(KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE, KHR_sampler_mirror_clamp_to_edge),
+    VK_EXTENSION(KHR_SHADER_MAXIMAL_RECONVERGENCE, KHR_shader_maximal_reconvergence),
+    VK_EXTENSION(KHR_SHADER_SUBGROUP_UNIFORM_CONTROL_FLOW, KHR_shader_subgroup_uniform_control_flow),
     VK_EXTENSION(KHR_TIMELINE_SEMAPHORE, KHR_timeline_semaphore),
     /* EXT extensions */
     VK_EXTENSION(EXT_4444_FORMATS, EXT_4444_formats),
@@ -827,20 +829,23 @@ struct vkd3d_physical_device_info
     VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timeline_semaphore_features;
     VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT mutable_features;
     VkPhysicalDevice4444FormatsFeaturesEXT formats4444_features;
+    VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR subgroup_uniform_control_flow_features;
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR maximal_reconvergence_features;
 
     VkPhysicalDeviceFeatures2 features2;
 };
 
 static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *info, struct d3d12_device *device)
 {
+    VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR *subgroup_uniform_control_flow_features;
+    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT *fragment_shader_interlock_features;
+    VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR *maximal_reconvergence_features;
     const struct vkd3d_vk_instance_procs *vk_procs = &device->vkd3d_instance->vk_procs;
     VkPhysicalDeviceConditionalRenderingFeaturesEXT *conditional_rendering_features;
     VkPhysicalDeviceDescriptorIndexingPropertiesEXT *descriptor_indexing_properties;
     VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT *vertex_divisor_properties;
     VkPhysicalDeviceTexelBufferAlignmentPropertiesEXT *buffer_alignment_properties;
     VkPhysicalDeviceDescriptorIndexingFeaturesEXT *descriptor_indexing_features;
-    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT *fragment_shader_interlock_features;
-    VkPhysicalDeviceRobustness2FeaturesEXT *robustness2_features;
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *vertex_divisor_features;
     VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT *buffer_alignment_features;
     VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT *demote_features;
@@ -850,6 +855,7 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     VkPhysicalDeviceMaintenance3Properties *maintenance3_properties;
     VkPhysicalDeviceTransformFeedbackPropertiesEXT *xfb_properties;
     VkPhysicalDevice physical_device = device->vk_physical_device;
+    VkPhysicalDeviceRobustness2FeaturesEXT *robustness2_features;
     VkPhysicalDevice4444FormatsFeaturesEXT *formats4444_features;
     VkPhysicalDeviceTransformFeedbackFeaturesEXT *xfb_features;
     struct vkd3d_vulkan_info *vulkan_info = &device->vk_info;
@@ -874,6 +880,8 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     xfb_features = &info->xfb_features;
     xfb_properties = &info->xfb_properties;
     subgroup_properties = &info->subgroup_properties;
+    subgroup_uniform_control_flow_features = &info->subgroup_uniform_control_flow_features;
+    maximal_reconvergence_features = &info->maximal_reconvergence_features;
 
     info->features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
@@ -913,6 +921,12 @@ static void vkd3d_physical_device_info_init(struct vkd3d_physical_device_info *i
     formats4444_features->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT;
     if (vulkan_info->EXT_4444_formats)
         vk_prepend_struct(&info->features2, formats4444_features);
+    subgroup_uniform_control_flow_features->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_UNIFORM_CONTROL_FLOW_FEATURES_KHR;
+    if (vulkan_info->KHR_shader_subgroup_uniform_control_flow)
+        vk_prepend_struct(&info->features2, subgroup_uniform_control_flow_features);
+    maximal_reconvergence_features->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR;
+    if (vulkan_info->KHR_shader_maximal_reconvergence)
+        vk_prepend_struct(&info->features2, maximal_reconvergence_features);
 
     if (vulkan_info->KHR_get_physical_device_properties2)
         VK_CALL(vkGetPhysicalDeviceFeatures2KHR(physical_device, &info->features2));
@@ -1739,6 +1753,10 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
         vulkan_info->EXT_mutable_descriptor_type = false;
     if (!physical_device_info->timeline_semaphore_features.timelineSemaphore)
         vulkan_info->KHR_timeline_semaphore = false;
+    if (!physical_device_info->subgroup_uniform_control_flow_features.shaderSubgroupUniformControlFlow)
+        vulkan_info->KHR_shader_subgroup_uniform_control_flow = false;
+    if (!physical_device_info->maximal_reconvergence_features.shaderMaximalReconvergence)
+        vulkan_info->KHR_shader_maximal_reconvergence = false;
 
     physical_device_info->formats4444_features.formatA4B4G4R4 = VK_FALSE;
 
@@ -1774,10 +1792,8 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
 
     /* Shader extensions. */
     if (vulkan_info->EXT_shader_demote_to_helper_invocation)
-    {
-        vulkan_info->shader_extension_count = 1;
-        vulkan_info->shader_extensions[0] = VKD3D_SHADER_SPIRV_EXTENSION_EXT_DEMOTE_TO_HELPER_INVOCATION;
-    }
+        vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
+                = VKD3D_SHADER_SPIRV_EXTENSION_EXT_DEMOTE_TO_HELPER_INVOCATION;
 
     if (vulkan_info->EXT_descriptor_indexing)
         vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
@@ -1794,6 +1810,14 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
     if (vulkan_info->EXT_shader_viewport_index_layer)
         vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
                 = VKD3D_SHADER_SPIRV_EXTENSION_EXT_VIEWPORT_INDEX_LAYER;
+
+    if (vulkan_info->KHR_shader_subgroup_uniform_control_flow)
+        vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
+                = VKD3D_SHADER_SPIRV_EXTENSION_KHR_SUBGROUP_UNIFORM_CONTROL_FLOW;
+
+    if (vulkan_info->KHR_shader_maximal_reconvergence)
+        vulkan_info->shader_extensions[vulkan_info->shader_extension_count++]
+                = VKD3D_SHADER_SPIRV_EXTENSION_KHR_MAXIMAL_RECONVERGENCE;
 
     /* Disable unused Vulkan features. */
     features->shaderTessellationAndGeometryPointSize = VK_FALSE;
