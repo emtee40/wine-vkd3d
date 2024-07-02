@@ -823,8 +823,17 @@ static HRESULT vkd3d_create_image(struct d3d12_device *device,
             && desc->Width == desc->Height && desc->DepthOrArraySize >= 6
             && desc->SampleDesc.Count == 1)
         image_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
-        image_info.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT_KHR;
+    /* TEXTURE3D render targets are implemented using a 2D array image view. D3D12 does not
+     * support 2D array views of 3D images, so we only need it for render targets. */
+    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
+            && (desc->Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))
+    {
+        /* Vulkan sparse images do not support this flag. */
+        if (sparse_resource)
+            FIXME("Sparse 3D render targets are not supported.\n");
+        else
+            image_info.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT_KHR;
+    }
 
     if (sparse_resource)
     {
