@@ -823,7 +823,7 @@ static HRESULT vkd3d_create_image(struct d3d12_device *device,
             && desc->Width == desc->Height && desc->DepthOrArraySize >= 6
             && desc->SampleDesc.Count == 1)
         image_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && !sparse_resource)
         image_info.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT_KHR;
 
     if (sparse_resource)
