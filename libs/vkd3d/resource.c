@@ -669,8 +669,7 @@ HRESULT vkd3d_create_buffer(struct d3d12_device *device,
     if (sparse_resource)
     {
         buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
-        if (device->vk_info.sparse_properties.residencyNonResidentStrict)
-            buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
+        buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
         buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_ALIASED_BIT;
     }
 
@@ -830,8 +829,7 @@ static HRESULT vkd3d_create_image(struct d3d12_device *device,
     if (sparse_resource)
     {
         image_info.flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT;
-        if (device->vk_info.sparse_properties.residencyNonResidentStrict)
-            image_info.flags |= VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+        image_info.flags |= VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
         image_info.flags |= VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
     }
 
