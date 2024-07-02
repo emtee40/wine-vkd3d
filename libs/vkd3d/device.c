@@ -1656,7 +1656,8 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
     /* SPV_KHR_16bit_storage */
     device->feature_options.MinPrecisionSupport = D3D12_SHADER_MIN_PRECISION_SUPPORT_NONE;
 
-    if (!features->sparseBinding)
+    if (!features->sparseBinding || !features->sparseResidencyAliased || !features->sparseResidencyBuffer
+            || !features->sparseResidencyImage2D || !vulkan_info->sparse_properties.residencyStandard2DBlockShape)
         device->feature_options.TiledResourcesTier = D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED;
     else if (!device->vk_info.sparse_properties.residencyNonResidentStrict)
         device->feature_options.TiledResourcesTier = D3D12_TILED_RESOURCES_TIER_1;
