@@ -977,6 +977,15 @@ HRESULT vkd3d_get_image_allocation_info(struct d3d12_device *device,
 
 static void d3d12_resource_tile_info_cleanup(struct d3d12_resource *resource)
 {
+    unsigned int i;
+
+    if (!resource->tiles.subresources)
+        return;
+
+    vkd3d_free(resource->tiles.bind_buffer);
+
+    for (i = 0; i < resource->tiles.subresource_count; ++i)
+        vkd3d_free(resource->tiles.subresources[i].mappings);
     vkd3d_free(resource->tiles.subresources);
 }
 
@@ -1183,6 +1192,17 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
         resource->tiles.subresource_count = 1;
         resource->tiles.standard_mip_count = 1;
         resource->tiles.packed_mip_tile_count = 0;
+
+        if (!(resource->tiles.bind_buffer = vkd3d_malloc(resource->tiles.total_count * sizeof(VkSparseMemoryBind))))
+        {
+            ERR("Failed to allocate binding buffer.\n");
+            goto error;
+        }
+        if (!(tile_info->mappings = vkd3d_calloc(resource->tiles.total_count, sizeof(*tile_info->mappings))))
+        {
+            ERR("Failed to allocate mapping buffer.\n");
+            goto error;
+        }
     }
     else
     {
@@ -1214,6 +1234,8 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
                     sparse_requirements = sparse_requirements_array[i];
                 }
             }
+            if (sparse_requirements_array[i].formatProperties.aspectMask & VK_IMAGE_ASPECT_METADATA_BIT)
+                FIXME("Mip tail metadata binding is not implemented.\n");
         }
         vkd3d_free(sparse_requirements_array);
         if (!sparse_requirements.formatProperties.aspectMask)
@@ -1255,6 +1277,10 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
     }
 
     return true;
+
+error:
+    d3d12_resource_tile_info_cleanup(resource);
+    return false;
 }
 
 /* ID3D12Resource */

@@ -1933,6 +1933,8 @@ struct vkd3d_device_queue_info
 
 static void d3d12_device_destroy_vkd3d_queues(struct d3d12_device *device)
 {
+    const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+
     if (device->direct_queue)
         vkd3d_queue_destroy(device->direct_queue, device);
     if (device->compute_queue && device->compute_queue != device->direct_queue)
@@ -1945,11 +1947,13 @@ static void d3d12_device_destroy_vkd3d_queues(struct d3d12_device *device)
             && device->tiled_binding_queue != device->copy_queue)
         vkd3d_queue_destroy(device->tiled_binding_queue, device);
 
+    VK_CALL(vkDestroySemaphore(device->vk_device, device->tiled_binding_semaphore, NULL));
 
     device->direct_queue = NULL;
     device->compute_queue = NULL;
     device->copy_queue = NULL;
     device->tiled_binding_queue = NULL;
+    device->tiled_binding_semaphore = VK_NULL_HANDLE;
 }
 
 static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
@@ -1959,12 +1963,15 @@ static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
     uint32_t transfer_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER];
     uint32_t compute_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_COMPUTE];
     uint32_t direct_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_DIRECT];
+    const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    VkResult vr;
     HRESULT hr;
 
     device->direct_queue = NULL;
     device->compute_queue = NULL;
     device->copy_queue = NULL;
     device->tiled_binding_queue = NULL;
+    device->tiled_binding_semaphore = VK_NULL_HANDLE;
 
     device->queue_family_count = 0;
     memset(device->queue_family_indices, 0, sizeof(device->queue_family_indices));
@@ -1995,6 +2002,8 @@ static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
 
     if (device->feature_options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_1)
     {
+        VkSemaphoreCreateInfo semaphore_info;
+
         if (tiled_binding_family_index == direct_family_index)
             device->tiled_binding_queue = device->direct_queue;
         else if (tiled_binding_family_index == compute_family_index)
@@ -2005,6 +2014,17 @@ static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
                 tiled_binding_family_index, &queue_info->vk_properties[VKD3D_QUEUE_FAMILY_TILED_BINDING],
                 &device->tiled_binding_queue)))
             device->queue_family_indices[device->queue_family_count++] = tiled_binding_family_index;
+
+        semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        semaphore_info.pNext = NULL;
+        semaphore_info.flags = 0;
+        if ((vr = VK_CALL(vkCreateSemaphore(device->vk_device, &semaphore_info, NULL,
+                &device->tiled_binding_semaphore))) < 0)
+        {
+            ERR("Failed to create tiled binding semaphore, vr %d.\n", vr);
+            hr = hresult_from_vk_result(vr);
+            goto out_destroy_queues;
+        }
     }
 
     device->feature_options3.CopyQueueTimestampQueriesSupported = !!device->copy_queue->timestamp_bits;

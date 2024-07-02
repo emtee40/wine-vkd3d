@@ -104,6 +104,27 @@ void vkd3d_queue_release(struct vkd3d_queue *queue)
     vkd3d_mutex_unlock(&queue->mutex);
 }
 
+static VkResult vkd3d_queue_submit_wait_acquired(const struct vkd3d_queue *queue, VkSemaphore vk_semaphore,
+        struct d3d12_device *device)
+{
+    VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    VkSubmitInfo submit_info;
+
+    memset(&submit_info, 0, sizeof(submit_info));
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.pNext = NULL;
+    submit_info.waitSemaphoreCount = 1;
+    submit_info.pWaitSemaphores = &vk_semaphore;
+    submit_info.pWaitDstStageMask = &stage_mask;
+    submit_info.commandBufferCount = 0;
+    submit_info.pCommandBuffers = 0;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = NULL;
+
+    return VK_CALL(vkQueueSubmit(queue->vk_queue, 1, &submit_info, VK_NULL_HANDLE));
+}
+
 static VkResult vkd3d_queue_wait_idle(struct vkd3d_queue *queue,
         const struct vkd3d_vk_device_procs *vk_procs)
 {
@@ -3944,6 +3965,116 @@ static void STDMETHODCALLTYPE d3d12_command_list_CopyResource(ID3D12GraphicsComm
     }
 }
 
+struct vkd3d_resource_tile_coordinate
+{
+    unsigned int x;
+    unsigned int y;
+    unsigned int z;
+};
+
+static inline unsigned int d3d12_tile_region_size_compute_tile_count(const D3D12_TILE_REGION_SIZE *region_size)
+{
+    return region_size->Width * region_size->Height * region_size->Depth;
+}
+
+static inline void d3d12_tile_region_size_set_entire_subresource(D3D12_TILE_REGION_SIZE *region_size,
+        const struct d3d12_resource *resource, unsigned int subresource)
+{
+    const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[subresource].extent;
+    region_size->Width = extent->width;
+    region_size->Height = extent->height;
+    region_size->Depth = extent->depth;
+}
+
+static bool resource_validate_tiled_coordinate(const struct d3d12_resource *resource,
+        const D3D12_TILED_RESOURCE_COORDINATE *coordinate)
+{
+    const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[coordinate->Subresource].extent;
+
+    return coordinate->Subresource < resource->tiles.subresource_count
+            && coordinate->X < extent->width && coordinate->Y < extent->height && coordinate->Z < extent->depth;
+}
+
+/* coordinate must already be validated.
+ * D3D12 does not validate region sizes, but we should avoid causing Vulkan to
+ * do something dramatic like remove the device. */
+static void resource_clamp_tile_region_size(const struct d3d12_resource *resource,
+        const D3D12_TILED_RESOURCE_COORDINATE *coordinate, D3D12_TILE_REGION_SIZE *size)
+{
+    const struct vkd3d_tiled_region_extent *extent = &resource->tiles.subresources[coordinate->Subresource].extent;
+
+    if (!size->UseBox)
+    {
+        unsigned int max_count = resource->tiles.total_count;
+        max_count -= resource->tiles.subresources[coordinate->Subresource].offset;
+        max_count -= coordinate->X + coordinate->Y * extent->width + coordinate->Z * extent->width * extent->height;
+        if (size->NumTiles <= max_count)
+            return;
+        WARN("Invalid tile count %u; limit is %u.\n", size->NumTiles, max_count);
+        size->NumTiles = max_count;
+    }
+    else
+    {
+        D3D12_TILE_REGION_SIZE max_size;
+        max_size.Width = extent->width - coordinate->X;
+        max_size.Height = extent->height - coordinate->Y;
+        max_size.Depth = extent->depth - coordinate->Z;
+        if (size->Width <= max_size.Width && size->Height <= max_size.Height && size->Depth <= max_size.Depth)
+            return;
+        WARN("Invalid region size (%u, %u, %u).\n", size->Width, size->Height, size->Depth);
+        size->Width = min(size->Width, max_size.Width);
+        size->Height = min(size->Height, max_size.Height);
+        size->Depth = min(size->Depth, max_size.Depth);
+    }
+}
+
+/* Initialises a region in base_coordinate and region_size, where base_coordinate is always the front
+ * top left. If src_region_size->UseBox is true, start_coordinate is also the front top left, otherwise
+ * it can start anywhere within the region and the region front top left is always {0, 0, 0}. */
+static bool initialise_tile_region(struct vkd3d_resource_tile_coordinate *base_coordinate,
+        D3D12_TILE_REGION_SIZE *region_size, const D3D12_TILED_RESOURCE_COORDINATE *start_coordinate,
+        const D3D12_TILE_REGION_SIZE *src_region_size, const struct d3d12_resource *resource)
+{
+    unsigned int count;
+
+    if (!resource_validate_tiled_coordinate(resource, start_coordinate))
+    {
+        WARN("Invalid start coordinate (%u: %u, %u, %u).\n", start_coordinate->Subresource, start_coordinate->X,
+                start_coordinate->Y, start_coordinate->Z);
+        return false;
+    }
+
+    if (src_region_size)
+    {
+        *region_size = *src_region_size;
+        resource_clamp_tile_region_size(resource, start_coordinate, region_size);
+    }
+    else
+    {
+        region_size->UseBox = false;
+        region_size->NumTiles = 1;
+    }
+
+    if (region_size->UseBox)
+    {
+        base_coordinate->x = start_coordinate->X;
+        base_coordinate->y = start_coordinate->Y;
+        base_coordinate->z = start_coordinate->Z;
+        /* NumTiles should be set by the caller. D3D12 doesn't validate, but a warning may be useful. */
+        count = d3d12_tile_region_size_compute_tile_count(region_size);
+        if (region_size->NumTiles != count)
+            WARN("NumTiles does not match the box size.\n");
+        region_size->NumTiles = count;
+    }
+    else
+    {
+        memset(base_coordinate, 0, sizeof(*base_coordinate));
+        d3d12_tile_region_size_set_entire_subresource(region_size, resource, start_coordinate->Subresource);
+    }
+
+    return true;
+}
+
 static void STDMETHODCALLTYPE d3d12_command_list_CopyTiles(ID3D12GraphicsCommandList5 *iface,
         ID3D12Resource *tiled_resource, const D3D12_TILED_RESOURCE_COORDINATE *tile_region_start_coordinate,
         const D3D12_TILE_REGION_SIZE *tile_region_size, ID3D12Resource *buffer, UINT64 buffer_offset,
@@ -6276,6 +6407,8 @@ static ULONG STDMETHODCALLTYPE d3d12_command_queue_AddRef(ID3D12CommandQueue *if
     return refcount;
 }
 
+static void update_mappings_cleanup(struct vkd3d_cs_update_mappings *update_mappings);
+
 static void d3d12_command_queue_destroy_op(struct vkd3d_cs_op_data *op)
 {
     switch (op->opcode)
@@ -6293,6 +6426,9 @@ static void d3d12_command_queue_destroy_op(struct vkd3d_cs_op_data *op)
             break;
 
         case VKD3D_CS_OP_UPDATE_MAPPINGS:
+            update_mappings_cleanup(&op->u.update_mappings);
+            break;
+
         case VKD3D_CS_OP_COPY_MAPPINGS:
             break;
     }
@@ -6528,6 +6664,268 @@ unlock_mutex:
     vkd3d_mutex_unlock(&command_queue->op_mutex);
 free_clones:
     update_mappings_cleanup(&update_mappings);
+}
+
+static void d3d12_resource_update_buffer_tile_mappings(struct d3d12_resource *resource,
+        VkDeviceMemory vk_memory, VkDeviceSize memory_offset, unsigned int i, unsigned int tile_count)
+{
+    struct vkd3d_subresource_tile_mapping *mappings = resource->tiles.subresources[0].mappings;
+    unsigned int end;
+
+    end = i + tile_count;
+    for (; i < end; ++i)
+    {
+        mappings[i].vk_memory = vk_memory;
+        mappings[i].byte_offset = memory_offset;
+        mappings[i].dirty = true;
+        memory_offset += D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+    }
+}
+
+static unsigned int d3d12_resource_bind_sparse_block(struct d3d12_resource *resource,
+        const struct vkd3d_resource_tile_coordinate *base_coordinate,
+        D3D12_TILED_RESOURCE_COORDINATE *coordinate, const D3D12_TILE_REGION_SIZE *region_size,
+        VkDeviceMemory vk_memory, unsigned int memory_offset, unsigned int memory_tile_count, bool skip_binding)
+{
+    unsigned int i, max_tile_count, tiles_used = 0;
+
+    memory_offset *= D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+    max_tile_count = min(region_size->NumTiles, memory_tile_count);
+
+    if (d3d12_resource_is_buffer(resource))
+    {
+        tiles_used = max_tile_count;
+
+        i = coordinate->X;
+        coordinate->X += tiles_used;
+
+        if (!skip_binding && tiles_used)
+            d3d12_resource_update_buffer_tile_mappings(resource, vk_memory, memory_offset, i, tiles_used);
+    }
+    else
+    {
+        vkd3d_unreachable();
+    }
+
+    return tiles_used;
+}
+
+static unsigned int d3d12_resource_flush_buffer_tile_mappings(struct d3d12_resource *resource)
+{
+    struct vkd3d_subresource_tile_mapping *mappings = resource->tiles.subresources[0].mappings;
+    unsigned int i, count, end = resource->tiles.subresources[0].count;
+    VkSparseMemoryBind *memory_binds = resource->tiles.bind_buffer;
+    struct vkd3d_subresource_tile_mapping *mapping;
+
+    for (i = 0, count = 0; i < end; ++i)
+    {
+        mapping = &mappings[i];
+        if (!mapping->dirty)
+            continue;
+        mapping->dirty = false;
+
+        /* TODO: Merge consecutive binds into one struct. NVIDIA drivers (older ones at least) have a bug which
+         * requires one tile per struct, so merging should not be done until that's no longer an issue. */
+        memory_binds[count].resourceOffset = i * D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+        memory_binds[count].size = D3D12_TILED_RESOURCE_TILE_SIZE_IN_BYTES;
+        memory_binds[count].memory = mapping->vk_memory;
+        memory_binds[count].memoryOffset = mapping->byte_offset;
+        memory_binds[count++].flags = 0;
+    }
+
+    return count;
+}
+
+static void d3d12_resource_flush_tile_mappings(struct d3d12_resource *resource,
+        struct d3d12_command_queue *command_queue)
+{
+    const struct vkd3d_vk_device_procs *vk_procs = &command_queue->device->vk_procs;
+    struct d3d12_device *device = command_queue->device;
+    VkSparseBufferMemoryBindInfo buffer_bind_info;
+    struct vkd3d_queue *vkd3d_queue;
+    VkBindSparseInfo sparse_info;
+    VkResult vr;
+
+    vkd3d_queue = command_queue->vkd3d_queue;
+    if (!(vkd3d_queue->vk_queue_flags & VK_QUEUE_SPARSE_BINDING_BIT))
+        vkd3d_queue = device->tiled_binding_queue;
+
+    if (!(buffer_bind_info.bindCount = d3d12_resource_flush_buffer_tile_mappings(resource)))
+        return;
+    buffer_bind_info.pBinds = resource->tiles.bind_buffer;
+    buffer_bind_info.buffer = resource->u.vk_buffer;
+
+    memset(&sparse_info, 0, sizeof(sparse_info));
+    sparse_info.sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+    sparse_info.bufferBindCount = 1;
+    sparse_info.pBufferBinds = &buffer_bind_info;
+    sparse_info.pSignalSemaphores = &device->tiled_binding_semaphore;
+    sparse_info.signalSemaphoreCount = 1;
+
+    if (!vkd3d_queue_acquire(vkd3d_queue))
+    {
+        ERR("Failed to acquire queue %p.\n", vkd3d_queue);
+        return;
+    }
+
+    if ((vr = VK_CALL(vkQueueBindSparse(vkd3d_queue->vk_queue, 1, &sparse_info, VK_NULL_HANDLE))) < 0)
+        ERR("Failed to submit sparse image bind, vr %d.\n", vr);
+
+    if (vkd3d_queue != command_queue->vkd3d_queue)
+    {
+        vkd3d_queue_release(vkd3d_queue);
+        if (!vkd3d_queue_acquire(vkd3d_queue = command_queue->vkd3d_queue))
+        {
+            ERR("Failed to acquire queue %p.\n", vkd3d_queue);
+            return;
+        }
+    }
+
+    if ((vr = vkd3d_queue_submit_wait_acquired(vkd3d_queue, device->tiled_binding_semaphore, device)) < 0)
+        ERR("Failed to submit queue wait, vr %d.\n", vr);
+
+    vkd3d_queue_release(vkd3d_queue);
+
+}
+static void d3d12_command_queue_update_tile_mappings(struct d3d12_command_queue *command_queue,
+        struct d3d12_resource *resource, UINT region_count,
+        const D3D12_TILED_RESOURCE_COORDINATE *region_start_coordinates,
+        const D3D12_TILE_REGION_SIZE *region_sizes,
+        struct d3d12_heap *heap,
+        UINT range_count,
+        const D3D12_TILE_RANGE_FLAGS *range_flags,
+        const UINT *heap_range_offsets,
+        const UINT *range_tile_counts,
+        D3D12_TILE_MAPPING_FLAGS flags)
+{
+    VkDeviceMemory vk_memory = heap ? heap->vk_memory : VK_NULL_HANDLE;
+    unsigned int memory_offset, memory_tile_count, tiles_used;
+    struct vkd3d_resource_tile_coordinate base_coordinate;
+    bool null_binding, aliased_binding, skip_binding;
+    D3D12_TILED_RESOURCE_COORDINATE coordinate_zero;
+    D3D12_TILE_RANGE_FLAGS cur_flags, unknown_flags;
+    D3D12_TILE_REGION_SIZE region_size_default;
+    D3D12_TILED_RESOURCE_COORDINATE coordinate;
+    D3D12_TILE_REGION_SIZE region_size;
+    unsigned int region_idx, range_idx;
+    unsigned int i, tile_count_all;
+
+    if (!region_count)
+        return;
+
+    if (d3d12_resource_is_texture(resource))
+    {
+        FIXME("Tiled textures are not implemented yet.\n");
+        return;
+    }
+
+    if (region_count == 1)
+    {
+        if (!region_sizes)
+        {
+            region_size_default.UseBox = false;
+            region_size_default.NumTiles = region_start_coordinates ? 1 : resource->tiles.total_count;
+            region_sizes = &region_size_default;
+        }
+        if (!region_start_coordinates)
+        {
+            memset(&coordinate_zero, 0, sizeof(coordinate_zero));
+            region_start_coordinates = &coordinate_zero;
+        }
+    }
+
+    if (range_count == 1 && !range_tile_counts)
+    {
+        if (!region_sizes)
+        {
+            tile_count_all = region_count;
+        }
+        else for (i = 0, tile_count_all = 0; i < region_count; ++i)
+        {
+            tile_count_all += region_sizes[i].UseBox ? d3d12_tile_region_size_compute_tile_count(&region_sizes[i])
+                    : region_sizes[i].NumTiles;
+        }
+        range_tile_counts = &tile_count_all;
+    }
+
+    if (flags)
+        WARN("Ignoring flags %#x.\n", flags);
+
+    memory_offset = heap_range_offsets ? heap_range_offsets[0] : 0;
+    memory_tile_count = range_tile_counts[0];
+    coordinate = region_start_coordinates[0];
+
+    if (!initialise_tile_region(&base_coordinate, &region_size, &coordinate, region_sizes, resource))
+        return;
+
+    region_idx = 0;
+    range_idx = 0;
+    null_binding = false;
+    aliased_binding = false;
+    skip_binding = false;
+
+    do
+    {
+        if (range_flags)
+        {
+            cur_flags = range_flags[range_idx];
+            if ((unknown_flags = cur_flags & ~(D3D12_TILE_RANGE_FLAG_NULL | D3D12_TILE_RANGE_FLAG_SKIP
+                    | D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE)))
+            {
+                WARN("Ignoring unknown tile range flags %#x.\n", unknown_flags);
+            }
+
+            cur_flags &= D3D12_TILE_RANGE_FLAG_NULL | D3D12_TILE_RANGE_FLAG_SKIP
+                    | D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE;
+            if (cur_flags & (cur_flags - 1))
+                WARN("Multiple tile range flags %#x.\n", cur_flags);
+
+            null_binding = !!(cur_flags & D3D12_TILE_RANGE_FLAG_NULL);
+            skip_binding = !!(cur_flags & D3D12_TILE_RANGE_FLAG_SKIP);
+            aliased_binding = !!(cur_flags & D3D12_TILE_RANGE_FLAG_REUSE_SINGLE_TILE);
+        }
+
+        if (!null_binding && !skip_binding)
+        {
+            if (!heap_range_offsets)
+            {
+                WARN("Heap range offets may be NULL only if D3D12_TILE_RANGE_FLAG_NULL "
+                        "or D3D12_TILE_RANGE_FLAG_SKIP is used.\n");
+                break;
+            }
+            if (!heap)
+            {
+                WARN("Heap may be NULL only if D3D12_TILE_RANGE_FLAG_NULL or D3D12_TILE_RANGE_FLAG_SKIP is used.\n");
+                break;
+            }
+        }
+
+        tiles_used = d3d12_resource_bind_sparse_block(resource, &base_coordinate, &coordinate, &region_size,
+                null_binding ? VK_NULL_HANDLE : vk_memory, memory_offset, aliased_binding ? 1 : memory_tile_count,
+                skip_binding);
+
+        if (!aliased_binding)
+            memory_offset += tiles_used;
+        memory_tile_count -= tiles_used;
+        region_size.NumTiles -= tiles_used;
+
+        if (!memory_tile_count && ++range_idx < range_count)
+        {
+            memory_offset = heap_range_offsets ? heap_range_offsets[range_idx] : 0;
+            memory_tile_count = range_tile_counts[range_idx];
+        }
+
+        if (!region_size.NumTiles && ++region_idx < region_count)
+        {
+            coordinate = region_start_coordinates[region_idx];
+            if (!initialise_tile_region(&base_coordinate, &region_size, &coordinate,
+                    region_sizes ? &region_sizes[region_idx] : NULL, resource))
+                break;
+        }
+    }
+    while (region_idx < region_count && range_idx < range_count);
+
+    d3d12_resource_flush_tile_mappings(resource, command_queue);
 }
 
 static void STDMETHODCALLTYPE d3d12_command_queue_CopyTileMappings(ID3D12CommandQueue *iface,
@@ -7314,8 +7712,12 @@ static HRESULT d3d12_command_queue_flush_ops_locked(struct d3d12_command_queue *
                     break;
 
                 case VKD3D_CS_OP_UPDATE_MAPPINGS:
-                    FIXME("Tiled resource binding is not supported yet.\n");
-                    update_mappings_cleanup(&op->u.update_mappings);
+                    d3d12_command_queue_update_tile_mappings(queue, op->u.update_mappings.resource,
+                            op->u.update_mappings.region_count, op->u.update_mappings.region_start_coordinates,
+                            op->u.update_mappings.region_sizes, op->u.update_mappings.heap,
+                            op->u.update_mappings.range_count, op->u.update_mappings.range_flags,
+                            op->u.update_mappings.heap_range_offsets, op->u.update_mappings.range_tile_counts,
+                            op->u.update_mappings.flags);
                     break;
 
                 case VKD3D_CS_OP_COPY_MAPPINGS:
