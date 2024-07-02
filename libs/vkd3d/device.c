@@ -1917,6 +1917,7 @@ enum vkd3d_queue_family
     VKD3D_QUEUE_FAMILY_DIRECT,
     VKD3D_QUEUE_FAMILY_COMPUTE,
     VKD3D_QUEUE_FAMILY_TRANSFER,
+    VKD3D_QUEUE_FAMILY_TILED_BINDING,
 
     VKD3D_QUEUE_FAMILY_COUNT,
 };
@@ -1939,15 +1940,22 @@ static void d3d12_device_destroy_vkd3d_queues(struct d3d12_device *device)
     if (device->copy_queue && device->copy_queue != device->direct_queue
             && device->copy_queue != device->compute_queue)
         vkd3d_queue_destroy(device->copy_queue, device);
+    if (device->tiled_binding_queue && device->tiled_binding_queue != device->direct_queue
+            && device->tiled_binding_queue != device->compute_queue
+            && device->tiled_binding_queue != device->copy_queue)
+        vkd3d_queue_destroy(device->tiled_binding_queue, device);
+
 
     device->direct_queue = NULL;
     device->compute_queue = NULL;
     device->copy_queue = NULL;
+    device->tiled_binding_queue = NULL;
 }
 
 static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
         const struct vkd3d_device_queue_info *queue_info)
 {
+    unsigned int tiled_binding_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_TILED_BINDING];
     uint32_t transfer_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER];
     uint32_t compute_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_COMPUTE];
     uint32_t direct_family_index = queue_info->family_index[VKD3D_QUEUE_FAMILY_DIRECT];
@@ -1956,6 +1964,7 @@ static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
     device->direct_queue = NULL;
     device->compute_queue = NULL;
     device->copy_queue = NULL;
+    device->tiled_binding_queue = NULL;
 
     device->queue_family_count = 0;
     memset(device->queue_family_indices, 0, sizeof(device->queue_family_indices));
@@ -1984,6 +1993,20 @@ static HRESULT d3d12_device_create_vkd3d_queues(struct d3d12_device *device,
     else
         goto out_destroy_queues;
 
+    if (device->feature_options.TiledResourcesTier >= D3D12_TILED_RESOURCES_TIER_1)
+    {
+        if (tiled_binding_family_index == direct_family_index)
+            device->tiled_binding_queue = device->direct_queue;
+        else if (tiled_binding_family_index == compute_family_index)
+            device->tiled_binding_queue = device->compute_queue;
+        else if (tiled_binding_family_index == transfer_family_index)
+            device->tiled_binding_queue = device->copy_queue;
+        else if (tiled_binding_family_index != UINT_MAX && SUCCEEDED(hr = vkd3d_queue_create(device,
+                tiled_binding_family_index, &queue_info->vk_properties[VKD3D_QUEUE_FAMILY_TILED_BINDING],
+                &device->tiled_binding_queue)))
+            device->queue_family_indices[device->queue_family_count++] = tiled_binding_family_index;
+    }
+
     device->feature_options3.CopyQueueTimestampQueriesSupported = !!device->copy_queue->timestamp_bits;
 
     return S_OK;
@@ -1999,6 +2022,7 @@ static HRESULT vkd3d_select_queues(const struct vkd3d_instance *vkd3d_instance,
         VkPhysicalDevice physical_device, struct vkd3d_device_queue_info *info)
 {
     const struct vkd3d_vk_instance_procs *vk_procs = &vkd3d_instance->vk_procs;
+    enum vkd3d_queue_family tiled_binding_family = VKD3D_QUEUE_FAMILY_COUNT;
     VkQueueFamilyProperties *queue_properties = NULL;
     VkDeviceQueueCreateInfo *queue_info = NULL;
     unsigned int i;
@@ -2016,20 +2040,38 @@ static HRESULT vkd3d_select_queues(const struct vkd3d_instance *vkd3d_instance,
     for (i = 0; i < count; ++i)
     {
         enum vkd3d_queue_family vkd3d_family = VKD3D_QUEUE_FAMILY_COUNT;
+        VkQueueFlags queueFlags = queue_properties[i].queueFlags;
 
-        if ((queue_properties[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
+        if ((queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
                 == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
         {
             vkd3d_family = VKD3D_QUEUE_FAMILY_DIRECT;
         }
-        if ((queue_properties[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
-                == VK_QUEUE_COMPUTE_BIT)
+        if ((queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) == VK_QUEUE_COMPUTE_BIT)
         {
             vkd3d_family = VKD3D_QUEUE_FAMILY_COMPUTE;
         }
-        if ((queue_properties[i].queueFlags & ~VK_QUEUE_SPARSE_BINDING_BIT) == VK_QUEUE_TRANSFER_BIT)
+        if ((queueFlags & ~VK_QUEUE_SPARSE_BINDING_BIT) == VK_QUEUE_TRANSFER_BIT)
         {
             vkd3d_family = VKD3D_QUEUE_FAMILY_TRANSFER;
+        }
+
+        if (queueFlags & VK_QUEUE_SPARSE_BINDING_BIT)
+        {
+            /* Find a dedicated queue if one exists. */
+            if (!(queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)))
+            {
+                vkd3d_family = VKD3D_QUEUE_FAMILY_TILED_BINDING;
+                tiled_binding_family = VKD3D_QUEUE_FAMILY_TILED_BINDING;
+            }
+            /* Find any queue with sparse binding support, but prefer the direct queue
+             * as probably the one most commonly used for tiled binding commands. */
+            else if (tiled_binding_family == VKD3D_QUEUE_FAMILY_COUNT
+                    || (tiled_binding_family != VKD3D_QUEUE_FAMILY_TILED_BINDING
+                    && vkd3d_family == VKD3D_QUEUE_FAMILY_DIRECT))
+            {
+                tiled_binding_family = vkd3d_family;
+            }
         }
 
         if (vkd3d_family == VKD3D_QUEUE_FAMILY_COUNT)
@@ -2065,6 +2107,11 @@ static HRESULT vkd3d_select_queues(const struct vkd3d_instance *vkd3d_instance,
     {
         info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER] = info->family_index[VKD3D_QUEUE_FAMILY_DIRECT];
         info->vk_properties[VKD3D_QUEUE_FAMILY_TRANSFER] = info->vk_properties[VKD3D_QUEUE_FAMILY_DIRECT];
+    }
+    if (tiled_binding_family != VKD3D_QUEUE_FAMILY_COUNT && tiled_binding_family != VKD3D_QUEUE_FAMILY_TILED_BINDING)
+    {
+        info->family_index[VKD3D_QUEUE_FAMILY_TILED_BINDING] = info->family_index[tiled_binding_family];
+        info->vk_properties[VKD3D_QUEUE_FAMILY_TILED_BINDING] = info->vk_properties[tiled_binding_family];
     }
 
     /* Compact the array. */
@@ -2139,6 +2186,9 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
             device_queue_info.family_index[VKD3D_QUEUE_FAMILY_COMPUTE]);
     TRACE("Using queue family %u for copy command queues.\n",
             device_queue_info.family_index[VKD3D_QUEUE_FAMILY_TRANSFER]);
+    if (device_queue_info.family_index[VKD3D_QUEUE_FAMILY_TILED_BINDING] != UINT_MAX)
+        TRACE("Using queue family %u for tiled binding command queues.\n",
+                device_queue_info.family_index[VKD3D_QUEUE_FAMILY_TILED_BINDING]);
 
     VK_CALL(vkGetPhysicalDeviceMemoryProperties(physical_device, &device->memory_properties));
 

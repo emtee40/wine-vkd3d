@@ -1411,8 +1411,6 @@ struct d3d12_command_queue
      * set, aux_op_queue.count must be zero. */
     struct d3d12_command_queue_op_array aux_op_queue;
 
-    bool supports_sparse_binding;
-
     struct vkd3d_private_store private_store;
 };
 
@@ -1560,6 +1558,7 @@ struct d3d12_device
     struct vkd3d_queue *direct_queue;
     struct vkd3d_queue *compute_queue;
     struct vkd3d_queue *copy_queue;
+    struct vkd3d_queue *tiled_binding_queue;
     uint32_t queue_family_indices[VKD3D_MAX_QUEUE_FAMILY_COUNT];
     unsigned int queue_family_count;
     VkTimeDomainEXT vk_host_time_domain;

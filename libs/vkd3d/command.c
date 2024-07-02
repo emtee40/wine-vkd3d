@@ -6436,6 +6436,7 @@ static void STDMETHODCALLTYPE d3d12_command_queue_UpdateTileMappings(ID3D12Comma
     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
     struct d3d12_heap *heap_impl = unsafe_impl_from_ID3D12Heap(heap);
     struct vkd3d_cs_update_mappings update_mappings = {0};
+    struct d3d12_device *device = command_queue->device;
     struct vkd3d_cs_op_data *op;
 
     TRACE("iface %p, resource %p, region_count %u, region_start_coordinates %p, "
@@ -6447,9 +6448,9 @@ static void STDMETHODCALLTYPE d3d12_command_queue_UpdateTileMappings(ID3D12Comma
     if (!region_count || !range_count)
         return;
 
-    if (!command_queue->supports_sparse_binding)
+    if (!device->tiled_binding_queue)
     {
-        FIXME("Command queue %p does not support sparse binding.\n", command_queue);
+        WARN("Device does not support tiled resources.\n");
         return;
     }
 
@@ -7388,8 +7389,6 @@ static HRESULT d3d12_command_queue_init(struct d3d12_command_queue *queue,
 
     if (FAILED(hr = vkd3d_fence_worker_start(&queue->fence_worker, queue->vkd3d_queue, device)))
         goto fail_destroy_op_mutex;
-
-    queue->supports_sparse_binding = !!(queue->vkd3d_queue->vk_queue_flags & VK_QUEUE_SPARSE_BINDING_BIT);
 
     d3d12_device_add_ref(queue->device = device);
 
