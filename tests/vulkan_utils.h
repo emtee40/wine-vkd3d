@@ -264,6 +264,23 @@ static inline bool create_vulkan_shader_stage(const struct vulkan_test_context *
     return vr == VK_SUCCESS;
 }
 
+static inline VkDescriptorSet create_vulkan_descriptor_set(const struct vulkan_test_context *context,
+        VkDescriptorPool descriptor_pool, VkDescriptorSetLayout set_layout)
+{
+    VkDescriptorSetAllocateInfo allocate_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    VkDescriptorSet descriptor_set;
+    VkResult vr;
+
+    allocate_info.descriptorPool = descriptor_pool;
+    allocate_info.descriptorSetCount = 1;
+    allocate_info.pSetLayouts = &set_layout;
+
+    vr = VK_CALL(vkAllocateDescriptorSets(context->device, &allocate_info, &descriptor_set));
+    ok(vr == VK_SUCCESS, "Failed to allocate descriptor set, vr %d.\n", vr);
+
+    return descriptor_set;
+}
+
 static inline bool vk_extension_properties_contain(const VkExtensionProperties *extensions,
         uint32_t count, const char *extension_name)
 {
