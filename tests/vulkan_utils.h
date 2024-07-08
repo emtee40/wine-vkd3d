@@ -243,6 +243,27 @@ static inline VkPipelineLayout create_vulkan_pipeline_layout(const struct vulkan
     return pipeline_layout;
 }
 
+static inline bool create_vulkan_shader_stage(const struct vulkan_test_context *context,
+        VkPipelineShaderStageCreateInfo *stage_info, enum VkShaderStageFlagBits stage,
+        size_t code_size, const uint32_t *code)
+{
+    VkShaderModuleCreateInfo module_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkResult vr;
+
+    memset(stage_info, 0, sizeof(*stage_info));
+    stage_info->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage_info->stage = stage;
+    stage_info->pName = "main";
+
+    module_info.codeSize = code_size;
+    module_info.pCode = code;
+
+    vr = VK_CALL(vkCreateShaderModule(context->device, &module_info, NULL, &stage_info->module));
+    ok(vr == VK_SUCCESS, "Failed to create shader module, vr %d.\n", vr);
+
+    return vr == VK_SUCCESS;
+}
+
 static inline bool vk_extension_properties_contain(const VkExtensionProperties *extensions,
         uint32_t count, const char *extension_name)
 {

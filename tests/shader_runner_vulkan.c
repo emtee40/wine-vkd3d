@@ -476,24 +476,16 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
 static bool create_shader_stage(struct vulkan_shader_runner *runner,
         VkPipelineShaderStageCreateInfo *stage_info, enum shader_type type, enum VkShaderStageFlagBits stage)
 {
-    VkShaderModuleCreateInfo module_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     const struct vulkan_test_context *context = &runner->context;
     struct vkd3d_shader_code spirv;
+    bool ret;
 
     if (!compile_d3d_code(runner, type, &spirv))
         return false;
 
-    memset(stage_info, 0, sizeof(*stage_info));
-    stage_info->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage_info->stage = stage;
-    stage_info->pName = "main";
-
-    module_info.codeSize = spirv.size;
-    module_info.pCode = spirv.code;
-
-    VK_CALL(vkCreateShaderModule(context->device, &module_info, NULL, &stage_info->module));
+    ret = create_vulkan_shader_stage(context, stage_info, stage, spirv.size, spirv.code);
     vkd3d_shader_free_shader_code(&spirv);
-    return true;
+    return ret;
 }
 
 static VkPrimitiveTopology vulkan_primitive_topology_from_d3d(D3D_PRIMITIVE_TOPOLOGY topology)
