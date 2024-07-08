@@ -512,32 +512,6 @@ static VkPrimitiveTopology vulkan_primitive_topology_from_d3d(D3D_PRIMITIVE_TOPO
     }
 }
 
-static VkPipelineLayout create_pipeline_layout(const struct vulkan_shader_runner *runner,
-        VkDescriptorSetLayout set_layout)
-{
-    VkPipelineLayoutCreateInfo layout_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    const struct vulkan_test_context *context = &runner->context;
-    VkPushConstantRange push_constant_range;
-    VkPipelineLayout pipeline_layout;
-
-    layout_desc.setLayoutCount = 1;
-    layout_desc.pSetLayouts = &set_layout;
-
-    if (runner->r.uniform_count)
-    {
-        layout_desc.pushConstantRangeCount = 1;
-        layout_desc.pPushConstantRanges = &push_constant_range;
-
-        push_constant_range.stageFlags = VK_SHADER_STAGE_ALL;
-        push_constant_range.offset = 0;
-        push_constant_range.size = runner->r.uniform_count * sizeof(*runner->r.uniforms);
-    }
-
-    VK_CALL(vkCreatePipelineLayout(context->device, &layout_desc, NULL, &pipeline_layout));
-
-    return pipeline_layout;
-}
-
 static enum VkCompareOp vk_compare_op_from_d3d12(D3D12_COMPARISON_FUNC op)
 {
     switch (op)
@@ -1077,7 +1051,7 @@ static bool vulkan_runner_dispatch(struct shader_runner *r, unsigned int x, unsi
     /* Create this before compiling shaders, it will assign resource bindings. */
     set_layout = create_descriptor_set_layout(runner);
 
-    pipeline_layout = create_pipeline_layout(runner, set_layout);
+    pipeline_layout = create_vulkan_pipeline_layout(context, set_layout, runner->r.uniform_count);
     if (!(pipeline = create_compute_pipeline(runner, pipeline_layout)))
         goto out;
 
@@ -1219,7 +1193,7 @@ static bool vulkan_runner_draw(struct shader_runner *r,
     /* Create this before compiling shaders, it will assign resource bindings. */
     set_layout = create_descriptor_set_layout(runner);
 
-    pipeline_layout = create_pipeline_layout(runner, set_layout);
+    pipeline_layout = create_vulkan_pipeline_layout(context, set_layout, runner->r.uniform_count);
     if (!(pipeline = create_graphics_pipeline(runner, render_pass, pipeline_layout, primitive_topology)))
         goto out;
 

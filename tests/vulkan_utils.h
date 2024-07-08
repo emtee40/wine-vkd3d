@@ -216,6 +216,33 @@ static inline VkImageView create_vulkan_2d_image_view(const struct vulkan_test_c
     return view;
 }
 
+static inline VkPipelineLayout create_vulkan_pipeline_layout(const struct vulkan_test_context *context,
+        VkDescriptorSetLayout set_layout, uint32_t uint32_count)
+{
+    VkPipelineLayoutCreateInfo layout_desc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    VkPushConstantRange push_constant_range;
+    VkPipelineLayout pipeline_layout;
+    VkResult vr;
+
+    layout_desc.setLayoutCount = 1;
+    layout_desc.pSetLayouts = &set_layout;
+
+    if (uint32_count)
+    {
+        layout_desc.pushConstantRangeCount = 1;
+        layout_desc.pPushConstantRanges = &push_constant_range;
+
+        push_constant_range.stageFlags = VK_SHADER_STAGE_ALL;
+        push_constant_range.offset = 0;
+        push_constant_range.size = uint32_count * sizeof(uint32_t);
+    }
+
+    vr = VK_CALL(vkCreatePipelineLayout(context->device, &layout_desc, NULL, &pipeline_layout));
+    ok(vr == VK_SUCCESS, "Failed to create pipeline layout, vr %d.\n", vr);
+
+    return pipeline_layout;
+}
+
 static inline bool vk_extension_properties_contain(const VkExtensionProperties *extensions,
         uint32_t count, const char *extension_name)
 {
