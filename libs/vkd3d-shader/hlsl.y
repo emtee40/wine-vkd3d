@@ -4372,9 +4372,9 @@ static bool intrinsic_smoothstep(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s smoothstep(%s low, %s high, %s x)\n"
+            "%1$s smoothstep(%1$s low, %1$s high, %1$s x)\n"
             "{\n"
-            "    %s p = saturate((x - low) / (high - low));\n"
+            "    %1$s p = saturate((x - low) / (high - low));\n"
             "    return (p * p) * (3 - 2 * p);\n"
             "}";
 
@@ -4382,7 +4382,7 @@ static bool intrinsic_smoothstep(struct hlsl_ctx *ctx,
         return false;
     type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_FLOAT, type->dimx, type->dimy);
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name, type->name, type->name, type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name)))
         return false;
     func = hlsl_compile_internal_function(ctx, "smoothstep", body);
     vkd3d_free(body);
