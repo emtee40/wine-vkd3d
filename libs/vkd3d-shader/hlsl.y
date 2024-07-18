@@ -3213,15 +3213,15 @@ static bool write_atan_or_atan2(struct hlsl_ctx *ctx,
     static const char atan_name[] = "atan";
 
     static const char atan2_header_template[] =
-            "%s atan2(%s y, %s x)\n"
+            "%1$s atan2(%1$s y, %1$s x)\n"
             "{\n"
-            "    %s in_y, in_x;\n"
+            "    %1$s in_y, in_x;\n"
             "    in_y = y;\n"
             "    in_x = x;\n";
     static const char atan_header_template[] =
-            "%s atan(%s y)\n"
+            "%1$s atan(%1$s y)\n"
             "{\n"
-            "    %s in_y, in_x;\n"
+            "    %1$s in_y, in_x;\n"
             "    in_y = y;\n"
             "    in_x = 1.0;\n";
 
@@ -3251,12 +3251,9 @@ static bool write_atan_or_atan2(struct hlsl_ctx *ctx,
     if (!(buf = hlsl_get_string_buffer(ctx)))
         return false;
 
-    if (atan2_mode)
-        ret = vkd3d_string_buffer_printf(buf, atan2_header_template,
-                type->name, type->name, type->name, type->name);
-    else
-        ret = vkd3d_string_buffer_printf(buf, atan_header_template,
-                type->name, type->name, type->name);
+    ret = vkd3d_string_buffer_printf(buf,
+            atan2_mode ? atan2_header_template : atan_header_template,
+            type->name);
     if (ret < 0)
     {
         hlsl_release_string_buffer(ctx, buf);
