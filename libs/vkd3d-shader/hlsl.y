@@ -4238,9 +4238,9 @@ static bool intrinsic_refract(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s refract(%s r, %s n, %s i)\n"
+            "%1$s refract(%1$s r, %1$s n, %2$s i)\n"
             "{\n"
-            "    %s d, t;\n"
+            "    %3$s d, t;\n"
             "    d = dot(r, n);\n"
             "    t = 1 - i.x * i.x * (1 - d * d);\n"
             "    return t >= 0.0 ? i.x * r - (i.x * d + sqrt(t)) * n : 0;\n"
@@ -4266,8 +4266,7 @@ static bool intrinsic_refract(struct hlsl_ctx *ctx,
     idx_type = convert_numeric_type(ctx, i_type, base);
     scal_type = hlsl_get_scalar_type(ctx, base);
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template, res_type->name, res_type->name,
-            res_type->name, idx_type->name, scal_type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, res_type->name, idx_type->name, scal_type->name)))
         return false;
 
     func = hlsl_compile_internal_function(ctx, "refract", body);
