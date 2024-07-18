@@ -3612,29 +3612,29 @@ static bool intrinsic_determinant(struct hlsl_ctx *ctx,
         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
     static const char determinant2x2[] =
-            "%s determinant(%s2x2 m)\n"
+            "%1$s determinant(%1$s2x2 m)\n"
             "{\n"
             "    return m._11 * m._22 - m._12 * m._21;\n"
             "}";
     static const char determinant3x3[] =
-            "%s determinant(%s3x3 m)\n"
+            "%1$s determinant(%1$s3x3 m)\n"
             "{\n"
-            "    %s2x2 m1 = { m._22, m._23, m._32, m._33 };\n"
-            "    %s2x2 m2 = { m._21, m._23, m._31, m._33 };\n"
-            "    %s2x2 m3 = { m._21, m._22, m._31, m._32 };\n"
-            "    %s3 v1 = { m._11, -m._12, m._13 };\n"
-            "    %s3 v2 = { determinant(m1), determinant(m2), determinant(m3) };\n"
+            "    %1$s2x2 m1 = { m._22, m._23, m._32, m._33 };\n"
+            "    %1$s2x2 m2 = { m._21, m._23, m._31, m._33 };\n"
+            "    %1$s2x2 m3 = { m._21, m._22, m._31, m._32 };\n"
+            "    %1$s3 v1 = { m._11, -m._12, m._13 };\n"
+            "    %1$s3 v2 = { determinant(m1), determinant(m2), determinant(m3) };\n"
             "    return dot(v1, v2);\n"
             "}";
     static const char determinant4x4[] =
-            "%s determinant(%s4x4 m)\n"
+            "%1$s determinant(%1$s4x4 m)\n"
             "{\n"
-            "    %s3x3 m1 = { m._22, m._23, m._24, m._32, m._33, m._34, m._42, m._43, m._44 };\n"
-            "    %s3x3 m2 = { m._21, m._23, m._24, m._31, m._33, m._34, m._41, m._43, m._44 };\n"
-            "    %s3x3 m3 = { m._21, m._22, m._24, m._31, m._32, m._34, m._41, m._42, m._44 };\n"
-            "    %s3x3 m4 = { m._21, m._22, m._23, m._31, m._32, m._33, m._41, m._42, m._43 };\n"
-            "    %s4 v1 = { m._11, -m._12, m._13, -m._14 };\n"
-            "    %s4 v2 = { determinant(m1), determinant(m2), determinant(m3), determinant(m4) };\n"
+            "    %1$s3x3 m1 = { m._22, m._23, m._24, m._32, m._33, m._34, m._42, m._43, m._44 };\n"
+            "    %1$s3x3 m2 = { m._21, m._23, m._24, m._31, m._33, m._34, m._41, m._43, m._44 };\n"
+            "    %1$s3x3 m3 = { m._21, m._22, m._24, m._31, m._32, m._34, m._41, m._42, m._44 };\n"
+            "    %1$s3x3 m4 = { m._21, m._22, m._23, m._31, m._32, m._33, m._41, m._42, m._43 };\n"
+            "    %1$s4 v1 = { m._11, -m._12, m._13, -m._14 };\n"
+            "    %1$s4 v2 = { determinant(m1), determinant(m2), determinant(m3), determinant(m4) };\n"
             "    return dot(v1, v2);\n"
             "}";
     static const char *templates[] =
@@ -3668,23 +3668,7 @@ static bool intrinsic_determinant(struct hlsl_ctx *ctx,
     typename = type->e.numeric.type == HLSL_TYPE_HALF ? "half" : "float";
     template = templates[dim];
 
-    switch (dim)
-    {
-        case 2:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename);
-            break;
-        case 3:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
-                    typename, typename, typename, typename);
-            break;
-        case 4:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
-                    typename, typename, typename, typename, typename);
-            break;
-        default:
-            vkd3d_unreachable();
-    }
-
+    body = hlsl_sprintf_alloc(ctx, template, typename);
     if (!body)
         return false;
 
