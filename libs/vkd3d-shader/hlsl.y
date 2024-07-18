@@ -3444,9 +3444,9 @@ static bool write_cosh_or_sinh(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s %s(%s x)\n"
+            "%1$s %2$s(%1$s x)\n"
             "{\n"
-            "    return (exp(x) %s exp(-x)) / 2;\n"
+            "    return (exp(x) %3$s exp(-x)) / 2;\n"
             "}\n";
     static const char fn_name_sinh[] = "sinh";
     static const char fn_name_cosh[] = "cosh";
@@ -3458,7 +3458,7 @@ static bool write_cosh_or_sinh(struct hlsl_ctx *ctx,
     fn_name = sinh_mode ? fn_name_sinh : fn_name_cosh;
 
     if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type_name, fn_name, type_name, sinh_mode ? "-" : "+")))
+            type_name, fn_name, sinh_mode ? "-" : "+")))
         return false;
 
     func = hlsl_compile_internal_function(ctx, fn_name, body);
@@ -4461,9 +4461,9 @@ static bool intrinsic_tanh(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s tanh(%s x)\n"
+            "%1$s tanh(%1$s x)\n"
             "{\n"
-            "    %s exp_pos, exp_neg;\n"
+            "    %1$s exp_pos, exp_neg;\n"
             "    exp_pos = exp(x);\n"
             "    exp_neg = exp(-x);\n"
             "    return (exp_pos - exp_neg) / (exp_pos + exp_neg);\n"
@@ -4473,8 +4473,7 @@ static bool intrinsic_tanh(struct hlsl_ctx *ctx,
         return false;
     type = arg->data_type;
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type->name, type->name, type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name)))
         return false;
 
     func = hlsl_compile_internal_function(ctx, "tanh", body);
