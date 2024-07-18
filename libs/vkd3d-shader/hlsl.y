@@ -3097,17 +3097,17 @@ static bool write_acos_or_asin(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s %s(%s x)\n"
+            "%1$s %2$s(%1$s x)\n"
             "{\n"
-            "    %s abs_arg = abs(x);\n"
-            "    %s poly_approx = (((-0.018729\n"
+            "    %1$s abs_arg = abs(x);\n"
+            "    %1$s poly_approx = (((-0.018729\n"
             "        * abs_arg + 0.074261)\n"
             "        * abs_arg - 0.212114)\n"
             "        * abs_arg + 1.570729);\n"
-            "    %s correction = sqrt(1.0 - abs_arg);\n"
-            "    %s zero_flip = (x < 0.0) * (-2.0 * correction * poly_approx + 3.141593);\n"
-            "    %s result = poly_approx * correction + zero_flip;\n"
-            "    return %s;\n"
+            "    %1$s correction = sqrt(1.0 - abs_arg);\n"
+            "    %1$s zero_flip = (x < 0.0) * (-2.0 * correction * poly_approx + 3.141593);\n"
+            "    %1$s result = poly_approx * correction + zero_flip;\n"
+            "    return %3$s;\n"
             "}";
     static const char fn_name_acos[] = "acos";
     static const char fn_name_asin[] = "asin";
@@ -3120,9 +3120,7 @@ static bool write_acos_or_asin(struct hlsl_ctx *ctx,
     type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_FLOAT, type->dimx, type->dimy);
 
     if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type->name, fn_name, type->name,
-            type->name, type->name, type->name, type->name, type->name,
-            (asin_mode ? return_stmt_asin : return_stmt_acos))))
+            type->name, fn_name, (asin_mode ? return_stmt_asin : return_stmt_acos))))
         return false;
     func = hlsl_compile_internal_function(ctx, fn_name, body);
     vkd3d_free(body);
