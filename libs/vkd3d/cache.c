@@ -31,6 +31,8 @@ struct vkd3d_shader_cache
     struct vkd3d_mutex lock;
 
     struct rb_tree tree;
+    unsigned int item_count;
+    struct vkd3d_shader_cache_item *enum_array;
 };
 
 struct shader_cache_entry
@@ -70,6 +72,7 @@ static void vkd3d_shader_cache_add_entry(struct vkd3d_shader_cache *cache,
         struct shader_cache_entry *e)
 {
     rb_put(&cache->tree, &e->h.hash, &e->entry);
+    cache->item_count++;
 }
 
 int vkd3d_shader_open_cache(struct vkd3d_shader_cache **cache)
@@ -85,6 +88,8 @@ int vkd3d_shader_open_cache(struct vkd3d_shader_cache **cache)
     object->refcount = 1;
     rb_init(&object->tree, vkd3d_shader_cache_compare_key);
     vkd3d_mutex_init(&object->lock);
+    object->item_count = 0;
+    object->enum_array = NULL;
 
     *cache = object;
 
@@ -112,6 +117,10 @@ unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache)
 
     if (refcount)
         return refcount;
+
+    /* Freeing the array is easy, but if this happens it is most likely a bug in the caller. */
+    if (cache->enum_array)
+        ERR("Cache %p destroyed during enumeration.\n", cache);
 
     rb_destroy(&cache->tree, vkd3d_shader_cache_destroy_entry, NULL);
     vkd3d_mutex_destroy(&cache->lock);
@@ -251,4 +260,52 @@ int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
 done:
     vkd3d_shader_cache_unlock(cache);
     return ret;
+}
+
+const struct vkd3d_shader_cache_item *vkd3d_shader_cache_enumerate(struct vkd3d_shader_cache *cache)
+{
+    struct vkd3d_shader_cache_item *ret = NULL;
+    struct shader_cache_entry *e;
+    unsigned int i = 0;
+
+    vkd3d_shader_cache_lock(cache);
+    if (!cache->enum_array)
+    {
+        cache->enum_array = vkd3d_malloc(sizeof(*ret) * (cache->item_count + 1));
+        if (!cache->enum_array)
+            goto unlock;
+
+        RB_FOR_EACH_ENTRY(e, &cache->tree, struct shader_cache_entry, entry)
+        {
+            cache->enum_array[i].key = e->payload;
+            cache->enum_array[i].value = e->payload + e->h.key_size;
+            cache->enum_array[i].key_size = e->h.key_size;
+            cache->enum_array[i].value_size = e->h.value_size;
+            ++i;
+        }
+        cache->enum_array[i].key = cache->enum_array[i].value = NULL;
+        cache->enum_array[i].key_size = cache->enum_array[i].value_size = 0;
+    }
+    else
+    {
+        /* We will later need to handle parallel enumeration from two threads. If two devices
+         * are created in quick succession, the asynchronous cache load will cause both devices
+         * to iterate over the disk cache at the same time. A reference count should take care
+         * of it. */
+        ERR("Unexpected nested or parallel enumeration.\n");
+        goto unlock;
+    }
+    ret = cache->enum_array;
+
+unlock:
+    vkd3d_shader_cache_unlock(cache);
+    return ret;
+}
+
+void vkd3d_shader_cache_end_enumerate(struct vkd3d_shader_cache *cache)
+{
+    vkd3d_shader_cache_lock(cache);
+    vkd3d_free(cache->enum_array);
+    cache->enum_array = NULL;
+    vkd3d_shader_cache_unlock(cache);
 }

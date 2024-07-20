@@ -1573,30 +1573,20 @@ struct vkd3d_render_pass_entry
 
 STATIC_ASSERT(sizeof(struct vkd3d_render_pass_key) == 48);
 
-static HRESULT vkd3d_render_pass_cache_create_pass_locked(struct vkd3d_render_pass_cache *cache,
+static HRESULT vkd3d_render_pass_cache_create_pass(struct vkd3d_render_pass_cache *cache,
         struct d3d12_device *device, const struct vkd3d_render_pass_key *key, VkRenderPass *vk_render_pass)
 {
     VkAttachmentReference attachment_references[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT + 1];
     VkAttachmentDescription attachments[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT + 1];
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
-    struct vkd3d_render_pass_entry *entry;
     unsigned int index, attachment_index;
     VkSubpassDescription sub_pass_desc;
     VkRenderPassCreateInfo pass_info;
     bool have_depth_stencil;
+    enum vkd3d_result ret;
     unsigned int rt_count;
+    size_t size;
     VkResult vr;
-
-    if (!vkd3d_array_reserve((void **)&cache->render_passes, &cache->render_passes_size,
-            cache->render_pass_count + 1, sizeof(*cache->render_passes)))
-    {
-        *vk_render_pass = VK_NULL_HANDLE;
-        return E_OUTOFMEMORY;
-    }
-
-    entry = &cache->render_passes[cache->render_pass_count];
-
-    entry->key = *key;
 
     have_depth_stencil = key->depth_enable || key->stencil_enable;
     rt_count = have_depth_stencil ? key->attachment_count - 1 : key->attachment_count;
@@ -1691,8 +1681,20 @@ static HRESULT vkd3d_render_pass_cache_create_pass_locked(struct vkd3d_render_pa
     pass_info.pDependencies = NULL;
     if ((vr = VK_CALL(vkCreateRenderPass(device->vk_device, &pass_info, NULL, vk_render_pass))) >= 0)
     {
-        entry->vk_render_pass = *vk_render_pass;
-        ++cache->render_pass_count;
+        if ((ret = vkd3d_shader_cache_put(cache->cache, key, sizeof(*key), vk_render_pass,
+                sizeof(*vk_render_pass))) == VKD3D_ERROR_KEY_ALREADY_EXISTS)
+        {
+            /* Someone else already created the render pass. */
+            VK_CALL(vkDestroyRenderPass(device->vk_device, *vk_render_pass, NULL));
+            size = sizeof(*vk_render_pass);
+            if ((ret = vkd3d_shader_cache_get(cache->cache, key, sizeof(*key),
+                    vk_render_pass, &size)))
+                ERR("Do we have a render pass or not? ret=%d.\n", ret);
+        }
+        else if (ret)
+        {
+            ERR("Failed to put render pass into the cache, ret=%d.\n", ret);
+        }
     }
     else
     {
@@ -1706,53 +1708,40 @@ static HRESULT vkd3d_render_pass_cache_create_pass_locked(struct vkd3d_render_pa
 HRESULT vkd3d_render_pass_cache_find(struct vkd3d_render_pass_cache *cache,
         struct d3d12_device *device, const struct vkd3d_render_pass_key *key, VkRenderPass *vk_render_pass)
 {
-    bool found = false;
+    size_t size = sizeof(*vk_render_pass);
+    enum vkd3d_result ret;
     HRESULT hr = S_OK;
-    unsigned int i;
 
-    vkd3d_mutex_lock(&device->pipeline_cache_mutex);
-
-    for (i = 0; i < cache->render_pass_count; ++i)
-    {
-        struct vkd3d_render_pass_entry *current = &cache->render_passes[i];
-
-        if (!memcmp(&current->key, key, sizeof(*key)))
-        {
-            *vk_render_pass = current->vk_render_pass;
-            found = true;
-            break;
-        }
-    }
-
-    if (!found)
-        hr = vkd3d_render_pass_cache_create_pass_locked(cache, device, key, vk_render_pass);
-
-    vkd3d_mutex_unlock(&device->pipeline_cache_mutex);
+    if ((ret = vkd3d_shader_cache_get(device->render_pass_cache.cache, key,
+            sizeof(*key), vk_render_pass, &size)))
+        hr = vkd3d_render_pass_cache_create_pass(cache, device, key, vk_render_pass);
 
     return hr;
 }
 
 void vkd3d_render_pass_cache_init(struct vkd3d_render_pass_cache *cache)
 {
-    cache->render_passes = NULL;
-    cache->render_pass_count = 0;
-    cache->render_passes_size = 0;
+    enum vkd3d_result ret;
+
+    if ((ret = vkd3d_shader_open_cache(&cache->cache)))
+        ERR("Failed to create an in-memory cache\n");
 }
 
 void vkd3d_render_pass_cache_cleanup(struct vkd3d_render_pass_cache *cache,
         struct d3d12_device *device)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
-    unsigned int i;
+    const struct vkd3d_shader_cache_item *items;
+    VkRenderPass pass;
 
-    for (i = 0; i < cache->render_pass_count; ++i)
+    for (items = vkd3d_shader_cache_enumerate(cache->cache); items->value; items++)
     {
-        struct vkd3d_render_pass_entry *current = &cache->render_passes[i];
-        VK_CALL(vkDestroyRenderPass(device->vk_device, current->vk_render_pass, NULL));
+        pass = *(VkRenderPass *)items->value;
+        VK_CALL(vkDestroyRenderPass(device->vk_device, pass, NULL));
     }
+    vkd3d_shader_cache_end_enumerate(cache->cache);
 
-    vkd3d_free(cache->render_passes);
-    cache->render_passes = NULL;
+    vkd3d_shader_cache_decref(cache->cache);
 }
 
 static void d3d12_init_pipeline_state_desc(struct d3d12_pipeline_state_desc *desc)
