@@ -669,8 +669,8 @@ HRESULT vkd3d_create_buffer(struct d3d12_device *device,
     if (sparse_resource)
     {
         buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
-        if (device->vk_info.sparse_properties.residencyNonResidentStrict)
-            buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
+        buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
+        buffer_info.flags |= VK_BUFFER_CREATE_SPARSE_ALIASED_BIT;
     }
 
     buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
@@ -823,14 +823,14 @@ static HRESULT vkd3d_create_image(struct d3d12_device *device,
             && desc->Width == desc->Height && desc->DepthOrArraySize >= 6
             && desc->SampleDesc.Count == 1)
         image_info.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+    if (desc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && !sparse_resource)
         image_info.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT_KHR;
 
     if (sparse_resource)
     {
         image_info.flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT;
-        if (device->vk_info.sparse_properties.residencyNonResidentStrict)
-            image_info.flags |= VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+        image_info.flags |= VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
+        image_info.flags |= VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
     }
 
     image_info.imageType = vk_image_type_from_d3d12_resource_dimension(desc->Dimension);
@@ -977,6 +977,16 @@ HRESULT vkd3d_get_image_allocation_info(struct d3d12_device *device,
 
 static void d3d12_resource_tile_info_cleanup(struct d3d12_resource *resource)
 {
+    unsigned int i;
+
+    if (!resource->tiles.subresources)
+        return;
+
+    vkd3d_free(resource->tiles.bind_buffer);
+    vkd3d_free(resource->tiles.opaque_bind_buffer);
+
+    for (i = 0; i < resource->tiles.subresource_count; ++i)
+        vkd3d_free(resource->tiles.subresources[i].mappings);
     vkd3d_free(resource->tiles.subresources);
 }
 
@@ -1097,7 +1107,7 @@ void d3d12_resource_get_tiling(struct d3d12_device *device, const struct d3d12_r
     {
         packed_mip_info->NumStandardMips = resource->tiles.standard_mip_count;
         packed_mip_info->NumPackedMips = resource->desc.MipLevels - packed_mip_info->NumStandardMips;
-        packed_mip_info->NumTilesForPackedMips = !!resource->tiles.packed_mip_tile_count; /* non-zero dummy value */
+        packed_mip_info->NumTilesForPackedMips = resource->tiles.packed_mip_tile_count;
         packed_mip_info->StartTileIndexInOverallResource = packed_mip_info->NumPackedMips
                 ? resource->tiles.subresources[resource->tiles.standard_mip_count].offset : 0;
     }
@@ -1143,7 +1153,7 @@ void d3d12_resource_get_tiling(struct d3d12_device *device, const struct d3d12_r
 
 static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3d12_device *device)
 {
-    unsigned int i, start_idx, subresource_count, tile_count, miplevel_idx;
+    unsigned int i, start_idx, subresource_count, tile_count, miplevel_idx, mapping_count;
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     VkSparseImageMemoryRequirements *sparse_requirements_array;
     VkSparseImageMemoryRequirements sparse_requirements = {0};
@@ -1183,6 +1193,17 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
         resource->tiles.subresource_count = 1;
         resource->tiles.standard_mip_count = 1;
         resource->tiles.packed_mip_tile_count = 0;
+
+        if (!(resource->tiles.bind_buffer = vkd3d_malloc(resource->tiles.total_count * sizeof(VkSparseMemoryBind))))
+        {
+            ERR("Failed to allocate binding buffer.\n");
+            goto error;
+        }
+        if (!(tile_info->mappings = vkd3d_calloc(resource->tiles.total_count, sizeof(*tile_info->mappings))))
+        {
+            ERR("Failed to allocate mapping buffer.\n");
+            goto error;
+        }
     }
     else
     {
@@ -1214,6 +1235,8 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
                     sparse_requirements = sparse_requirements_array[i];
                 }
             }
+            if (sparse_requirements_array[i].formatProperties.aspectMask & VK_IMAGE_ASPECT_METADATA_BIT)
+                FIXME("Mip tail metadata binding is not implemented.\n");
         }
         vkd3d_free(sparse_requirements_array);
         if (!sparse_requirements.formatProperties.aspectMask)
@@ -1223,11 +1246,15 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
         }
 
         resource->tiles.tile_extent = sparse_requirements.formatProperties.imageGranularity;
+        resource->tiles.single_mip_tail = !!(sparse_requirements.formatProperties.flags
+                & VK_SPARSE_IMAGE_FORMAT_SINGLE_MIPTAIL_BIT);
         resource->tiles.subresource_count = subresource_count;
         resource->tiles.standard_mip_count = sparse_requirements.imageMipTailSize
                 ? sparse_requirements.imageMipTailFirstLod : resource->desc.MipLevels;
         resource->tiles.packed_mip_tile_count = (resource->tiles.standard_mip_count < resource->desc.MipLevels)
                 ? sparse_requirements.imageMipTailSize / requirements.alignment : 0;
+        resource->tiles.mip_tail_offset = sparse_requirements.imageMipTailOffset;
+        resource->tiles.mip_tail_stride = sparse_requirements.imageMipTailStride;
 
         for (i = 0, start_idx = 0; i < subresource_count; ++i)
         {
@@ -1235,26 +1262,53 @@ static bool d3d12_resource_init_tiles(struct d3d12_resource *resource, struct d3
 
             tile_extent = &sparse_requirements.formatProperties.imageGranularity;
             tile_info = &resource->tiles.subresources[i];
-            compute_image_subresource_size_in_tiles(tile_extent, &resource->desc, miplevel_idx, &tile_info->extent);
             tile_info->offset = start_idx;
             tile_info->count = 0;
+            tile_count = 0;
+            mapping_count = 0;
 
             if (miplevel_idx < resource->tiles.standard_mip_count)
             {
+                compute_image_subresource_size_in_tiles(tile_extent, &resource->desc, miplevel_idx, &tile_info->extent);
                 tile_count = tile_info->extent.width * tile_info->extent.height * tile_info->extent.depth;
-                start_idx += tile_count;
-                tile_info->count = tile_count;
+                mapping_count = tile_count;
             }
             else if (miplevel_idx == resource->tiles.standard_mip_count)
             {
-                tile_info->count = 1; /* Non-zero dummy value */
-                start_idx += 1;
+                tile_count = resource->tiles.packed_mip_tile_count;
+                tile_info->extent.width = tile_count;
+                tile_info->extent.height = 1;
+                tile_info->extent.depth = 1;
+                mapping_count = 1;
             }
+
+            if (mapping_count && !(tile_info->mappings = vkd3d_calloc(mapping_count, sizeof(*tile_info->mappings))))
+            {
+                ERR("Failed to allocate mapping buffer.\n");
+                goto error;
+            }
+
+            start_idx += tile_count;
+            tile_info->count = tile_count;
         }
         resource->tiles.total_count = start_idx;
+
+        resource->tiles.bind_buffer = vkd3d_malloc(start_idx * max(sizeof(VkSparseImageMemoryBind),
+                sizeof(struct vkd3d_subresource_tile_mapping)));
+        resource->tiles.opaque_bind_buffer = vkd3d_malloc(d3d12_resource_desc_get_layer_count(&resource->desc)
+                * sizeof(*resource->tiles.opaque_bind_buffer));
+        if (!resource->tiles.bind_buffer || !resource->tiles.opaque_bind_buffer)
+        {
+            ERR("Failed to allocate binding buffer.\n");
+            goto error;
+        }
     }
 
     return true;
+
+error:
+    d3d12_resource_tile_info_cleanup(resource);
+    return false;
 }
 
 /* ID3D12Resource */

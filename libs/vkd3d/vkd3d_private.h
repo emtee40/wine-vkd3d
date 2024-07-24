@@ -451,11 +451,19 @@ struct vkd3d_tiled_region_extent
     unsigned int depth;
 };
 
+struct vkd3d_subresource_tile_mapping
+{
+    VkDeviceMemory vk_memory;
+    VkDeviceSize byte_offset;
+    bool dirty;
+};
+
 struct vkd3d_subresource_tile_info
 {
     unsigned int offset;
     unsigned int count;
     struct vkd3d_tiled_region_extent extent;
+    struct vkd3d_subresource_tile_mapping *mappings;
 };
 
 struct d3d12_resource_tile_info
@@ -465,7 +473,12 @@ struct d3d12_resource_tile_info
     unsigned int standard_mip_count;
     unsigned int packed_mip_tile_count;
     unsigned int subresource_count;
+    bool single_mip_tail;
+    uint64_t mip_tail_offset;
+    uint64_t mip_tail_stride;
     struct vkd3d_subresource_tile_info *subresources;
+    void *bind_buffer;
+    VkSparseMemoryBind *opaque_bind_buffer;
 };
 
 /* ID3D12Resource */
@@ -1412,8 +1425,6 @@ struct d3d12_command_queue
      * set, aux_op_queue.count must be zero. */
     struct d3d12_command_queue_op_array aux_op_queue;
 
-    bool supports_sparse_binding;
-
     struct vkd3d_private_store private_store;
 };
 
@@ -1561,9 +1572,11 @@ struct d3d12_device
     struct vkd3d_queue *direct_queue;
     struct vkd3d_queue *compute_queue;
     struct vkd3d_queue *copy_queue;
+    struct vkd3d_queue *tiled_binding_queue;
     uint32_t queue_family_indices[VKD3D_MAX_QUEUE_FAMILY_COUNT];
     unsigned int queue_family_count;
     VkTimeDomainEXT vk_host_time_domain;
+    VkSemaphore tiled_binding_semaphore;
 
     struct vkd3d_mutex blocked_queues_mutex;
     struct d3d12_command_queue *blocked_queues[VKD3D_MAX_DEVICE_BLOCKED_QUEUES];
