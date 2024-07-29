@@ -34,7 +34,7 @@ probe(2, 0) rgbaui (0, 1, 0, 2)
 probe(3, 0) rgbaui (0, 1, 0, 4)
 
 
-[pixel shader todo]
+[pixel shader]
 uint4 u;
 
 uint4 main() : sv_target
@@ -44,10 +44,10 @@ uint4 main() : sv_target
 
 [test]
 uniform 0 uint4 0xffffffff 0 0x00001000 0x00760400
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe (0, 0) rgbaui (31, 0xffffffff, 12, 22)
 
-[pixel shader todo]
+[pixel shader]
 int4 i;
 
 uint4 main() : sv_target
@@ -57,13 +57,13 @@ uint4 main() : sv_target
 
 [test]
 uniform 0 uint4 0 0xffffffff 7604 0xff900000
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe (0, 0) rgbai (-1, -1, 12, 22)
 uniform 0 int4 -500 -400 -300 -7604
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe (0, 0) rgbai (8, 8, 8, 12)
 
-[pixel shader todo]
+[pixel shader]
 uint4 main(float4 pos : sv_position) : sv_target
 {
     uint4x4 umat = {
@@ -76,7 +76,7 @@ uint4 main(float4 pos : sv_position) : sv_target
 }
 
 [test]
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe(0, 0) rgbaui (0, 1, 1, 2)
 probe(1, 0) rgbaui (2, 2, 2, 3)
 probe(2, 0) rgbaui (3, 3, 3, 3)
