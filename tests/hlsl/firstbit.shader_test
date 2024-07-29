@@ -1,0 +1,83 @@
+[require]
+shader model >= 4.0
+
+[pixel shader todo]
+uint4 u;
+
+uint4 main() : sv_target
+{
+    return uint4(firstbitlow(u));
+}
+
+[test]
+uniform 0 uint4 0xffffffff 0 0x00001000 0x00760400
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgbaui (0, 0xffffffff, 12, 10)
+
+[pixel shader todo]
+uint4 main(float4 pos : sv_position) : sv_target
+{
+    uint4x4 umat = {
+        1,  2,  3,  4,
+        5,  6,  7,  8,
+        9,  10, 11, 12,
+        13, 14, 15, 16 };
+    uint4x4 lobits = firstbitlow(umat);
+    return lobits[int(pos.x)];
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+probe(0, 0) rgbaui (0, 1, 0, 2)
+probe(1, 0) rgbaui (0, 1, 0, 3)
+probe(2, 0) rgbaui (0, 1, 0, 2)
+probe(3, 0) rgbaui (0, 1, 0, 4)
+
+
+[pixel shader todo]
+uint4 u;
+
+uint4 main() : sv_target
+{
+    return uint4(firstbithigh(u));
+}
+
+[test]
+uniform 0 uint4 0xffffffff 0 0x00001000 0x00760400
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgbaui (31, 0xffffffff, 12, 22)
+
+[pixel shader todo]
+int4 i;
+
+uint4 main() : sv_target
+{
+    return uint4(firstbithigh(i));
+}
+
+[test]
+uniform 0 uint4 0 0xffffffff 7604 0xff900000
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgbai (-1, -1, 12, 22)
+uniform 0 int4 -500 -400 -300 -7604
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgbai (8, 8, 8, 12)
+
+[pixel shader todo]
+uint4 main(float4 pos : sv_position) : sv_target
+{
+    uint4x4 umat = {
+        1,  2,  3,  4,
+        5,  6,  7,  8,
+        9,  10, 11, 12,
+        13, 14, 15, 16 };
+    uint4x4 hibits = firstbithigh(umat);
+    return hibits[int(pos.x)];
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+probe(0, 0) rgbaui (0, 1, 1, 2)
+probe(1, 0) rgbaui (2, 2, 2, 3)
+probe(2, 0) rgbaui (3, 3, 3, 3)
+probe(3, 0) rgbaui (3, 3, 3, 4)
