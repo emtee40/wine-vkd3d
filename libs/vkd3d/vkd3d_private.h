@@ -1229,6 +1229,14 @@ enum vkd3d_pipeline_bind_point
     VKD3D_PIPELINE_BIND_POINT_COUNT = 0x2,
 };
 
+struct command_list_attached_resources
+{
+    struct d3d12_resource **resources;
+    size_t capacity;
+    size_t count;
+    VkCommandBuffer vk_command_buffer;
+};
+
 /* ID3D12CommandList */
 struct d3d12_command_list
 {
@@ -1271,6 +1279,8 @@ struct d3d12_command_list
 
     VkBuffer so_counter_buffers[D3D12_SO_BUFFER_SLOT_COUNT];
     VkDeviceSize so_counter_buffer_offsets[D3D12_SO_BUFFER_SLOT_COUNT];
+
+    struct command_list_attached_resources attached_resources;
 
     void (*update_descriptors)(struct d3d12_command_list *list, enum vkd3d_pipeline_bind_point bind_point);
     struct d3d12_descriptor_heap *descriptor_heaps[64];
@@ -1335,9 +1345,15 @@ struct vkd3d_cs_signal
     uint64_t value;
 };
 
+struct vkd3d_cs_execute_buffer
+{
+    struct command_list_attached_resources attached_resources;
+    VkCommandBuffer vk_command_buffer;
+};
+
 struct vkd3d_cs_execute
 {
-    VkCommandBuffer *buffers;
+    struct vkd3d_cs_execute_buffer *buffers;
     unsigned int buffer_count;
 };
 
@@ -1413,6 +1429,9 @@ struct d3d12_command_queue
     struct d3d12_command_queue_op_array aux_op_queue;
 
     bool supports_sparse_binding;
+
+    VkCommandBuffer *submission_buffer;
+    size_t submission_capacity;
 
     struct vkd3d_private_store private_store;
 };

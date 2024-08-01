@@ -39002,6 +39002,99 @@ static void test_shader_cache(void)
     destroy_test_context(&context);
 }
 
+static void test_out_of_order_initial_transition(void)
+{
+    ID3D12GraphicsCommandList *command_list, *command_list_2;
+    D3D12_TEXTURE_COPY_LOCATION dst_location, src_location;
+    static const float green[] = {0.0f, 1.0f, 0.0f, 1.0f};
+    ID3D12Resource *readback_buffer, *resolved_resource;
+    D3D12_HEAP_PROPERTIES heap_properties;
+    unsigned int buffer_size, row_pitch;
+    ID3D12GraphicsCommandList *lists[2];
+    D3D12_RESOURCE_DESC resource_desc;
+    ID3D12CommandAllocator *allocator;
+    struct d3d12_resource_readback rb;
+    struct test_context_desc desc;
+    struct test_context context;
+    ID3D12CommandQueue *queue;
+    ID3D12Device *device;
+    HRESULT hr;
+
+    memset(&desc, 0, sizeof(desc));
+    desc.sample_desc.Count = 4;
+    if (!init_test_context(&context, &desc))
+        return;
+    device = context.device;
+    command_list = context.list;
+    queue = context.queue;
+
+    hr = ID3D12Device_CreateCommandAllocator(device, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &IID_ID3D12CommandAllocator, (void **)&allocator);
+    ok(SUCCEEDED(hr), "Failed to create command allocator, hr %#x.\n", hr);
+
+    hr = ID3D12Device_CreateCommandList(device, 0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            allocator, NULL, &IID_ID3D12GraphicsCommandList, (void **)&command_list_2);
+    ok(SUCCEEDED(hr), "Failed to create command list, hr %#x.\n", hr);
+
+    resource_desc = ID3D12Resource_GetDesc(context.render_target);
+    row_pitch = align(resource_desc.Width * format_size(resource_desc.Format), D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+    buffer_size = row_pitch * resource_desc.Height;
+    readback_buffer = create_readback_buffer(device, buffer_size);
+
+    memset(&heap_properties, 0, sizeof(heap_properties));
+    heap_properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    resource_desc.Alignment = 0;
+    resource_desc.SampleDesc.Count = 1;
+    resource_desc.Flags = 0;
+    hr = ID3D12Device_CreateCommittedResource(device, &heap_properties, D3D12_HEAP_FLAG_NONE,
+            &resource_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, NULL,
+            &IID_ID3D12Resource, (void **)&resolved_resource);
+    ok(hr == S_OK, "Failed to create resource, hr %#x.\n", hr);
+
+    /* Test that the handling of a resource's initial state depends on the order
+     * in which commands are submitted to the queue, not the order in which they
+     * are recorded. If initial state is mishandled, the resolve command fails. */
+
+    transition_resource_state(command_list_2, context.render_target,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+    ID3D12GraphicsCommandList_ResolveSubresource(command_list_2,
+            resolved_resource, 0, context.render_target, 0, resource_desc.Format);
+    transition_resource_state(command_list_2, resolved_resource,
+            D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+    dst_location.pResource = readback_buffer;
+    dst_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst_location.PlacedFootprint.Offset = 0;
+    dst_location.PlacedFootprint.Footprint.Format = resource_desc.Format;
+    dst_location.PlacedFootprint.Footprint.Width = resource_desc.Width;
+    dst_location.PlacedFootprint.Footprint.Height = resource_desc.Height;
+    dst_location.PlacedFootprint.Footprint.Depth = 1;
+    dst_location.PlacedFootprint.Footprint.RowPitch = row_pitch;
+    src_location.pResource = resolved_resource;
+    src_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src_location.SubresourceIndex = 0;
+    ID3D12GraphicsCommandList_CopyTextureRegion(command_list_2, &dst_location, 0, 0, 0, &src_location, NULL);
+    ID3D12GraphicsCommandList_Close(command_list_2);
+
+    ID3D12GraphicsCommandList_ClearRenderTargetView(command_list, context.rtv, green, 0, NULL);
+    ID3D12GraphicsCommandList_Close(command_list);
+
+    lists[0] = command_list;
+    lists[1] = command_list_2;
+    ID3D12CommandQueue_ExecuteCommandLists(queue, 2, (ID3D12CommandList **)lists);
+    wait_queue_idle(device, queue);
+
+    init_readback(&rb, readback_buffer, buffer_size, resource_desc.Width, resource_desc.Height, 1, row_pitch);
+    check_readback_data_uint(&rb.rb, NULL, 0xff00ff00, 0);
+    release_resource_readback(&rb);
+
+    ID3D12Resource_Release(readback_buffer);
+    ID3D12Resource_Release(resolved_resource);
+    ID3D12CommandAllocator_Release(allocator);
+    ID3D12GraphicsCommandList_Release(command_list_2);
+    destroy_test_context(&context);
+}
+
 START_TEST(d3d12)
 {
     parse_args(argc, argv);
@@ -39188,4 +39281,5 @@ START_TEST(d3d12)
     run_test(test_hull_shader_punned_array);
     run_test(test_unused_interpolated_input);
     run_test(test_shader_cache);
+    run_test(test_out_of_order_initial_transition);
 }

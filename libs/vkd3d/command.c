@@ -1267,9 +1267,8 @@ static void d3d12_command_list_mark_as_invalid(struct d3d12_command_list *list,
     list->is_valid = false;
 }
 
-static HRESULT d3d12_command_list_begin_command_buffer(struct d3d12_command_list *list)
+static HRESULT vk_command_buffer_begin(VkCommandBuffer vk_command_buffer, struct d3d12_device *device)
 {
-    struct d3d12_device *device = list->device;
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     VkCommandBufferBeginInfo begin_info;
     VkResult vr;
@@ -1279,25 +1278,51 @@ static HRESULT d3d12_command_list_begin_command_buffer(struct d3d12_command_list
     begin_info.flags = 0;
     begin_info.pInheritanceInfo = NULL;
 
-    if ((vr = VK_CALL(vkBeginCommandBuffer(list->vk_command_buffer, &begin_info))) < 0)
+    if ((vr = VK_CALL(vkBeginCommandBuffer(vk_command_buffer, &begin_info))) < 0)
     {
         WARN("Failed to begin command buffer, vr %d.\n", vr);
         return hresult_from_vk_result(vr);
     }
 
-    list->is_recording = true;
-    list->is_valid = true;
-
     return S_OK;
 }
 
 static HRESULT d3d12_command_allocator_allocate_command_buffer(struct d3d12_command_allocator *allocator,
-        struct d3d12_command_list *list)
+        VkCommandBuffer *vk_command_buffer)
 {
     struct d3d12_device *device = allocator->device;
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     VkCommandBufferAllocateInfo command_buffer_info;
     VkResult vr;
+
+    command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_buffer_info.pNext = NULL;
+    command_buffer_info.commandPool = allocator->vk_command_pool;
+    command_buffer_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_buffer_info.commandBufferCount = 1;
+
+    if ((vr = VK_CALL(vkAllocateCommandBuffers(device->vk_device, &command_buffer_info, vk_command_buffer))) < 0)
+    {
+        WARN("Failed to allocate Vulkan command buffer, vr %d.\n", vr);
+        return hresult_from_vk_result(vr);
+    }
+
+    if (!vkd3d_array_reserve((void **)&allocator->command_buffers, &allocator->command_buffers_size,
+            allocator->command_buffer_count + 1, sizeof(*allocator->command_buffers)))
+    {
+        WARN("Failed to add command buffer.\n");
+        VK_CALL(vkFreeCommandBuffers(device->vk_device, allocator->vk_command_pool, 1, vk_command_buffer));
+        return E_OUTOFMEMORY;
+    }
+    allocator->command_buffers[allocator->command_buffer_count++] = *vk_command_buffer;
+
+    return S_OK;
+}
+
+static HRESULT d3d12_command_allocator_allocate_and_begin_command_buffer(struct d3d12_command_allocator *allocator,
+        struct d3d12_command_list *list)
+{
+    struct d3d12_device *device = allocator->device;
     HRESULT hr;
 
     TRACE("allocator %p, list %p.\n", allocator, list);
@@ -1308,37 +1333,19 @@ static HRESULT d3d12_command_allocator_allocate_command_buffer(struct d3d12_comm
         return E_INVALIDARG;
     }
 
-    command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    command_buffer_info.pNext = NULL;
-    command_buffer_info.commandPool = allocator->vk_command_pool;
-    command_buffer_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    command_buffer_info.commandBufferCount = 1;
-
-    if ((vr = VK_CALL(vkAllocateCommandBuffers(device->vk_device, &command_buffer_info,
-            &list->vk_command_buffer))) < 0)
+    if (FAILED(hr = d3d12_command_allocator_allocate_command_buffer(allocator, &list->vk_command_buffer)))
     {
-        WARN("Failed to allocate Vulkan command buffer, vr %d.\n", vr);
-        return hresult_from_vk_result(vr);
+        WARN("Failed to allocate Vulkan command buffer, hr %s.\n", debugstr_hresult(hr));
+        return hr;
     }
 
     list->vk_queue_flags = allocator->vk_queue_flags;
 
-    if (FAILED(hr = d3d12_command_list_begin_command_buffer(list)))
-    {
-        VK_CALL(vkFreeCommandBuffers(device->vk_device, allocator->vk_command_pool,
-                1, &list->vk_command_buffer));
+    if (FAILED(hr = vk_command_buffer_begin(list->vk_command_buffer, device)))
         return hr;
-    }
 
-    if (!vkd3d_array_reserve((void **)&allocator->command_buffers, &allocator->command_buffers_size,
-            allocator->command_buffer_count + 1, sizeof(*allocator->command_buffers)))
-    {
-        WARN("Failed to add command buffer.\n");
-        VK_CALL(vkFreeCommandBuffers(device->vk_device, allocator->vk_command_pool,
-                1, &list->vk_command_buffer));
-        return E_OUTOFMEMORY;
-    }
-    allocator->command_buffers[allocator->command_buffer_count++] = list->vk_command_buffer;
+    list->is_recording = true;
+    list->is_valid = true;
 
     allocator->current_command_list = list;
 
@@ -2234,11 +2241,11 @@ static bool vk_barrier_parameters_from_d3d12_resource_state(unsigned int state, 
     return true;
 }
 
-static void d3d12_command_list_transition_resource_to_initial_state(struct d3d12_command_list *list,
-        struct d3d12_resource *resource)
+static void vk_command_buffer_transition_resource_to_initial_state(VkCommandBuffer vk_command_buffer,
+        VkQueueFlags vk_queue_flags, struct d3d12_resource *resource, struct d3d12_device *device)
 {
-    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
-    const struct vkd3d_vulkan_info *vk_info = &list->device->vk_info;
+    const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+    const struct vkd3d_vulkan_info *vk_info = &device->vk_info;
     VkPipelineStageFlags src_stage_mask, dst_stage_mask;
     VkImageMemoryBarrier barrier;
 
@@ -2254,8 +2261,7 @@ static void d3d12_command_list_transition_resource_to_initial_state(struct d3d12
             VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (!vk_barrier_parameters_from_d3d12_resource_state(resource->initial_state, 0,
-            resource, list->vk_queue_flags, vk_info, &barrier.dstAccessMask,
-            &dst_stage_mask, &barrier.newLayout, list->device))
+            resource, vk_queue_flags, vk_info, &barrier.dstAccessMask, &dst_stage_mask, &barrier.newLayout, device))
     {
         FIXME("Unhandled state %#x.\n", resource->initial_state);
         return;
@@ -2273,7 +2279,7 @@ static void d3d12_command_list_transition_resource_to_initial_state(struct d3d12
     TRACE("Initial state %#x transition for resource %p (old layout %#x, new layout %#x).\n",
             resource->initial_state, resource, barrier.oldLayout, barrier.newLayout);
 
-    VK_CALL(vkCmdPipelineBarrier(list->vk_command_buffer, src_stage_mask, dst_stage_mask, 0,
+    VK_CALL(vkCmdPipelineBarrier(vk_command_buffer, src_stage_mask, dst_stage_mask, 0,
             0, NULL, 0, NULL, 1, &barrier));
 }
 
@@ -2282,10 +2288,14 @@ static void d3d12_command_list_track_resource_usage(struct d3d12_command_list *l
 {
     if (resource->flags & VKD3D_RESOURCE_INITIAL_STATE_TRANSITION)
     {
-        d3d12_command_list_end_current_render_pass(list);
-
-        d3d12_command_list_transition_resource_to_initial_state(list, resource);
-        resource->flags &= ~VKD3D_RESOURCE_INITIAL_STATE_TRANSITION;
+        /* Initial transitions must be inserted when the command list is submitted to a queue. */
+        if (!vkd3d_array_reserve((void **)&list->attached_resources.resources, &list->attached_resources.capacity,
+                list->attached_resources.count + 1, sizeof(*list->attached_resources.resources)))
+        {
+            ERR("Failed to allocate attached resources.\n");
+            return;
+        }
+        list->attached_resources.resources[list->attached_resources.count++] = resource;
     }
 }
 
@@ -2350,6 +2360,8 @@ static ULONG STDMETHODCALLTYPE d3d12_command_list_Release(ID3D12GraphicsCommandL
 
         vkd3d_pipeline_bindings_cleanup(&list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_COMPUTE]);
         vkd3d_pipeline_bindings_cleanup(&list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_GRAPHICS]);
+
+        vkd3d_free(list->attached_resources.resources);
 
         vkd3d_free(list);
 
@@ -2419,8 +2431,10 @@ static D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE d3d12_command_list_GetType(ID3D
 static HRESULT STDMETHODCALLTYPE d3d12_command_list_Close(ID3D12GraphicsCommandList5 *iface)
 {
     struct d3d12_command_list *list = impl_from_ID3D12GraphicsCommandList5(iface);
+    struct command_list_attached_resources *attached_resources;
     const struct vkd3d_vk_device_procs *vk_procs;
     VkResult vr;
+    HRESULT hr;
 
     TRACE("iface %p.\n", iface);
 
@@ -2440,6 +2454,22 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_list_Close(ID3D12GraphicsCommandL
     {
         WARN("Failed to end command buffer, vr %d.\n", vr);
         return hresult_from_vk_result(vr);
+    }
+
+    attached_resources = &list->attached_resources;
+
+    if (attached_resources->count)
+    {
+        if (!list->allocator)
+        {
+            WARN("Allocator was destroyed.\n");
+        }
+        else if (FAILED(hr = d3d12_command_allocator_allocate_command_buffer(list->allocator,
+                &attached_resources->vk_command_buffer)))
+        {
+            WARN("Failed to allocate Vulkan command buffer, hr %s.\n", debugstr_hresult(hr));
+            return hr;
+        }
     }
 
     if (list->allocator)
@@ -2523,7 +2553,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_list_Reset(ID3D12GraphicsCommandL
         return E_FAIL;
     }
 
-    if (SUCCEEDED(hr = d3d12_command_allocator_allocate_command_buffer(allocator_impl, list)))
+    if (SUCCEEDED(hr = d3d12_command_allocator_allocate_and_begin_command_buffer(allocator_impl, list)))
     {
         list->allocator = allocator_impl;
         d3d12_command_list_reset_state(list, initial_pipeline_state);
@@ -6185,7 +6215,7 @@ static HRESULT d3d12_command_list_init(struct d3d12_command_list *list, struct d
             : d3d12_command_list_update_descriptors;
     list->descriptor_heap_count = 0;
 
-    if (SUCCEEDED(hr = d3d12_command_allocator_allocate_command_buffer(allocator, list)))
+    if (SUCCEEDED(hr = d3d12_command_allocator_allocate_and_begin_command_buffer(allocator, list)))
     {
         list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_GRAPHICS].vk_uav_counter_views = NULL;
         list->pipeline_bindings[VKD3D_PIPELINE_BIND_POINT_COMPUTE].vk_uav_counter_views = NULL;
@@ -6196,6 +6226,8 @@ static HRESULT d3d12_command_list_init(struct d3d12_command_list *list, struct d
         vkd3d_private_store_destroy(&list->private_store);
         d3d12_device_release(device);
     }
+
+    memset(&list->attached_resources, 0, sizeof(list->attached_resources));
 
     return hr;
 }
@@ -6279,6 +6311,8 @@ static ULONG STDMETHODCALLTYPE d3d12_command_queue_AddRef(ID3D12CommandQueue *if
 
 static void d3d12_command_queue_destroy_op(struct vkd3d_cs_op_data *op)
 {
+    unsigned int i;
+
     switch (op->opcode)
     {
         case VKD3D_CS_OP_WAIT:
@@ -6290,6 +6324,8 @@ static void d3d12_command_queue_destroy_op(struct vkd3d_cs_op_data *op)
             break;
 
         case VKD3D_CS_OP_EXECUTE:
+            for (i = 0; i < op->u.execute.buffer_count; ++i)
+                vkd3d_free(op->u.execute.buffers[i].attached_resources.resources);
             vkd3d_free(op->u.execute.buffers);
             break;
 
@@ -6325,6 +6361,8 @@ static ULONG STDMETHODCALLTYPE d3d12_command_queue_Release(ID3D12CommandQueue *i
         vkd3d_mutex_destroy(&command_queue->op_mutex);
         d3d12_command_queue_op_array_destroy(&command_queue->op_queue);
         d3d12_command_queue_op_array_destroy(&command_queue->aux_op_queue);
+
+        vkd3d_free(command_queue->submission_buffer);
 
         vkd3d_private_store_destroy(&command_queue->private_store);
 
@@ -6570,13 +6608,17 @@ unlock_mutex:
 }
 
 static void d3d12_command_queue_execute(struct d3d12_command_queue *command_queue,
-        VkCommandBuffer *buffers, unsigned int count)
+        struct vkd3d_cs_execute_buffer *buffers, unsigned int count)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &command_queue->device->vk_procs;
     struct vkd3d_queue *vkd3d_queue = command_queue->vkd3d_queue;
+    VkQueueFlags vk_queue_flags = vkd3d_queue->vk_queue_flags;
+    struct d3d12_device *device = command_queue->device;
+    unsigned int i, submission_count;
     VkSubmitInfo submit_desc;
     VkQueue vk_queue;
     VkResult vr;
+    size_t j;
 
     memset(&submit_desc, 0, sizeof(submit_desc));
 
@@ -6586,9 +6628,52 @@ static void d3d12_command_queue_execute(struct d3d12_command_queue *command_queu
         return;
     }
 
+    if (!vkd3d_array_reserve((void **)&command_queue->submission_buffer, &command_queue->submission_capacity,
+            count * 2u, sizeof(*command_queue->submission_buffer)))
+    {
+        ERR("Failed to allocate buffer array.\n");
+        return;
+    }
+
+    for (i = 0, submission_count = 0; i < count; ++i)
+    {
+        const struct command_list_attached_resources *attached_resources = &buffers[i].attached_resources;
+        VkCommandBuffer vk_transition_buffer = attached_resources->vk_command_buffer;
+        bool is_begun = false;
+
+        for (j = 0; j < attached_resources->count; ++j)
+        {
+            struct d3d12_resource *resource = attached_resources->resources[j];
+
+            if (!(resource->flags & VKD3D_RESOURCE_INITIAL_STATE_TRANSITION))
+                continue;
+
+            if (!is_begun)
+            {
+                if (FAILED(vk_command_buffer_begin(vk_transition_buffer, device)))
+                    break;
+                is_begun = true;
+            }
+
+            vk_command_buffer_transition_resource_to_initial_state(vk_transition_buffer,
+                    vk_queue_flags, resource, device);
+            resource->flags &= ~VKD3D_RESOURCE_INITIAL_STATE_TRANSITION;
+        }
+
+        if (is_begun)
+        {
+            if ((vr = VK_CALL(vkEndCommandBuffer(vk_transition_buffer))) < 0)
+                WARN("Failed to end command buffer, vr %d.\n", vr);
+            else
+                command_queue->submission_buffer[submission_count++] = vk_transition_buffer;
+        }
+
+        command_queue->submission_buffer[submission_count++] = buffers[i].vk_command_buffer;
+    }
+
     submit_desc.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submit_desc.commandBufferCount = count;
-    submit_desc.pCommandBuffers = buffers;
+    submit_desc.commandBufferCount = submission_count;
+    submit_desc.pCommandBuffers = command_queue->submission_buffer;
 
     if ((vr = VK_CALL(vkQueueSubmit(vk_queue, 1, &submit_desc, VK_NULL_HANDLE))) < 0)
         ERR("Failed to submit queue(s), vr %d.\n", vr);
@@ -6612,9 +6697,9 @@ static void STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(ID3D12Comm
         UINT command_list_count, ID3D12CommandList * const *command_lists)
 {
     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+    struct vkd3d_cs_execute_buffer *buffers;
     struct d3d12_command_list *cmd_list;
     struct vkd3d_cs_op_data *op;
-    VkCommandBuffer *buffers;
     unsigned int i;
 
     TRACE("iface %p, command_list_count %u, command_lists %p.\n",
@@ -6643,7 +6728,10 @@ static void STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(ID3D12Comm
 
         command_list_flush_vk_heap_updates(cmd_list);
 
-        buffers[i] = cmd_list->vk_command_buffer;
+        buffers[i].attached_resources = cmd_list->attached_resources;
+        memset(&cmd_list->attached_resources, 0, sizeof(cmd_list->attached_resources));
+
+        buffers[i].vk_command_buffer = cmd_list->vk_command_buffer;
     }
 
     vkd3d_mutex_lock(&command_queue->op_mutex);
@@ -7391,6 +7479,9 @@ static HRESULT d3d12_command_queue_init(struct d3d12_command_queue *queue,
         goto fail_destroy_op_mutex;
 
     queue->supports_sparse_binding = !!(queue->vkd3d_queue->vk_queue_flags & VK_QUEUE_SPARSE_BINDING_BIT);
+
+    queue->submission_buffer = NULL;
+    queue->submission_capacity = 0;
 
     d3d12_device_add_ref(queue->device = device);
 
