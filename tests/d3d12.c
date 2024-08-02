@@ -2776,9 +2776,9 @@ static void test_create_root_signature(void)
      * heap manager reuses the allocation. */
     hr = create_root_signature(device, &root_signature_desc, &root_signature2);
     ok(hr == S_OK, "Failed to create root signature, hr %#x.\n", hr);
-    todo ok(root_signature == root_signature2, "Got different root signature pointers.\n");
+    ok(root_signature == root_signature2, "Got different root signature pointers.\n");
     refcount = ID3D12RootSignature_Release(root_signature2);
-    todo ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
+    ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
 
     hr = 0xdeadbeef;
     hr = ID3D12RootSignature_SetPrivateData(root_signature, &test_guid, sizeof(hr), &hr);
@@ -2830,9 +2830,9 @@ static void test_create_root_signature(void)
 
     hr = create_root_signature(device, &root_signature_desc, &root_signature2);
     ok(hr == S_OK, "Failed to create root signature, hr %#x.\n", hr);
-    todo ok(root_signature == root_signature2, "Got different root signature pointers.\n");
+    ok(root_signature == root_signature2, "Got different root signature pointers.\n");
     refcount = ID3D12RootSignature_Release(root_signature2);
-    todo ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
+    ok(refcount == 1, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
 
     refcount = ID3D12RootSignature_Release(root_signature);
     ok(!refcount, "ID3D12RootSignature has %u references left.\n", (unsigned int)refcount);
@@ -38827,6 +38827,10 @@ static void test_shader_cache(void)
     ok(!session2, "Got unexpected pointer %p.\n", session2);
     hr = ID3D12Device9_CreateShaderCacheSession(device, &desc, &IID_IUnknown, NULL);
     ok(hr == S_FALSE, "NULL outptr: Got hr %#x.\n", hr);
+    desc.Mode = 9876;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
 
     ID3D12ShaderCacheSession_Release(session);
 
@@ -38834,6 +38838,7 @@ static void test_shader_cache(void)
     ok(refcount == base_refcount, "Got unexpected refcount %u.\n", refcount);
 
     /* Create two sessions with the same cache GUID. */
+    desc.Mode = D3D12_SHADER_CACHE_MODE_MEMORY;
     hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
             &IID_ID3D12ShaderCacheSession, (void **)&session);
     ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
@@ -38903,6 +38908,27 @@ static void test_shader_cache(void)
     hr = ID3D12ShaderCacheSession_FindValue(session, key2, sizeof(key2), NULL, NULL);
     ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
     hr = ID3D12ShaderCacheSession_FindValue(session, key2, sizeof(key2), blob3, NULL);
+    ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
+
+    /* Test what happens when the descriptor of a second session differs - the original
+     * session's mode applies. */
+    desc.Mode = D3D12_SHADER_CACHE_MODE_DISK;
+    desc.MaximumInMemoryCacheSizeBytes = 1;
+    desc.MaximumValueFileSizeBytes = 3;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    desc = ID3D12ShaderCacheSession_GetDesc(session);
+    ID3D12ShaderCacheSession_Release(session2);
+    ok(desc.MaximumInMemoryCacheSizeBytes == 1024 * 32, "Got MaximumInMemoryCacheSizeBytes %u\n",
+            desc.MaximumInMemoryCacheSizeBytes);
+    ok(desc.MaximumValueFileSizeBytes == 128 * 1024 * 1024, "Got MaximumValueFileSizeBytes %u\n",
+            desc.MaximumValueFileSizeBytes);
+
+    /* The description is validated before the existing cache is opened though. */
+    desc.Mode = 9876;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
     ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
 
     /* Test how the output size is handled. - A NULL data ptr returns S_OK and sets
@@ -38996,6 +39022,61 @@ static void test_shader_cache(void)
     hr = ID3D12ShaderCacheSession_StoreValue(session, NULL, sizeof(key2), &desc, sizeof(desc));
     ok(hr == E_INVALIDARG, "Got unexpected hr %#x.\n", hr);
 
+    ID3D12ShaderCacheSession_Release(session);
+
+    /* Test disk caches - first delete whatever may be left behind from previous runs. */
+    desc.MaximumInMemoryCacheSizeBytes = 32 * 1024;
+    desc.MaximumValueFileSizeBytes = 0;
+    desc.Mode = D3D12_SHADER_CACHE_MODE_DISK;
+    desc.Flags = D3D12_SHADER_CACHE_FLAG_USE_WORKING_DIR;
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session);
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_StoreValue(session, key1, sizeof(key1), blob1, sizeof(blob1));
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    value_size = sizeof(blob3);
+    memset(blob3, '3', sizeof(blob3));
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(value_size == sizeof(blob1), "Got unexpected size %x.\n", value_size);
+    ok(!memcmp(blob3, blob1, sizeof(blob1)), "Unexpected value retrieved.\n");
+    ok(blob3[sizeof(blob1)] == '3', "Output buffer was modified beyond the stored value.\n");
+
+    /* Create a second session, set it to delete on destroy. The cache will get deleted, though I am
+     * not yet sure if the disk cache gets deleted when session2 or session get destroyed. I can
+     * still retrieve the value, but this may be due to a leftover in memory.
+     *
+     * I could check for the existence of the .val / .idx files, but that would require us to use
+     * the exact same naming scheme. */
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session2);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session2);
+    ID3D12ShaderCacheSession_Release(session2);
+
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    ok(value_size == sizeof(blob2), "Got unexpected size %x.\n", value_size);
+
+    ID3D12ShaderCacheSession_Release(session);
+
+    hr = ID3D12Device9_CreateShaderCacheSession(device, &desc,
+            &IID_ID3D12ShaderCacheSession, (void **)&session);
+    ok(hr == S_OK, "Got unexpected hr %#x.\n", hr);
+    hr = ID3D12ShaderCacheSession_FindValue(session, key1, sizeof(key1), blob3, &value_size);
+    ok(hr == DXGI_ERROR_NOT_FOUND, "Got unexpected hr %#x.\n", hr);
+    ID3D12ShaderCacheSession_SetDeleteOnDestroy(session); /* Clean up after the last test. */
     ID3D12ShaderCacheSession_Release(session);
 
     ID3D12Device9_Release(device);

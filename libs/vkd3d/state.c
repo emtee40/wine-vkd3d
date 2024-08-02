@@ -55,6 +55,8 @@ static ULONG STDMETHODCALLTYPE d3d12_root_signature_AddRef(ID3D12RootSignature *
     unsigned int refcount = vkd3d_atomic_increment_u32(&root_signature->refcount);
 
     TRACE("%p increasing refcount to %u.\n", root_signature, refcount);
+    if (refcount == 1)
+        d3d12_device_add_ref(root_signature->device);
 
     return refcount;
 }
@@ -116,11 +118,8 @@ static ULONG STDMETHODCALLTYPE d3d12_root_signature_Release(ID3D12RootSignature 
 
     if (!refcount)
     {
-        struct d3d12_device *device = root_signature->device;
-        vkd3d_private_store_destroy(&root_signature->private_store);
-        d3d12_root_signature_cleanup(root_signature, device);
-        vkd3d_free(root_signature);
-        d3d12_device_release(device);
+        vkd3d_private_store_wipe(&root_signature->private_store);
+        d3d12_device_release(root_signature->device);
     }
 
     return refcount;
@@ -1423,7 +1422,7 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
     binding_desc = NULL;
 
     root_signature->ID3D12RootSignature_iface.lpVtbl = &d3d12_root_signature_vtbl;
-    root_signature->refcount = 1;
+    root_signature->refcount = 0;
 
     root_signature->vk_pipeline_layout = VK_NULL_HANDLE;
     root_signature->vk_set_count = 0;
@@ -1526,14 +1525,22 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
     if (FAILED(hr = vkd3d_private_store_init(&root_signature->private_store)))
         goto fail;
 
-    d3d12_device_add_ref(device);
-
     return S_OK;
 
 fail:
     vkd3d_free(binding_desc);
     d3d12_root_signature_cleanup(root_signature, device);
     return hr;
+}
+
+struct d3d12_root_signature *d3d12_root_signature_get(const struct vkd3d_root_signature_cache *c,
+        uint64_t hash)
+{
+    struct rb_entry *entry;
+    entry = rb_get(&c->tree, &hash);
+    if (!entry)
+        return NULL;
+    return RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
 }
 
 HRESULT d3d12_root_signature_create(struct d3d12_device *device,
@@ -1546,19 +1553,41 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
         struct vkd3d_shader_versioned_root_signature_desc vkd3d;
     } root_signature_desc;
     struct d3d12_root_signature *object;
+    uint64_t hash;
     HRESULT hr;
     int ret;
+
+    vkd3d_mutex_lock(&device->root_signature_cache.mutex);
+
+    hash = vkd3d_shader_cache_hash_key(bytecode, bytecode_length);
+    object = d3d12_root_signature_get(&device->root_signature_cache, hash);
+    if (object)
+    {
+        if (object->bytecode_length == bytecode_length
+                && !memcmp(object->bytecode, bytecode, bytecode_length))
+        {
+            /* This code gets out ASAP after finding an already created
+             * root signature. We may want to add some telemetry to the cache
+             * to keep track of when objects from the cache are actually used
+             * by the application. */
+            hr = S_OK;
+            goto unlock;
+        }
+        FIXME("Root signature hash collision.\n");
+    }
 
     if ((ret = vkd3d_parse_root_signature_v_1_0(&dxbc, &root_signature_desc.vkd3d)) < 0)
     {
         WARN("Failed to parse root signature, vkd3d result %d.\n", ret);
-        return hresult_from_vkd3d_result(ret);
+        hr = hresult_from_vkd3d_result(ret);
+        goto unlock;
     }
 
-    if (!(object = vkd3d_malloc(sizeof(*object))))
+    if (!(object = vkd3d_malloc(offsetof(struct d3d12_root_signature, bytecode[bytecode_length]))))
     {
         vkd3d_shader_free_root_signature(&root_signature_desc.vkd3d);
-        return E_OUTOFMEMORY;
+        hr = E_OUTOFMEMORY;
+        goto unlock;
     }
 
     hr = d3d12_root_signature_init(object, device, &root_signature_desc.d3d12.u.Desc_1_0);
@@ -1566,15 +1595,59 @@ HRESULT d3d12_root_signature_create(struct d3d12_device *device,
     if (FAILED(hr))
     {
         vkd3d_free(object);
-        return hr;
+        goto unlock;
     }
 
+    object->bytecode_length = bytecode_length;
+    memcpy(object->bytecode, bytecode, bytecode_length);
+    object->hash = hash;
+    rb_put(&device->root_signature_cache.tree, &hash, &object->cache_entry);
     TRACE("Created root signature %p.\n", object);
+    vkd3d_persistent_cache_add_root_signature(object);
 
-    *root_signature = object;
-
-    return S_OK;
+unlock:
+    if (SUCCEEDED(hr) && root_signature)
+    {
+        *root_signature = object;
+        d3d12_root_signature_AddRef(&object->ID3D12RootSignature_iface);
+    }
+    vkd3d_mutex_unlock(&device->root_signature_cache.mutex);
+    return hr;
 }
+
+static int vkd3d_root_signature_compare_key(const void *key, const struct rb_entry *entry)
+{
+    const struct d3d12_root_signature *e;
+    const uint64_t *hash = key;
+
+    e = RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+    return vkd3d_u64_compare(*hash, e->hash);
+}
+
+void vkd3d_root_signature_cache_init(struct vkd3d_root_signature_cache *cache)
+{
+    vkd3d_mutex_init(&cache->mutex);
+    rb_init(&cache->tree, vkd3d_root_signature_compare_key);
+}
+
+static void vkd3d_root_signature_destroy_cb(struct rb_entry *entry, void *context)
+{
+    struct d3d12_root_signature *root_signature =
+            RB_ENTRY_VALUE(entry, struct d3d12_root_signature, cache_entry);
+    struct d3d12_device *device = context;
+
+    d3d12_root_signature_cleanup(root_signature, device);
+    vkd3d_private_store_destroy(&root_signature->private_store);
+    vkd3d_free(root_signature);
+}
+
+void vkd3d_root_signature_cache_cleanup(struct vkd3d_root_signature_cache *cache,
+        struct d3d12_device *device)
+{
+    rb_destroy(&cache->tree, vkd3d_root_signature_destroy_cb, device);
+    vkd3d_mutex_destroy(&cache->mutex);
+}
+
 
 /* vkd3d_render_pass_cache */
 struct vkd3d_render_pass_entry
@@ -2000,6 +2073,9 @@ static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_AddRef(ID3D12PipelineState *
 
     TRACE("%p increasing refcount to %u.\n", state, refcount);
 
+    if (refcount == 1)
+        d3d12_device_add_ref(state->device);
+
     return refcount;
 }
 
@@ -2036,15 +2112,8 @@ static void d3d12_pipeline_uav_counter_state_cleanup(struct d3d12_pipeline_uav_c
     vkd3d_free(uav_counters->bindings);
 }
 
-static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState *iface)
+void d3d12_pipeline_state_cleanup(struct d3d12_pipeline_state *state)
 {
-    struct d3d12_pipeline_state *state = impl_from_ID3D12PipelineState(iface);
-    unsigned int refcount = vkd3d_atomic_decrement_u32(&state->refcount);
-
-    TRACE("%p decreasing refcount to %u.\n", state, refcount);
-
-    if (!refcount)
-    {
         struct d3d12_device *device = state->device;
         const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
 
@@ -2062,6 +2131,20 @@ static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState 
 
         vkd3d_free(state);
 
+}
+
+static ULONG STDMETHODCALLTYPE d3d12_pipeline_state_Release(ID3D12PipelineState *iface)
+{
+    struct d3d12_pipeline_state *state = impl_from_ID3D12PipelineState(iface);
+    unsigned int refcount = vkd3d_atomic_decrement_u32(&state->refcount);
+
+    TRACE("%p decreasing refcount to %u.\n", state, refcount);
+
+    if (!refcount)
+    {
+        struct d3d12_device *device = state->device;
+
+        d3d12_pipeline_state_cleanup(state);
         d3d12_device_release(device);
     }
 
@@ -2424,19 +2507,150 @@ static HRESULT d3d12_pipeline_state_find_and_init_uav_counters(struct d3d12_pipe
     return hr;
 }
 
-static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
+static struct vkd3d_shader_cache_pipeline_state *vkd3d_cache_pipeline_from_d3d(
+         const struct d3d12_pipeline_state_desc *desc,
+         const struct d3d12_root_signature *root_signature, size_t *entry_size)
+{
+    struct vkd3d_shader_cache_pipeline_state *entry;
+    uint32_t size, pos = 0, i;
+
+    size = desc->cs.BytecodeLength;
+    size += desc->vs.BytecodeLength;
+    size += desc->ps.BytecodeLength;
+    size += desc->ds.BytecodeLength;
+    size += desc->hs.BytecodeLength;
+    size += desc->gs.BytecodeLength;
+    size += desc->stream_output.NumEntries * sizeof(struct vkd3d_so_declaration_cache_entry);
+    size += desc->stream_output.NumStrides * sizeof(*desc->stream_output.pBufferStrides);
+    /* FIXME: Dynamically handle semantic strings */
+    size += desc->input_layout.NumElements * sizeof(struct vkd3d_input_layout_element_cache);
+
+    for (i = 0; i < desc->stream_output.NumEntries; ++i)
+        size += strlen(desc->stream_output.pSODeclaration[i].SemanticName) + 1;
+    for (i = 0; i < desc->input_layout.NumElements; ++i)
+        size += strlen(desc->input_layout.pInputElementDescs[i].SemanticName) + 1;
+
+    *entry_size = offsetof(struct vkd3d_shader_cache_pipeline_state, data[size]);
+    entry = vkd3d_calloc(1, *entry_size);
+
+    entry->root_signature = root_signature->hash;
+
+    entry->cs_size = desc->cs.BytecodeLength;
+    if (entry->cs_size)
+    {
+        memcpy(entry->data + pos, desc->cs.pShaderBytecode, entry->cs_size);
+        pos += entry->cs_size;
+    }
+
+    entry->vs_size = desc->vs.BytecodeLength;
+    if (entry->vs_size)
+    {
+        memcpy(entry->data + pos, desc->vs.pShaderBytecode, entry->vs_size);
+        pos += entry->vs_size;
+    }
+
+    entry->ps_size = desc->ps.BytecodeLength;
+    if (entry->ps_size)
+    {
+        memcpy(entry->data + pos, desc->ps.pShaderBytecode, entry->ps_size);
+        pos += entry->ps_size;
+    }
+
+    entry->ds_size = desc->ds.BytecodeLength;
+    if (entry->ds_size)
+    {
+        memcpy(entry->data + pos, desc->ds.pShaderBytecode, entry->ds_size);
+        pos += entry->ds_size;
+    }
+
+    entry->hs_size = desc->hs.BytecodeLength;
+    if (entry->hs_size)
+    {
+        memcpy(entry->data + pos, desc->hs.pShaderBytecode, entry->hs_size);
+        pos += entry->hs_size;
+    }
+
+    entry->gs_size = desc->gs.BytecodeLength;
+    if (entry->gs_size)
+    {
+        memcpy(entry->data + pos, desc->gs.pShaderBytecode, entry->gs_size);
+        pos += entry->gs_size;
+    }
+
+    entry->so_entries = desc->stream_output.NumEntries;
+    for (i = 0; i < entry->so_entries; ++i)
+    {
+        struct vkd3d_so_declaration_cache_entry *e = (void *)(entry->data + pos);
+        pos += sizeof(*e);
+        e->stream = desc->stream_output.pSODeclaration[i].Stream;
+        e->semantic_name_size = strlen(desc->stream_output.pSODeclaration[i].SemanticName) + 1;
+        memcpy(entry->data + pos, desc->stream_output.pSODeclaration[i].SemanticName,
+                e->semantic_name_size);
+        pos += e->semantic_name_size;
+        e->semantic_index = desc->stream_output.pSODeclaration[i].SemanticIndex;
+        e->start_component = desc->stream_output.pSODeclaration[i].StartComponent;
+        e->component_count = desc->stream_output.pSODeclaration[i].ComponentCount;
+        e->output_slot = desc->stream_output.pSODeclaration[i].OutputSlot;
+    }
+    entry->so_strides = desc->stream_output.NumStrides;
+    if (entry->so_strides)
+    {
+        memcpy(entry->data + pos, desc->stream_output.pBufferStrides,
+                sizeof(*desc->stream_output.pBufferStrides) * entry->so_strides);
+        pos += sizeof(*desc->stream_output.pBufferStrides) * entry->so_strides;
+    }
+
+    entry->input_layout_elements = desc->input_layout.NumElements;
+    for (i = 0; i < entry->input_layout_elements; ++i)
+    {
+        struct vkd3d_input_layout_element_cache *e = (void *)(entry->data + pos);
+        pos += sizeof(*e);
+        e->semantic_name_size = strlen(desc->input_layout.pInputElementDescs[i].SemanticName) + 1;
+        memcpy(entry->data + pos, desc->input_layout.pInputElementDescs[i].SemanticName,
+                e->semantic_name_size);
+        pos += e->semantic_name_size;
+        e->semantic_index = desc->input_layout.pInputElementDescs[i].SemanticIndex;
+        e->format = desc->input_layout.pInputElementDescs[i].Format;
+        e->input_slot = desc->input_layout.pInputElementDescs[i].InputSlot;
+        e->aligned_byte_offset = desc->input_layout.pInputElementDescs[i].AlignedByteOffset;
+        e->input_slot_class = desc->input_layout.pInputElementDescs[i].InputSlotClass;
+        e->instance_data_step_rate = desc->input_layout.pInputElementDescs[i].InstanceDataStepRate;
+
+        if (strlen(desc->input_layout.pInputElementDescs[i].SemanticName) > 31)
+            FIXME("Input semantic name too long\n");
+
+    }
+
+    entry->blend_state = desc->blend_state;
+    entry->sample_mask = desc->sample_mask;
+    entry->rasterizer_state = desc->rasterizer_state;
+    entry->depth_stencil_state = desc->depth_stencil_state;
+    entry->strip_cut_value = desc->strip_cut_value;
+    entry->primitive_topology_type = desc->primitive_topology_type;
+    entry->rtv_formats = desc->rtv_formats;
+    entry->dsv_format = desc->dsv_format;
+    entry->sample_desc = desc->sample_desc;
+    entry->node_mask = desc->node_mask;
+    entry->flags = desc->flags;
+
+    return entry;
+}
+
+HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
 {
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
     struct vkd3d_shader_interface_info shader_interface;
     struct vkd3d_shader_descriptor_offset_info offset_info;
+    struct vkd3d_shader_cache_pipeline_state *cache_entry;
     struct vkd3d_shader_spirv_target_info target_info;
     struct d3d12_root_signature *root_signature;
     VkPipelineLayout vk_pipeline_layout;
+    size_t cache_entry_size;
     HRESULT hr;
 
     state->ID3D12PipelineState_iface.lpVtbl = &d3d12_pipeline_state_vtbl;
-    state->refcount = 1;
+    state->refcount = 0;
 
     memset(&state->uav_counters, 0, sizeof(state->uav_counters));
 
@@ -2521,8 +2735,18 @@ static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *st
         return hr;
     }
 
+    cache_entry = vkd3d_cache_pipeline_from_d3d(desc, root_signature, &cache_entry_size);
+    if (cache_entry)
+    {
+        vkd3d_persistent_cache_add_compute_state(cache_entry, cache_entry_size);
+        vkd3d_free(cache_entry);
+        /* FIXME, this looks ugly. We don't need the hash because we don't reference it
+         * from another cache object like we do for graphics states. */
+        state->state_hash = 0;
+    }
+
     state->vk_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
-    d3d12_device_add_ref(state->device = device);
+    state->device = device;
 
     return S_OK;
 }
@@ -2545,6 +2769,7 @@ HRESULT d3d12_pipeline_state_create_compute(struct d3d12_device *device,
         return hr;
     }
 
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
     TRACE("Created compute pipeline state %p.\n", object);
 
     *state = object;
@@ -2990,7 +3215,7 @@ static VkLogicOp vk_logic_op_from_d3d12(D3D12_LOGIC_OP op)
     }
 }
 
-static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
+HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
 {
     unsigned int ps_output_swizzle[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
@@ -3004,6 +3229,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     uint32_t aligned_offsets[D3D12_VS_INPUT_REGISTER_COUNT];
     struct vkd3d_shader_descriptor_offset_info offset_info;
     struct vkd3d_shader_parameter ps_shader_parameters[1];
+    struct vkd3d_shader_cache_pipeline_state *cache_entry;
     struct vkd3d_shader_transform_feedback_info xfb_info;
     struct vkd3d_shader_spirv_target_info ps_target_info;
     struct vkd3d_shader_interface_info shader_interface;
@@ -3016,6 +3242,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     const struct vkd3d_format *format;
     unsigned int instance_divisor;
     VkVertexInputRate input_rate;
+    size_t cache_entry_size;
     unsigned int i, j;
     size_t rt_count;
     uint32_t mask;
@@ -3048,7 +3275,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
     };
 
     state->ID3D12PipelineState_iface.lpVtbl = &d3d12_pipeline_state_vtbl;
-    state->refcount = 1;
+    state->refcount = 0;
 
     memset(&state->uav_counters, 0, sizeof(state->uav_counters));
     graphics->stage_count = 0;
@@ -3520,7 +3747,18 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
 
     state->vk_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
     state->implicit_root_signature = NULL;
-    d3d12_device_add_ref(state->device = device);
+    state->device = device;
+
+    cache_entry = vkd3d_cache_pipeline_from_d3d(desc, root_signature, &cache_entry_size);
+    if (cache_entry)
+    {
+        uint64_t hash;
+        hash = vkd3d_shader_cache_hash_key(cache_entry, cache_entry_size);
+        vkd3d_shader_cache_put(persistent_cache.cache, &hash, sizeof(hash),
+                cache_entry, cache_entry_size, 0);
+        vkd3d_free(cache_entry);
+        state->state_hash = hash;
+    }
 
     return S_OK;
 
@@ -3554,6 +3792,7 @@ HRESULT d3d12_pipeline_state_create_graphics(struct d3d12_device *device,
         return hr;
     }
 
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
     TRACE("Created graphics pipeline state %p.\n", object);
 
     *state = object;
@@ -3594,6 +3833,8 @@ HRESULT d3d12_pipeline_state_create(struct d3d12_device *device,
         vkd3d_free(object);
         return hr;
     }
+
+    d3d12_pipeline_state_AddRef(&object->ID3D12PipelineState_iface);
 
     TRACE("Created pipeline state %p.\n", object);
 
@@ -3738,10 +3979,13 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
         VkRenderPass *vk_render_pass)
 {
     VkVertexInputBindingDescription bindings[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+    VkPipelineCreationFeedback feedback = {0}, stage_feedback[VKD3D_MAX_SHADER_STAGES];
     const struct vkd3d_vk_device_procs *vk_procs = &state->device->vk_procs;
     struct d3d12_graphics_pipeline_state *graphics = &state->u.graphics;
     VkPipelineVertexInputDivisorStateCreateInfoEXT input_divisor_info;
     VkPipelineTessellationStateCreateInfo tessellation_info;
+    struct vkd3d_graphics_pipeline_entry cache_entry = {0};
+    VkPipelineCreationFeedbackCreateInfo feedback_info;
     VkPipelineVertexInputStateCreateInfo input_desc;
     VkPipelineInputAssemblyStateCreateInfo ia_desc;
     VkPipelineColorBlendStateCreateInfo blend_desc;
@@ -3808,11 +4052,16 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
         b->inputRate = graphics->input_rates[binding];
 
         pipeline_key.strides[binding_count] = strides[binding];
+        cache_entry.strides[binding] = strides[binding];
 
         ++binding_count;
     }
 
     pipeline_key.dsv_format = dsv_format;
+
+    cache_entry.state = state->state_hash;
+    cache_entry.topology = topology;
+    cache_entry.dsv_format = dsv_format;
 
     if ((vk_pipeline = d3d12_pipeline_state_find_compiled_pipeline(state, &pipeline_key, vk_render_pass)))
         return vk_pipeline;
@@ -3896,6 +4145,15 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
             return VK_NULL_HANDLE;
     }
 
+    if (device->vk_info.EXT_pipeline_creation_feedback)
+    {
+        pipeline_desc.pNext = &feedback_info;
+        feedback_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO;
+        feedback_info.pNext = NULL;
+        feedback_info.pPipelineCreationFeedback = &feedback;
+        feedback_info.pipelineStageCreationFeedbackCount = ARRAY_SIZE(stage_feedback);
+        feedback_info.pPipelineStageCreationFeedbacks = stage_feedback;
+    }
     *vk_render_pass = pipeline_desc.renderPass;
 
     if ((vr = VK_CALL(vkCreateGraphicsPipelines(device->vk_device, device->vk_pipeline_cache,
@@ -3903,6 +4161,28 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
     {
         WARN("Failed to create Vulkan graphics pipeline, vr %d.\n", vr);
         return VK_NULL_HANDLE;
+    }
+
+    vkd3d_persistent_cache_add_graphics_pipeline(&cache_entry);
+
+    if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT)
+    {
+        if (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)
+        {
+            TRACE("Pipeline was found in the Vulkan pipeline cache.\n");
+            device->cache_hit++;
+        }
+            else
+        {
+            TRACE("Pipeline was not found in the Vulkan pipeline cache.\n");
+            device->cache_miss++;
+        }
+
+        if (device->cache_ready)
+        {
+            ERR("runtime: %u cache hits, %u miss, %02f%% ratio\n", device->cache_hit, device->cache_miss,
+                    ((float)device->cache_hit) / (device->cache_hit + device->cache_miss) * 100);
+        }
     }
 
     if (d3d12_pipeline_state_put_pipeline_to_cache(state, &pipeline_key, vk_pipeline, pipeline_desc.renderPass))

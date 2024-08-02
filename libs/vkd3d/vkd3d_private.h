@@ -42,6 +42,70 @@
 #include <limits.h>
 #include <stdbool.h>
 
+/* The following structures define data structures that are stored in vkd3d's
+ * cache. It doesn't define the cache format itself, those details are found
+ * in cache.c.
+ *
+ * Changing the structures will break compatibility with existing cache files.
+ * In this case bump VKD3D_SHADER_CACHE_OBJ_VERSION.
+ *
+ * The structs aren't meant to be read by external code, consider them a vkd3d
+ * implementation detail. */
+#define VKD3D_SHADER_CACHE_OBJ_VERSION 1ull
+
+struct vkd3d_input_layout_element_cache
+{
+    UINT semantic_name_size;
+    UINT semantic_index;
+    DXGI_FORMAT format;
+    UINT input_slot;
+    UINT aligned_byte_offset;
+    D3D12_INPUT_CLASSIFICATION input_slot_class;
+    UINT instance_data_step_rate;
+};
+
+struct vkd3d_so_declaration_cache_entry
+{
+    UINT stream;
+    UINT semantic_name_size;
+    UINT semantic_index;
+    BYTE start_component;
+    BYTE component_count;
+    BYTE output_slot;
+};
+
+struct vkd3d_shader_cache_pipeline_state
+{
+    uint64_t root_signature;
+    uint32_t cs_size, vs_size, ps_size, ds_size, hs_size, gs_size;
+    uint32_t so_entries, so_strides;
+    uint32_t so_RasterizedStream;
+    uint32_t input_layout_elements;
+    D3D12_BLEND_DESC blend_state;
+    UINT sample_mask;
+    D3D12_RASTERIZER_DESC rasterizer_state;
+    D3D12_DEPTH_STENCIL_DESC1 depth_stencil_state;
+    /* Input layout is appended */
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE strip_cut_value;
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_topology_type;
+    struct D3D12_RT_FORMAT_ARRAY rtv_formats;
+    DXGI_FORMAT dsv_format;
+    DXGI_SAMPLE_DESC sample_desc;
+    UINT node_mask;
+    D3D12_PIPELINE_STATE_FLAGS flags;
+    uint8_t data[1];
+};
+
+struct vkd3d_graphics_pipeline_entry
+{
+    uint64_t state;
+    D3D12_PRIMITIVE_TOPOLOGY topology;
+    VkFormat dsv_format;
+    uint32_t strides[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+};
+
+/* End shader data structures */
+
 #define VK_CALL(f) (vk_procs->f)
 
 #define VKD3D_DESCRIPTOR_MAGIC_FREE    0x00000000u
@@ -136,6 +200,7 @@ struct vkd3d_vulkan_info
     bool EXT_descriptor_indexing;
     bool EXT_fragment_shader_interlock;
     bool EXT_mutable_descriptor_type;
+    bool EXT_pipeline_creation_feedback;
     bool EXT_robustness2;
     bool EXT_shader_demote_to_helper_invocation;
     bool EXT_shader_stencil_export;
@@ -198,6 +263,7 @@ struct vkd3d_instance
     uint64_t host_ticks_per_second;
 
     unsigned int refcount;
+    char application_name[PATH_MAX];
 };
 
 union vkd3d_thread_handle
@@ -335,7 +401,7 @@ static inline HRESULT vkd3d_private_store_init(struct vkd3d_private_store *store
     return S_OK;
 }
 
-static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store)
+static inline void vkd3d_private_store_wipe(struct vkd3d_private_store *store)
 {
     struct vkd3d_private_data *data, *cursor;
 
@@ -343,7 +409,11 @@ static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store
     {
         vkd3d_private_data_destroy(data);
     }
+}
 
+static inline void vkd3d_private_store_destroy(struct vkd3d_private_store *store)
+{
+    vkd3d_private_store_wipe(store);
     vkd3d_mutex_destroy(&store->mutex);
 }
 
@@ -978,11 +1048,27 @@ struct d3d12_root_signature
     struct d3d12_device *device;
 
     struct vkd3d_private_store private_store;
+
+    struct rb_entry cache_entry;
+    uint64_t hash;
+    size_t bytecode_length;
+    uint8_t bytecode[];
+};
+
+struct vkd3d_root_signature_cache
+{
+    struct vkd3d_mutex mutex;
+    struct rb_tree tree;
 };
 
 HRESULT d3d12_root_signature_create(struct d3d12_device *device, const void *bytecode,
         size_t bytecode_length, struct d3d12_root_signature **root_signature);
 struct d3d12_root_signature *unsafe_impl_from_ID3D12RootSignature(ID3D12RootSignature *iface);
+void vkd3d_root_signature_cache_init(struct vkd3d_root_signature_cache *cache);
+void vkd3d_root_signature_cache_cleanup(struct vkd3d_root_signature_cache *cache,
+        struct d3d12_device *device);
+struct d3d12_root_signature *d3d12_root_signature_get(const struct vkd3d_root_signature_cache *c,
+        uint64_t hash);
 
 int vkd3d_parse_root_signature_v_1_0(const struct vkd3d_shader_code *dxbc,
         struct vkd3d_shader_versioned_root_signature_desc *desc);
@@ -1055,6 +1141,7 @@ struct d3d12_pipeline_state
         struct d3d12_compute_pipeline_state compute;
     } u;
     VkPipelineBindPoint vk_bind_point;
+    uint64_t state_hash;
 
     struct d3d12_pipeline_uav_counter_state uav_counters;
 
@@ -1112,10 +1199,15 @@ struct d3d12_pipeline_state_desc
     D3D12_PIPELINE_STATE_FLAGS flags;
 };
 
+void d3d12_pipeline_state_cleanup(struct d3d12_pipeline_state *state);
 HRESULT d3d12_pipeline_state_create_compute(struct d3d12_device *device,
         const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, struct d3d12_pipeline_state **state);
+HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
+        struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc);
 HRESULT d3d12_pipeline_state_create_graphics(struct d3d12_device *device,
         const D3D12_GRAPHICS_PIPELINE_STATE_DESC *desc, struct d3d12_pipeline_state **state);
+HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *state,
+        struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc);
 HRESULT d3d12_pipeline_state_create(struct d3d12_device *device,
         const D3D12_PIPELINE_STATE_STREAM_DESC *desc, struct d3d12_pipeline_state **state);
 VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_state *state,
@@ -1545,7 +1637,12 @@ struct d3d12_device
 
     struct vkd3d_mutex pipeline_cache_mutex;
     struct vkd3d_render_pass_cache render_pass_cache;
+    struct vkd3d_root_signature_cache root_signature_cache;
     VkPipelineCache vk_pipeline_cache;
+    uint32_t cache_hit, cache_miss;
+    bool cache_ready;
+    bool cache_thread_stop;
+    union vkd3d_thread_handle cache_thread;
 
     VkPhysicalDeviceMemoryProperties memory_properties;
 
@@ -1775,12 +1872,99 @@ static inline void vkd3d_prepend_struct(void *header, void *structure)
 
 struct vkd3d_shader_cache;
 
-int vkd3d_shader_open_cache(struct vkd3d_shader_cache **cache);
+enum vkd3d_shader_cache_flags
+{
+    VKD3D_SHADER_CACHE_FLAGS_NONE =             0x00000000,
+    VKD3D_SHADER_CACHE_FLAGS_NO_SERIALIZE =     0x00000001,
+    VKD3D_SHADER_CACHE_FLAGS_READ_ONLY =        0x00000002,
+
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_CACHE_FLAGS),
+};
+
+struct vkd3d_shader_cache_info
+{
+    const char *filename;
+    enum vkd3d_shader_cache_flags flags;
+    uint64_t version;
+};
+
+enum vkd3d_shader_cache_put_flags
+{
+    VKD3D_PUT_REPLACE =                         0x00000001,
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_PUT_REPLACE),
+};
+
+int vkd3d_shader_open_cache(const struct vkd3d_shader_cache_info *info,
+        struct vkd3d_shader_cache **cache);
+uint64_t vkd3d_shader_cache_hash_key(const void *key, size_t size);
 unsigned int vkd3d_shader_cache_incref(struct vkd3d_shader_cache *cache);
 unsigned int vkd3d_shader_cache_decref(struct vkd3d_shader_cache *cache);
-int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache,
-        const void *key, size_t key_size, const void *value, size_t value_size);
+int vkd3d_shader_cache_put(struct vkd3d_shader_cache *cache, const void *key, size_t key_size,
+        const void *value, size_t value_size, enum vkd3d_shader_cache_put_flags flags);
 int vkd3d_shader_cache_get(struct vkd3d_shader_cache *cache,
         const void *key, size_t key_size, void *value, size_t *value_size);
+void vkd3d_shader_cache_delete_on_destroy(struct vkd3d_shader_cache *cache);
+
+/* Which data structure should we use to maintain a collection of known hashes:
+ *
+ * A hash is an uint64_t. A struct list means two pointers for an uint64_t and a ton
+ * of malloc calls. We do want to be able to delete entries though, see the comment in
+ * vkd3d_persistent_cache_open().
+ *
+ * The dynamic array avoids pointer overhead and is easy to put in/out of the cache.
+ *
+ * Considerations might change in the future. We may want to store some priority data
+ * and sort by it, which might make a tree a better choice. */
+struct vkd3d_dynamic_array
+{
+    size_t count, alloc_size;
+    uint64_t *a;
+};
+
+static inline void vkd3d_dynamic_array_put(struct vkd3d_dynamic_array *array, uint64_t value)
+{
+    if (array->count == array->alloc_size)
+    {
+        size_t new_size = max(1, array->alloc_size * 2);
+        uint64_t *n;
+
+        if (array->a)
+            n = vkd3d_realloc(array->a, sizeof(*n) * new_size);
+        else
+            n = vkd3d_malloc(sizeof(*n) * new_size);
+
+        if (!n)
+            return;
+        array->a = n;
+        array->alloc_size = new_size;
+    }
+
+    array->a[array->count++] = value;
+}
+
+struct vkd3d_cache_struct
+{
+    struct vkd3d_mutex mutex;
+    struct vkd3d_shader_cache *cache;
+    struct vkd3d_dynamic_array root_signatures;
+    struct vkd3d_dynamic_array graphics_pipelines;
+    struct vkd3d_dynamic_array compute_states;
+};
+
+/* FIXME: Write accessory functions
+ *
+ * TODO2: struct vkd3d_instance might be a better place than global. */
+extern struct vkd3d_cache_struct persistent_cache;
+
+HRESULT vkd3d_persistent_cache_open(const struct vkd3d_instance *instance);
+void vkd3d_persistent_cache_close(void);
+void vkd3d_persistent_cache_add_root_signature(const struct d3d12_root_signature *root_signature);
+void vkd3d_persistent_cache_add_graphics_pipeline(const struct vkd3d_graphics_pipeline_entry *e);
+void vkd3d_persistent_cache_add_compute_state(const struct vkd3d_shader_cache_pipeline_state *state,
+        size_t size);
+
+static const char vkd3d_root_signature_index[] = "root_signature.idx";
+static const char vkd3d_graphics_index[] = "graphics.idx";
+static const char vkd3d_compute_index[] = "compute.idx";
 
 #endif  /* __VKD3D_PRIVATE_H */
