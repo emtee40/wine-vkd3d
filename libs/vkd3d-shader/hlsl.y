@@ -3936,6 +3936,49 @@ static bool intrinsic_firstbithigh(struct hlsl_ctx *ctx,
     return add_user_call(ctx, func, params, loc);
 }
 
+/* TODO: SM5 has a firstbit_lo opcode, which may be worth implementing for more efficiency. */
+static bool intrinsic_firstbitlow(struct hlsl_ctx *ctx,
+        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_function_decl *func;
+    struct hlsl_type *type;
+    char *body;
+
+    /* Based on graphics.stanford.edu/~seander/bithacks.html
+     * "Count the consecutive zero bits (trailing) on the right
+     *  in parallel".
+     * Due to counting from 0, this is the same as the index of
+     * the first bit set. */
+    static const char template[] =
+            "%s firstbitlow(%s v)\n"
+            "{\n"
+            "    %s c = 32;\n"
+            "    v &= -v;\n"
+            "    c -= v                ? 1  : 0;\n"
+            "    c -= (v & 0x0000FFFF) ? 16 : 0;\n"
+            "    c -= (v & 0x00FF00FF) ? 8  : 0;\n"
+            "    c -= (v & 0x0F0F0F0F) ? 4  : 0;\n"
+            "    c -= (v & 0x33333333) ? 2  : 0;\n"
+            "    c -= (v & 0x55555555) ? 1  : 0;\n"
+            /* Native behavior is firstbitlow(0) == -1 */
+            "    return v == 0 ? -1 : c;\n"
+            "}\n";
+
+    if (!(type = elementwise_intrinsic_get_common_type(ctx, params, loc)))
+        return false;
+    type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_UINT, type->dimx, type->dimy);
+
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name,
+        type->name)))
+        return false;
+    func = hlsl_compile_internal_function(ctx, "firstbitlow", body);
+    vkd3d_free(body);
+    if (!func)
+        return false;
+
+    return add_user_call(ctx, func, params, loc);
+}
+
 static bool intrinsic_floor(struct hlsl_ctx *ctx,
         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
@@ -5040,6 +5083,7 @@ intrinsic_functions[] =
     {"f16tof32",                            1, true,  intrinsic_f16tof32},
     {"faceforward",                         3, true,  intrinsic_faceforward},
     {"firstbithigh",                        1, true,  intrinsic_firstbithigh},
+    {"firstbitlow",                         1, true,  intrinsic_firstbitlow},
     {"floor",                               1, true,  intrinsic_floor},
     {"fmod",                                2, true,  intrinsic_fmod},
     {"frac",                                1, true,  intrinsic_frac},

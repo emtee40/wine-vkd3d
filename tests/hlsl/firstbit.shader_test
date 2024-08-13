@@ -1,7 +1,7 @@
 [require]
 shader model >= 4.0
 
-[pixel shader todo]
+[pixel shader]
 uint4 u;
 
 uint4 main() : sv_target
@@ -11,10 +11,10 @@ uint4 main() : sv_target
 
 [test]
 uniform 0 uint4 0xffffffff 0 0x00001000 0x00760400
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe (0, 0) rgbaui (0, 0xffffffff, 12, 10)
 
-[pixel shader todo]
+[pixel shader]
 uint4 main(float4 pos : sv_position) : sv_target
 {
     uint4x4 umat = {
@@ -27,7 +27,7 @@ uint4 main(float4 pos : sv_position) : sv_target
 }
 
 [test]
-todo(sm<6 | glsl) draw quad
+todo(glsl) draw quad
 probe(0, 0) rgbaui (0, 1, 0, 2)
 probe(1, 0) rgbaui (0, 1, 0, 3)
 probe(2, 0) rgbaui (0, 1, 0, 2)
