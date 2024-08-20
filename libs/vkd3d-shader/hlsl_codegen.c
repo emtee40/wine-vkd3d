@@ -1359,8 +1359,8 @@ struct copy_propagation_var_def
 
 struct copy_propagation_state
 {
-    struct rb_tree var_defs;
-    struct copy_propagation_state *parent;
+    struct rb_tree *scope_var_defs;
+    size_t scopes_len, scopes_capacity;
 };
 
 static int copy_propagation_var_def_compare(const void *key, const struct rb_entry *entry)
@@ -1382,6 +1382,40 @@ static void copy_propagation_var_def_destroy(struct rb_entry *entry, void *conte
     vkd3d_free(var_def);
 }
 
+static size_t copy_propagation_push_scope(struct hlsl_ctx *ctx, struct copy_propagation_state *state)
+{
+    state->scopes_len++;
+
+    if (!(hlsl_array_reserve(ctx, (void **) &state->scope_var_defs, &state->scopes_capacity, state->scopes_len, sizeof(struct rb_tree))))
+        return false;
+
+    rb_init(&state->scope_var_defs[state->scopes_len - 1], copy_propagation_var_def_compare);
+
+    return state->scopes_len;
+}
+
+static size_t copy_propagation_pop_scope(struct copy_propagation_state *state)
+{
+    state->scopes_len--;
+    rb_destroy(&state->scope_var_defs[state->scopes_len], copy_propagation_var_def_destroy, NULL);
+
+    return state->scopes_len;
+}
+
+static bool copy_propagation_state_init(struct hlsl_ctx *ctx, struct copy_propagation_state *state)
+{
+    memset(state, 0, sizeof(*state));
+
+    return copy_propagation_push_scope(ctx, state);
+}
+
+static void copy_propagation_state_destroy(struct copy_propagation_state *state)
+{
+    while (copy_propagation_pop_scope(state));
+
+    vkd3d_free(state->scope_var_defs);
+}
+
 static struct copy_propagation_value *copy_propagation_get_value_at_time(
         struct copy_propagation_component_trace *trace, unsigned int time)
 {
@@ -1399,9 +1433,10 @@ static struct copy_propagation_value *copy_propagation_get_value_at_time(
 static struct copy_propagation_value *copy_propagation_get_value(const struct copy_propagation_state *state,
         const struct hlsl_ir_var *var, unsigned int component, unsigned int time)
 {
-    for (; state; state = state->parent)
+    for (size_t i = state->scopes_len - 1; i < state->scopes_len; i--)
     {
-        struct rb_entry *entry = rb_get(&state->var_defs, var);
+        struct rb_tree *tree = &state->scope_var_defs[i];
+        struct rb_entry *entry = rb_get(tree, var);
         if (entry)
         {
             struct copy_propagation_var_def *var_def = RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
@@ -1427,7 +1462,8 @@ static struct copy_propagation_value *copy_propagation_get_value(const struct co
 static struct copy_propagation_var_def *copy_propagation_create_var_def(struct hlsl_ctx *ctx,
         struct copy_propagation_state *state, struct hlsl_ir_var *var)
 {
-    struct rb_entry *entry = rb_get(&state->var_defs, var);
+    struct rb_tree *tree = &state->scope_var_defs[state->scopes_len - 1];
+    struct rb_entry *entry = rb_get(tree, var);
     struct copy_propagation_var_def *var_def;
     unsigned int component_count = hlsl_type_component_count(var->data_type);
     int res;
@@ -1440,7 +1476,7 @@ static struct copy_propagation_var_def *copy_propagation_create_var_def(struct h
 
     var_def->var = var;
 
-    res = rb_put(&state->var_defs, var, &var_def->entry);
+    res = rb_put(tree, var, &var_def->entry);
     VKD3D_ASSERT(!res);
 
     return var_def;
@@ -1820,18 +1856,6 @@ static void copy_propagation_record_store(struct hlsl_ctx *ctx, struct hlsl_ir_s
     }
 }
 
-static void copy_propagation_state_init(struct hlsl_ctx *ctx, struct copy_propagation_state *state,
-        struct copy_propagation_state *parent)
-{
-    rb_init(&state->var_defs, copy_propagation_var_def_compare);
-    state->parent = parent;
-}
-
-static void copy_propagation_state_destroy(struct copy_propagation_state *state)
-{
-    rb_destroy(&state->var_defs, copy_propagation_var_def_destroy, NULL);
-}
-
 static void copy_propagation_invalidate_from_block(struct hlsl_ctx *ctx, struct copy_propagation_state *state,
         struct hlsl_block *block, unsigned int time)
 {
@@ -1900,16 +1924,15 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
 static bool copy_propagation_process_if(struct hlsl_ctx *ctx, struct hlsl_ir_if *iff,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     bool progress = false;
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &iff->then_block, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &iff->then_block, state);
+    copy_propagation_pop_scope(state);
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &iff->else_block, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &iff->else_block, state);
+    copy_propagation_pop_scope(state);
 
     /* Ideally we'd invalidate the outer state looking at what was
      * touched in the two inner states, but this doesn't work for
@@ -1924,14 +1947,13 @@ static bool copy_propagation_process_if(struct hlsl_ctx *ctx, struct hlsl_ir_if 
 static bool copy_propagation_process_loop(struct hlsl_ctx *ctx, struct hlsl_ir_loop *loop,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     bool progress = false;
 
     copy_propagation_invalidate_from_block(ctx, state, &loop->body, loop->node.index);
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &loop->body, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &loop->body, state);
+    copy_propagation_pop_scope(state);
 
     return progress;
 }
@@ -1939,15 +1961,14 @@ static bool copy_propagation_process_loop(struct hlsl_ctx *ctx, struct hlsl_ir_l
 static bool copy_propagation_process_switch(struct hlsl_ctx *ctx, struct hlsl_ir_switch *s,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     struct hlsl_ir_switch_case *c;
     bool progress = false;
 
     LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
     {
-        copy_propagation_state_init(ctx, &inner_state, state);
-        progress |= copy_propagation_transform_block(ctx, &c->body, &inner_state);
-        copy_propagation_state_destroy(&inner_state);
+        copy_propagation_push_scope(ctx, state);
+        progress |= copy_propagation_transform_block(ctx, &c->body, state);
+        copy_propagation_pop_scope(state);
     }
 
     LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
@@ -2015,7 +2036,7 @@ bool hlsl_copy_propagation_execute(struct hlsl_ctx *ctx, struct hlsl_block *bloc
 
     index_instructions(block, 2);
 
-    copy_propagation_state_init(ctx, &state, NULL);
+    copy_propagation_state_init(ctx, &state);
 
     progress = copy_propagation_transform_block(ctx, block, &state);
 
