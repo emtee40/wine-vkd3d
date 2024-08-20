@@ -1361,6 +1361,8 @@ struct copy_propagation_state
 {
     struct rb_tree *scope_var_defs;
     size_t scopes_len, scopes_capacity;
+    struct hlsl_ir_node *stop;
+    bool stopped;
 };
 
 static int copy_propagation_var_def_compare(const void *key, const struct rb_entry *entry)
@@ -1928,10 +1930,14 @@ static bool copy_propagation_process_if(struct hlsl_ctx *ctx, struct hlsl_ir_if 
 
     copy_propagation_push_scope(ctx, state);
     progress |= copy_propagation_transform_block(ctx, &iff->then_block, state);
+    if (state->stopped)
+        return progress;
     copy_propagation_pop_scope(state);
 
     copy_propagation_push_scope(ctx, state);
     progress |= copy_propagation_transform_block(ctx, &iff->else_block, state);
+    if (state->stopped)
+        return progress;
     copy_propagation_pop_scope(state);
 
     /* Ideally we'd invalidate the outer state looking at what was
@@ -1953,6 +1959,8 @@ static bool copy_propagation_process_loop(struct hlsl_ctx *ctx, struct hlsl_ir_l
 
     copy_propagation_push_scope(ctx, state);
     progress |= copy_propagation_transform_block(ctx, &loop->body, state);
+    if (state->stopped)
+        return progress;
     copy_propagation_pop_scope(state);
 
     return progress;
@@ -1968,6 +1976,8 @@ static bool copy_propagation_process_switch(struct hlsl_ctx *ctx, struct hlsl_ir
     {
         copy_propagation_push_scope(ctx, state);
         progress |= copy_propagation_transform_block(ctx, &c->body, state);
+        if (state->stopped)
+            return progress;
         copy_propagation_pop_scope(state);
     }
 
@@ -1987,6 +1997,12 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
 
     LIST_FOR_EACH_ENTRY_SAFE(instr, next, &block->instrs, struct hlsl_ir_node, entry)
     {
+        if (instr == state->stop)
+        {
+            state->stopped = true;
+            return progress;
+        }
+
         switch (instr->type)
         {
             case HLSL_IR_LOAD:
@@ -2024,6 +2040,9 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
             default:
                 break;
         }
+
+        if (state->stopped)
+            return progress;
     }
 
     return progress;
