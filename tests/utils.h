@@ -42,6 +42,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <math.h>
 #include "vkd3d_test.h"
 #include "vkd3d_d3d12.h"
 
@@ -147,6 +148,9 @@ static bool compare_float(float f, float g, unsigned int ulps)
         float f;
         int i;
     } u;
+
+    if (isnan(f) || isnan(g))
+        return isnan(f) && isnan(g);
 
     u.f = f;
     x = u.i;
