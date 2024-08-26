@@ -2067,6 +2067,9 @@ struct vkd3d_shader_signature
  * in struct vkd3d_shader_scan_signature_info1, and supports signatures
  * containing interpolation modes and/or register counts.
  *
+ * The helper function vkd3d_shader_find_signature_element1() will look up a
+ * varying element by its semantic name, semantic index, and stream index.
+ *
  * \since 1.14
  */
 struct vkd3d_shader_signature1
@@ -2714,8 +2717,20 @@ VKD3D_SHADER_API int vkd3d_shader_parse_input_signature(const struct vkd3d_shade
 /**
  * Find a single element of a parsed input signature.
  *
+ * This function is an earlier version of vkd3d_shader_find_signature_element1()
+ * which searches a struct vkd3d_shader_signature; refer to that function for
+ * usage information.
+ */
+VKD3D_SHADER_API struct vkd3d_shader_signature_element *vkd3d_shader_find_signature_element(
+        const struct vkd3d_shader_signature *signature, const char *semantic_name,
+        unsigned int semantic_index, unsigned int stream_index);
+/**
+ * Find a single element of a parsed input signature.
+ *
+ * This function is an extended version of vkd3d_shader_find_signature_element().
+ *
  * \param signature The parsed input signature. This structure is normally
- * populated by vkd3d_shader_parse_input_signature().
+ * populated by vkd3d_shader_scan().
  *
  * \param semantic_name Semantic name of the desired element. This function
  * performs a case-insensitive comparison with respect to the ASCII plane.
@@ -2729,9 +2744,11 @@ VKD3D_SHADER_API int vkd3d_shader_parse_input_signature(const struct vkd3d_shade
  * \return A description of the element matching the requested parameters, or
  * NULL if no such element was found. If not NULL, the return value points into
  * the \a signature parameter and should not be explicitly freed.
+ *
+ * \since 1.14
  */
-VKD3D_SHADER_API struct vkd3d_shader_signature_element *vkd3d_shader_find_signature_element(
-        const struct vkd3d_shader_signature *signature, const char *semantic_name,
+VKD3D_SHADER_API struct vkd3d_shader_signature_element1 *vkd3d_shader_find_signature_element1(
+        const struct vkd3d_shader_signature1 *signature, const char *semantic_name,
         unsigned int semantic_index, unsigned int stream_index);
 /**
  * Free a structural representation of a shader input signature allocated by
@@ -2985,6 +3002,10 @@ typedef int (*PFN_vkd3d_shader_parse_input_signature)(const struct vkd3d_shader_
 /** Type of vkd3d_shader_find_signature_element(). */
 typedef struct vkd3d_shader_signature_element * (*PFN_vkd3d_shader_find_signature_element)(
         const struct vkd3d_shader_signature *signature, const char *semantic_name,
+        unsigned int semantic_index, unsigned int stream_index);
+/** Type of vkd3d_shader_find_signature_element1(). \since 1.14 */
+typedef struct vkd3d_shader_signature_element1 * (*PFN_vkd3d_shader_find_signature_element1)(
+        const struct vkd3d_shader_signature1 *signature, const char *semantic_name,
         unsigned int semantic_index, unsigned int stream_index);
 /** Type of vkd3d_shader_free_shader_signature(). */
 typedef void (*PFN_vkd3d_shader_free_shader_signature)(struct vkd3d_shader_signature *signature);

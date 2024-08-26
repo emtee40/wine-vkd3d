@@ -5,6 +5,7 @@ global:
     vkd3d_shader_compile;
     vkd3d_shader_convert_root_signature;
     vkd3d_shader_find_signature_element;
+    vkd3d_shader_find_signature_element1;
     vkd3d_shader_free_dxbc;
     vkd3d_shader_free_messages;
     vkd3d_shader_free_root_signature;
