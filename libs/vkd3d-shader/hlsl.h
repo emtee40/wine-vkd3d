@@ -1282,6 +1282,15 @@ static inline char *hlsl_strdup(struct hlsl_ctx *ctx, const char *string)
     return ptr;
 }
 
+static inline char *hlsl_strndup(struct hlsl_ctx *ctx, const char *string, size_t n)
+{
+    char *ptr = vkd3d_memdup(string, n);
+
+    if (!ptr)
+        ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+    return ptr;
+}
+
 static inline bool hlsl_array_reserve(struct hlsl_ctx *ctx, void **elements,
         size_t *capacity, size_t element_count, size_t element_size)
 {
@@ -1410,6 +1419,7 @@ void hlsl_cleanup_deref(struct hlsl_deref *deref);
 
 void hlsl_cleanup_semantic(struct hlsl_semantic *semantic);
 bool hlsl_clone_semantic(struct hlsl_ctx *ctx, struct hlsl_semantic *dst, const struct hlsl_semantic *src);
+bool hlsl_semantic_fixup_from_raw_name(struct hlsl_ctx *ctx, struct hlsl_semantic *semantic);
 
 void hlsl_cleanup_ir_switch_cases(struct list *cases);
 void hlsl_free_ir_switch_case(struct hlsl_ir_switch_case *c);

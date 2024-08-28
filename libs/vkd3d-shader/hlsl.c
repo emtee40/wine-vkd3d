@@ -3762,6 +3762,33 @@ bool hlsl_clone_semantic(struct hlsl_ctx *ctx, struct hlsl_semantic *dst, const 
     return true;
 }
 
+bool hlsl_semantic_fixup_from_raw_name(struct hlsl_ctx *ctx, struct hlsl_semantic *semantic)
+{
+    int idx;
+    bool found_semantic_index = false;
+    char *scratch;
+
+    if (!semantic->raw_name) return false;
+
+    for (idx = strlen(semantic->raw_name) - 1; idx > 0; --idx)
+    {
+        if (isdigit(semantic->raw_name[idx]))
+            found_semantic_index = true;
+        else
+            break;
+    }
+    semantic->index = found_semantic_index
+        ? atoi(&semantic->raw_name[idx + 1])
+        : 0;
+    /* Add one more byte to have space for the null byte */
+    scratch = hlsl_strndup(ctx, semantic->raw_name, idx + 2);
+    if (!scratch) return false;
+    scratch[idx + 1] = '\0';
+    semantic->name = scratch;
+
+    return true;
+}
+
 static void free_function_decl(struct hlsl_ir_function_decl *decl)
 {
     unsigned int i;
