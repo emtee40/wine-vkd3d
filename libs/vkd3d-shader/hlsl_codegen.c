@@ -240,14 +240,14 @@ static void prepend_uniform_copy(struct hlsl_ctx *ctx, struct hlsl_block *block,
     list_add_after(&load->node.entry, &store->entry);
 }
 
-static void validate_field_semantic(struct hlsl_ctx *ctx, struct hlsl_struct_field *field)
+static void validate_field_semantic(struct hlsl_ctx *ctx, struct hlsl_struct_field *field, struct hlsl_semantic *semantic)
 {
-    if (!field->semantic.name && hlsl_is_numeric_type(hlsl_get_multiarray_element_type(field->type))
-            && !field->semantic.reported_missing)
+    if (!semantic->name && hlsl_is_numeric_type(hlsl_get_multiarray_element_type(field->type))
+            && !semantic->reported_missing)
     {
         hlsl_error(ctx, &field->loc, VKD3D_SHADER_ERROR_HLSL_MISSING_SEMANTIC,
                 "Field '%s' is missing a semantic.", field->name);
-        field->semantic.reported_missing = true;
+        semantic->reported_missing = true;
     }
 }
 
@@ -349,11 +349,12 @@ static void append_output_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, s
         uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index);
 
 static void attach_io_copy_recurse(bool input_mode, struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *load,
-        uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index)
+        uint32_t modifiers, struct hlsl_semantic *higher_semantic, uint32_t semantic_index)
 {
     struct vkd3d_shader_location *loc = &load->node.loc;
     struct hlsl_type *type = load->node.data_type;
     struct hlsl_ir_var *var = load->src.var;
+    struct hlsl_semantic *semantic = higher_semantic;
     struct hlsl_ir_node *c;
     unsigned int i;
 
@@ -366,6 +367,7 @@ static void attach_io_copy_recurse(bool input_mode, struct hlsl_ctx *ctx, struct
         for (i = 0; i < hlsl_type_element_count(type); ++i)
         {
             uint32_t element_modifiers = modifiers;
+            struct hlsl_semantic *cascaded_semantic = NULL;
 
             if (type->class == HLSL_CLASS_ARRAY)
             {
@@ -381,8 +383,20 @@ static void attach_io_copy_recurse(bool input_mode, struct hlsl_ctx *ctx, struct
                     continue;
                 }
 
-                validate_field_semantic(ctx, field);
-                semantic = &field->semantic;
+                TRACE("cascading semantics onto field %i:%i %s : %s, higher semantic %s\n",
+                    field->loc.line, field->loc.column, field->name, field->semantic.raw_name, higher_semantic->raw_name);
+
+                cascaded_semantic = vkd3d_malloc(sizeof(struct hlsl_semantic));
+                hlsl_clone_semantic(ctx, cascaded_semantic, &field->semantic);
+                if (higher_semantic->raw_name)
+                {
+                    /* Clobber this name */
+                    cascaded_semantic->raw_name = hlsl_strdup(ctx, higher_semantic->raw_name);
+                    hlsl_semantic_fixup_from_raw_name(ctx, cascaded_semantic);
+                }
+
+                validate_field_semantic(ctx, field, cascaded_semantic);
+                semantic = cascaded_semantic;
                 elem_semantic_index = semantic->index;
                 loc = &field->loc;
                 element_modifiers |= field->storage_modifiers;
@@ -411,6 +425,8 @@ static void attach_io_copy_recurse(bool input_mode, struct hlsl_ctx *ctx, struct
             list_add_after(&c->entry, &element_load->node.entry);
 
             attach_io_copy_recurse(input_mode, ctx, block, element_load, element_modifiers, semantic, elem_semantic_index);
+
+            if (cascaded_semantic) vkd3d_free(cascaded_semantic);
         }
     }
     else

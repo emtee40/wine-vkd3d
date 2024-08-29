@@ -61,3 +61,77 @@ struct output main(struct input i)
 [test]
 todo(glsl) draw triangle strip 4
 probe (0, 0) rgba (0.0, 1.0, 0.0, 1.0)
+
+% === %
+
+[vertex shader]
+struct MyStruct
+{
+    float4 f; // TEXCOORD semantic below applies to this field
+};
+
+void main(in MyStruct my_struct : TEXCOORD, in float4 pos : POSITION, out float4 tex : TEXCOORD, out float4 pos_out : SV_POSITION)
+{
+    tex = my_struct.f;
+    pos_out = pos;
+}
+
+[pixel shader]
+float4 main(in float4 f : TEXCOORD) : SV_TARGET
+{
+    return f;
+}
+
+[test]
+todo(glsl) draw triangle strip 4
+probe (0, 0) rgba (0.0, 1.0, 0.0, 1.0)
+
+% === %
+
+[vertex shader]
+struct VertOut
+{
+    float4 pos : SOMETHING_ELSE;
+};
+
+// SV_POSITION on the return value clobbers the SOMETHING_ELSE in the
+// struct declaration.
+void main(in float4 tex : TEXCOORD, in float4 pos : POSITION, out float4 tex_out : TEXCOORD, out VertOut vert_out : SV_POSITION)
+{
+    tex_out = tex;
+    vert_out.pos = pos;
+}
+
+[pixel shader]
+float4 main(in float4 tex : TEXCOORD) : SV_TARGET
+{
+    return tex;
+}
+
+[test]
+todo(glsl) draw triangle strip 4
+probe (0, 0) rgba (0.0, 1.0, 0.0, 1.0)
+
+% === %
+
+[vertex shader]
+struct Both
+{
+    float4 f; // has an effective semantic of either TEXCOORD or POSITION
+};
+
+void main(in Both tex : TEXCOORD, in float4 pos : POSITION, out float4 tex_out : TEXCOORD, out Both pos_out : SV_POSITION)
+{
+    pos_out.f = pos;
+    tex_out = tex.f;
+}
+
+[pixel shader]
+float4 main(in float4 tex : TEXCOORD) : SV_TARGET
+{
+    return tex;
+}
+
+[test]
+todo(glsl) draw triangle strip 4
+probe (0, 0) rgba (0.0, 1.0, 0.0, 1.0)
