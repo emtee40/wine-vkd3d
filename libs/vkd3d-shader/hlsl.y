@@ -5443,6 +5443,17 @@ static struct hlsl_block *add_constructor(struct hlsl_ctx *ctx, struct hlsl_type
     struct hlsl_ir_load *load;
     struct hlsl_ir_var *var;
 
+    if (!hlsl_is_numeric_type(type))
+    {
+        struct vkd3d_string_buffer *string;
+
+        if ((string = hlsl_type_to_string(ctx, type)))
+            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                    "Constructor data type %s is not numeric.", string->buffer);
+        hlsl_release_string_buffer(ctx, string);
+        return NULL;
+    }
+
     if (!(var = hlsl_new_synthetic_var(ctx, "constructor", type, loc)))
         return NULL;
 
@@ -9071,18 +9082,6 @@ postfix_expr:
             if ($1)
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on constructors.");
-
-            if (!hlsl_is_numeric_type($2))
-            {
-                struct vkd3d_string_buffer *string;
-
-                if ((string = hlsl_type_to_string(ctx, $2)))
-                    hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
-                            "Constructor data type %s is not numeric.", string->buffer);
-                hlsl_release_string_buffer(ctx, string);
-                free_parse_initializer(&$4);
-                YYABORT;
-            }
 
             if (!($$ = add_constructor(ctx, $2, &$4, &@2)))
             {
