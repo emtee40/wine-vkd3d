@@ -8013,14 +8013,9 @@ typedef:
             }
 
             if (modifiers)
-            {
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Storage modifiers are not allowed on typedefs.");
-                LIST_FOR_EACH_ENTRY_SAFE(v, v_next, $4, struct parse_variable_def, entry)
-                    vkd3d_free(v);
-                vkd3d_free($4);
-                YYABORT;
-            }
+
             if (!add_typedef(ctx, type, $4))
                 YYABORT;
         }
@@ -9074,12 +9069,9 @@ postfix_expr:
     | var_modifiers type '(' initializer_expr_list ')'
         {
             if ($1)
-            {
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on constructors.");
-                free_parse_initializer(&$4);
-                YYABORT;
-            }
+
             if (!hlsl_is_numeric_type($2))
             {
                 struct vkd3d_string_buffer *string;
@@ -9158,11 +9150,8 @@ unary_expr:
     | '(' var_modifiers type arrays ')' unary_expr
         {
             if ($2)
-            {
                 hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on casts.");
-                YYABORT;
-            }
 
             if (!add_explicit_conversion(ctx, $6, $3, &$4, &@3))
             {
