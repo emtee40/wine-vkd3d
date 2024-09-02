@@ -39219,7 +39219,7 @@ static void test_aliasing_barrier(void)
             ok(hr == S_OK, "Failed to create resource, hr %#x.\n", hr);
         }
 
-        for (k = 0; k < 4; ++k)
+        for (k = 0; k < 5; ++k)
         {
             barrier.Aliasing.pResourceBefore = (k & 1) ? resources[0] : NULL;
             barrier.Aliasing.pResourceAfter = (k & 2) ? resources[1] : NULL;
@@ -39275,8 +39275,21 @@ static void test_aliasing_barrier(void)
                         break;
                 }
 
-                if (!j)
+                if (j)
+                    continue;
+
+                if (k & 4)
+                {
+                    /* Test separate calls to ExecuteCommandLists() instead of a barrier. */
+                    hr = ID3D12GraphicsCommandList_Close(command_list);
+                    ok(SUCCEEDED(hr), "Failed to close command list, hr %#x.\n", hr);
+                    exec_command_list(queue, command_list);
+                    ID3D12GraphicsCommandList_Reset(command_list, context.allocator, NULL);
+                }
+                else
+                {
                     ID3D12GraphicsCommandList_ResourceBarrier(command_list, 1, &barrier);
+                }
             }
 
             transition_resource_state(command_list, resources[1], initial_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
