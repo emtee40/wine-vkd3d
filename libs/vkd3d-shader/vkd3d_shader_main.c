@@ -730,6 +730,51 @@ static bool vkd3d_shader_signature_from_shader_signature(struct vkd3d_shader_sig
     return true;
 }
 
+static bool vkd3d_shader_signature1_from_shader_signature(struct vkd3d_shader_signature1 *signature,
+        const struct shader_signature *src)
+{
+    unsigned int i;
+
+    signature->element_count = src->element_count;
+    if (!src->elements)
+    {
+        VKD3D_ASSERT(!signature->element_count);
+        signature->elements = NULL;
+        return true;
+    }
+
+    if (!(signature->elements = vkd3d_calloc(signature->element_count, sizeof(*signature->elements))))
+        return false;
+
+    for (i = 0; i < signature->element_count; ++i)
+    {
+        struct vkd3d_shader_signature_element1 *d = &signature->elements[i];
+        struct signature_element *e = &src->elements[i];
+
+        if (!(d->semantic_name = vkd3d_strdup(e->semantic_name)))
+        {
+            for (unsigned int j = 0; j < i; ++j)
+            {
+                vkd3d_free((void *)signature->elements[j].semantic_name);
+            }
+            vkd3d_free(signature->elements);
+            return false;
+        }
+        d->semantic_index = e->semantic_index;
+        d->stream_index = e->stream_index;
+        d->sysval_semantic = e->sysval_semantic;
+        d->component_type = e->component_type;
+        d->register_index = e->register_index;
+        d->register_count = e->register_count;
+        d->mask = e->mask;
+        d->used_mask = e->used_mask;
+        d->min_precision = e->min_precision;
+        d->interpolation_mode = e->interpolation_mode;
+    }
+
+    return true;
+}
+
 struct vkd3d_shader_scan_context
 {
     const struct vkd3d_shader_version *version;
@@ -1457,6 +1502,7 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
     struct vkd3d_shader_scan_combined_resource_sampler_info *combined_sampler_info;
     struct vkd3d_shader_scan_descriptor_info1 local_descriptor_info1 = {0};
     struct vkd3d_shader_scan_descriptor_info *descriptor_info;
+    struct vkd3d_shader_scan_signature_info1 *signature_info1;
     struct vkd3d_shader_scan_signature_info *signature_info;
     struct vkd3d_shader_instruction *instruction;
     struct vkd3d_shader_scan_context context;
@@ -1474,6 +1520,7 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
         descriptor_info1 = &local_descriptor_info1;
     }
     signature_info = vkd3d_find_struct(compile_info->next, SCAN_SIGNATURE_INFO);
+    signature_info1 = vkd3d_find_struct(compile_info->next, SCAN_SIGNATURE_INFO1);
 
     if ((combined_sampler_info = vkd3d_find_struct(compile_info->next, SCAN_COMBINED_RESOURCE_SAMPLER_INFO)))
     {
@@ -1522,6 +1569,17 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
             ret = VKD3D_ERROR_OUT_OF_MEMORY;
         }
     }
+    if (!ret && signature_info1)
+    {
+        if (!vkd3d_shader_signature1_from_shader_signature(&signature_info1->input, &program->input_signature)
+                || !vkd3d_shader_signature1_from_shader_signature(&signature_info1->output,
+                        &program->output_signature)
+                || !vkd3d_shader_signature1_from_shader_signature(&signature_info1->patch_constant,
+                        &program->patch_constant_signature))
+        {
+            ret = VKD3D_ERROR_OUT_OF_MEMORY;
+        }
+    }
 
     if (!ret && descriptor_info)
         ret = convert_descriptor_info(descriptor_info, descriptor_info1);
@@ -1536,6 +1594,8 @@ static int vsir_program_scan(struct vsir_program *program, const struct vkd3d_sh
             vkd3d_shader_free_scan_descriptor_info1(descriptor_info1);
         if (signature_info)
             vkd3d_shader_free_scan_signature_info(signature_info);
+        if (signature_info1)
+            vkd3d_shader_free_scan_signature_info1(signature_info1);
     }
     else
     {
@@ -1762,6 +1822,27 @@ void vkd3d_shader_free_scan_signature_info(struct vkd3d_shader_scan_signature_in
     vkd3d_shader_free_shader_signature(&info->input);
     vkd3d_shader_free_shader_signature(&info->output);
     vkd3d_shader_free_shader_signature(&info->patch_constant);
+}
+
+static void vkd3d_shader_free_shader_signature1(struct vkd3d_shader_signature1 *signature)
+{
+    TRACE("signature %p.\n", signature);
+
+    for (unsigned int i = 0; i < signature->element_count; ++i)
+    {
+        vkd3d_free((void *)signature->elements[i].semantic_name);
+    }
+    vkd3d_free(signature->elements);
+    signature->elements = NULL;
+}
+
+void vkd3d_shader_free_scan_signature_info1(struct vkd3d_shader_scan_signature_info1 *info)
+{
+    TRACE("info %p.\n", info);
+
+    vkd3d_shader_free_shader_signature1(&info->input);
+    vkd3d_shader_free_shader_signature1(&info->output);
+    vkd3d_shader_free_shader_signature1(&info->patch_constant);
 }
 
 void vkd3d_shader_free_shader_code(struct vkd3d_shader_code *shader_code)

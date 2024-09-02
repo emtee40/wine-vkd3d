@@ -11,6 +11,7 @@ global:
     vkd3d_shader_free_scan_combined_resource_sampler_info;
     vkd3d_shader_free_scan_descriptor_info;
     vkd3d_shader_free_scan_signature_info;
+    vkd3d_shader_free_scan_signature_info1;
     vkd3d_shader_free_shader_code;
     vkd3d_shader_free_shader_signature;
     vkd3d_shader_get_supported_source_types;
