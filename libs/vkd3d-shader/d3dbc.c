@@ -570,7 +570,7 @@ static bool add_signature_element(struct vkd3d_shader_sm1_parser *sm1, bool outp
     element->mask = mask;
     element->used_mask = is_dcl ? 0 : mask;
     if (program->shader_version.type == VKD3D_SHADER_TYPE_PIXEL && !output)
-        element->interpolation_mode = VKD3DSIM_LINEAR;
+        element->interpolation_mode = VKD3D_SHADER_IM_LINEAR;
 
     return true;
 }

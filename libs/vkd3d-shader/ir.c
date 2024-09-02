@@ -1822,7 +1822,7 @@ static enum vkd3d_result vsir_program_normalise_io_registers(struct vsir_program
             struct signature_element *element = &program->input_signature.elements[i];
 
             if (!ascii_strcasecmp(element->semantic_name, "COLOR"))
-                element->interpolation_mode = VKD3DSIM_CONSTANT;
+                element->interpolation_mode = VKD3D_SHADER_IM_CONSTANT;
         }
     }
 

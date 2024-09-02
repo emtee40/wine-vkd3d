@@ -462,7 +462,7 @@ static int shader_parse_signature(const struct vkd3d_shader_dxbc_section_desc *s
         else
             e[i].min_precision = VKD3D_SHADER_MINIMUM_PRECISION_NONE;
 
-        e[i].interpolation_mode = VKD3DSIM_NONE;
+        e[i].interpolation_mode = VKD3D_SHADER_IM_NONE;
 
         TRACE("Stream: %u, semantic: %s, semantic idx: %u, sysval_semantic %#x, "
                 "type %u, register idx: %u, use_mask %#x, input_mask %#x, precision %u.\n",

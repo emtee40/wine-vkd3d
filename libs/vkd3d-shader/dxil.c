@@ -9410,7 +9410,7 @@ static enum vkd3d_result sm6_parser_read_signature(struct sm6_parser *sm6, const
             return VKD3D_ERROR_INVALID_SHADER;
         }
 
-        if ((e->interpolation_mode = values[5]) >= VKD3DSIM_COUNT)
+        if ((e->interpolation_mode = values[5]) > VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_SAMPLE)
         {
             WARN("Unhandled interpolation mode %u.\n", e->interpolation_mode);
             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_SIGNATURE,

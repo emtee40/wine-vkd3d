@@ -728,16 +728,14 @@ enum vkd3d_shader_dst_modifier
 
 enum vkd3d_shader_interpolation_mode
 {
-    VKD3DSIM_NONE = 0,
-    VKD3DSIM_CONSTANT = 1,
-    VKD3DSIM_LINEAR = 2,
-    VKD3DSIM_LINEAR_CENTROID = 3,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE = 4,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE_CENTROID = 5,
-    VKD3DSIM_LINEAR_SAMPLE = 6,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE_SAMPLE = 7,
-
-    VKD3DSIM_COUNT = 8,
+    VKD3D_SHADER_IM_NONE                          = 0,
+    VKD3D_SHADER_IM_CONSTANT                      = 1,
+    VKD3D_SHADER_IM_LINEAR                        = 2,
+    VKD3D_SHADER_IM_LINEAR_CENTROID               = 3,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE          = 4,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_CENTROID = 5,
+    VKD3D_SHADER_IM_LINEAR_SAMPLE                 = 6,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_SAMPLE   = 7,
 };
 
 enum vkd3d_shader_global_flags

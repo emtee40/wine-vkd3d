@@ -1688,25 +1688,25 @@ static void shader_print_interpolation_mode(struct vkd3d_d3d_asm_compiler *compi
 
     switch (m)
     {
-        case VKD3DSIM_CONSTANT:
+        case VKD3D_SHADER_IM_CONSTANT:
             mode = "constant";
             break;
-        case VKD3DSIM_LINEAR:
+        case VKD3D_SHADER_IM_LINEAR:
             mode = "linear";
             break;
-        case VKD3DSIM_LINEAR_CENTROID:
+        case VKD3D_SHADER_IM_LINEAR_CENTROID:
             mode = "linear centroid";
             break;
-        case VKD3DSIM_LINEAR_NOPERSPECTIVE:
+        case VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE:
             mode = "linear noperspective";
             break;
-        case VKD3DSIM_LINEAR_SAMPLE:
+        case VKD3D_SHADER_IM_LINEAR_SAMPLE:
             mode = "linear sample";
             break;
-        case VKD3DSIM_LINEAR_NOPERSPECTIVE_CENTROID:
+        case VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_CENTROID:
             mode = "linear noperspective centroid";
             break;
-        case VKD3DSIM_LINEAR_NOPERSPECTIVE_SAMPLE:
+        case VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_SAMPLE:
             mode = "linear noperspective sample";
             break;
         default:

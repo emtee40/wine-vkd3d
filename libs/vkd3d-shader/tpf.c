@@ -4473,11 +4473,11 @@ static void write_sm4_dcl_semantic(const struct tpf_writer *tpf, const struct hl
 
         if (profile->type == VKD3D_SHADER_TYPE_PIXEL)
         {
-            enum vkd3d_shader_interpolation_mode mode = VKD3DSIM_LINEAR;
+            enum vkd3d_shader_interpolation_mode mode = VKD3D_SHADER_IM_LINEAR;
 
             if ((var->storage_modifiers & HLSL_STORAGE_NOINTERPOLATION) || type_is_integer(var->data_type))
             {
-                mode = VKD3DSIM_CONSTANT;
+                mode = VKD3D_SHADER_IM_CONSTANT;
             }
             else
             {
@@ -4488,10 +4488,10 @@ static void write_sm4_dcl_semantic(const struct tpf_writer *tpf, const struct hl
                 }
                 modes[] =
                 {
-                    { HLSL_STORAGE_CENTROID | HLSL_STORAGE_NOPERSPECTIVE, VKD3DSIM_LINEAR_NOPERSPECTIVE_CENTROID },
-                    { HLSL_STORAGE_NOPERSPECTIVE, VKD3DSIM_LINEAR_NOPERSPECTIVE },
-                    { HLSL_STORAGE_CENTROID, VKD3DSIM_LINEAR_CENTROID },
-                    { HLSL_STORAGE_CENTROID | HLSL_STORAGE_LINEAR, VKD3DSIM_LINEAR_CENTROID },
+                    { HLSL_STORAGE_CENTROID | HLSL_STORAGE_NOPERSPECTIVE, VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_CENTROID },
+                    { HLSL_STORAGE_NOPERSPECTIVE, VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE },
+                    { HLSL_STORAGE_CENTROID, VKD3D_SHADER_IM_LINEAR_CENTROID },
+                    { HLSL_STORAGE_CENTROID | HLSL_STORAGE_LINEAR, VKD3D_SHADER_IM_LINEAR_CENTROID },
                 };
                 unsigned int i;
 

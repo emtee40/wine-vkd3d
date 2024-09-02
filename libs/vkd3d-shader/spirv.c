@@ -4661,28 +4661,28 @@ static void spirv_compiler_emit_interpolation_decorations(struct spirv_compiler 
 
     switch (mode)
     {
-        case VKD3DSIM_NONE:
+        case VKD3D_SHADER_IM_NONE:
             /* VUID-StandaloneSpirv-Flat-04744: integer or double types must be
              * decorated 'Flat' for fragment shaders. */
             if (compiler->shader_type != VKD3D_SHADER_TYPE_PIXEL || component_type == VKD3D_SHADER_COMPONENT_FLOAT)
                 break;
             /* fall through */
-        case VKD3DSIM_CONSTANT:
+        case VKD3D_SHADER_IM_CONSTANT:
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationFlat, NULL, 0);
             break;
-        case VKD3DSIM_LINEAR:
+        case VKD3D_SHADER_IM_LINEAR:
             break;
-        case VKD3DSIM_LINEAR_CENTROID:
+        case VKD3D_SHADER_IM_LINEAR_CENTROID:
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationCentroid, NULL, 0);
             break;
-        case VKD3DSIM_LINEAR_NOPERSPECTIVE:
+        case VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE:
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationNoPerspective, NULL, 0);
             break;
-        case VKD3DSIM_LINEAR_SAMPLE:
+        case VKD3D_SHADER_IM_LINEAR_SAMPLE:
             vkd3d_spirv_enable_capability(builder, SpvCapabilitySampleRateShading);
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationSample, NULL, 0);
             break;
-        case VKD3DSIM_LINEAR_NOPERSPECTIVE_SAMPLE:
+        case VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_SAMPLE:
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationNoPerspective, NULL, 0);
             vkd3d_spirv_enable_capability(builder, SpvCapabilitySampleRateShading);
             vkd3d_spirv_build_op_decorate(builder, id, SpvDecorationSample, NULL, 0);
