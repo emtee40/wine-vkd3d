@@ -108,7 +108,7 @@ int vkd3d_string_buffer_vprintf(struct vkd3d_string_buffer *buffer, const char *
     {
         rem = buffer->buffer_size - buffer->content_size;
         va_copy(a, args);
-        rc = vsnprintf(&buffer->buffer[buffer->content_size], rem, format, a);
+        rc = vkd3d_vsnprintf(&buffer->buffer[buffer->content_size], rem, format, a);
         va_end(a);
         if (rc >= 0 && (unsigned int)rc < rem)
         {

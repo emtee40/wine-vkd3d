@@ -936,7 +936,7 @@ static void vkd3d_spirv_build_op_name(struct vkd3d_spirv_builder *builder,
     va_list args;
 
     va_start(args, fmt);
-    vsnprintf(name, ARRAY_SIZE(name), fmt, args);
+    vkd3d_vsnprintf(name, ARRAY_SIZE(name), fmt, args);
     name[ARRAY_SIZE(name) - 1] = '\0';
     va_end(args);
 
@@ -955,7 +955,7 @@ static void vkd3d_spirv_build_op_member_name(struct vkd3d_spirv_builder *builder
     va_list args;
 
     va_start(args, fmt);
-    vsnprintf(name, ARRAY_SIZE(name), fmt, args);
+    vkd3d_vsnprintf(name, ARRAY_SIZE(name), fmt, args);
     name[ARRAY_SIZE(name) - 1] = '\0';
     va_end(args);
 

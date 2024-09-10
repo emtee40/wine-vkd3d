@@ -3160,17 +3160,17 @@ static bool write_acos_or_asin(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s %s(%s x)\n"
+            "%1$s %2$s(%1$s x)\n"
             "{\n"
-            "    %s abs_arg = abs(x);\n"
-            "    %s poly_approx = (((-0.018729\n"
+            "    %1$s abs_arg = abs(x);\n"
+            "    %1$s poly_approx = (((-0.018729\n"
             "        * abs_arg + 0.074261)\n"
             "        * abs_arg - 0.212114)\n"
             "        * abs_arg + 1.570729);\n"
-            "    %s correction = sqrt(1.0 - abs_arg);\n"
-            "    %s zero_flip = (x < 0.0) * (-2.0 * correction * poly_approx + 3.141593);\n"
-            "    %s result = poly_approx * correction + zero_flip;\n"
-            "    return %s;\n"
+            "    %1$s correction = sqrt(1.0 - abs_arg);\n"
+            "    %1$s zero_flip = (x < 0.0) * (-2.0 * correction * poly_approx + 3.141593);\n"
+            "    %1$s result = poly_approx * correction + zero_flip;\n"
+            "    return %3$s;\n"
             "}";
     static const char fn_name_acos[] = "acos";
     static const char fn_name_asin[] = "asin";
@@ -3183,9 +3183,7 @@ static bool write_acos_or_asin(struct hlsl_ctx *ctx,
     type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_FLOAT, type->dimx, type->dimy);
 
     if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type->name, fn_name, type->name,
-            type->name, type->name, type->name, type->name, type->name,
-            (asin_mode ? return_stmt_asin : return_stmt_acos))))
+            type->name, fn_name, (asin_mode ? return_stmt_asin : return_stmt_acos))))
         return false;
     func = hlsl_compile_internal_function(ctx, fn_name, body);
     vkd3d_free(body);
@@ -3278,15 +3276,15 @@ static bool write_atan_or_atan2(struct hlsl_ctx *ctx,
     static const char atan_name[] = "atan";
 
     static const char atan2_header_template[] =
-            "%s atan2(%s y, %s x)\n"
+            "%1$s atan2(%1$s y, %1$s x)\n"
             "{\n"
-            "    %s in_y, in_x;\n"
+            "    %1$s in_y, in_x;\n"
             "    in_y = y;\n"
             "    in_x = x;\n";
     static const char atan_header_template[] =
-            "%s atan(%s y)\n"
+            "%1$s atan(%1$s y)\n"
             "{\n"
-            "    %s in_y, in_x;\n"
+            "    %1$s in_y, in_x;\n"
             "    in_y = y;\n"
             "    in_x = 1.0;\n";
 
@@ -3316,12 +3314,9 @@ static bool write_atan_or_atan2(struct hlsl_ctx *ctx,
     if (!(buf = hlsl_get_string_buffer(ctx)))
         return false;
 
-    if (atan2_mode)
-        ret = vkd3d_string_buffer_printf(buf, atan2_header_template,
-                type->name, type->name, type->name, type->name);
-    else
-        ret = vkd3d_string_buffer_printf(buf, atan_header_template,
-                type->name, type->name, type->name);
+    ret = vkd3d_string_buffer_printf(buf,
+            atan2_mode ? atan2_header_template : atan_header_template,
+            type->name);
     if (ret < 0)
     {
         hlsl_release_string_buffer(ctx, buf);
@@ -3512,9 +3507,9 @@ static bool write_cosh_or_sinh(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s %s(%s x)\n"
+            "%1$s %2$s(%1$s x)\n"
             "{\n"
-            "    return (exp(x) %s exp(-x)) / 2;\n"
+            "    return (exp(x) %3$s exp(-x)) / 2;\n"
             "}\n";
     static const char fn_name_sinh[] = "sinh";
     static const char fn_name_cosh[] = "cosh";
@@ -3526,7 +3521,7 @@ static bool write_cosh_or_sinh(struct hlsl_ctx *ctx,
     fn_name = sinh_mode ? fn_name_sinh : fn_name_cosh;
 
     if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type_name, fn_name, type_name, sinh_mode ? "-" : "+")))
+            type_name, fn_name, sinh_mode ? "-" : "+")))
         return false;
 
     func = hlsl_compile_internal_function(ctx, fn_name, body);
@@ -3680,29 +3675,29 @@ static bool intrinsic_determinant(struct hlsl_ctx *ctx,
         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
     static const char determinant2x2[] =
-            "%s determinant(%s2x2 m)\n"
+            "%1$s determinant(%1$s2x2 m)\n"
             "{\n"
             "    return m._11 * m._22 - m._12 * m._21;\n"
             "}";
     static const char determinant3x3[] =
-            "%s determinant(%s3x3 m)\n"
+            "%1$s determinant(%1$s3x3 m)\n"
             "{\n"
-            "    %s2x2 m1 = { m._22, m._23, m._32, m._33 };\n"
-            "    %s2x2 m2 = { m._21, m._23, m._31, m._33 };\n"
-            "    %s2x2 m3 = { m._21, m._22, m._31, m._32 };\n"
-            "    %s3 v1 = { m._11, -m._12, m._13 };\n"
-            "    %s3 v2 = { determinant(m1), determinant(m2), determinant(m3) };\n"
+            "    %1$s2x2 m1 = { m._22, m._23, m._32, m._33 };\n"
+            "    %1$s2x2 m2 = { m._21, m._23, m._31, m._33 };\n"
+            "    %1$s2x2 m3 = { m._21, m._22, m._31, m._32 };\n"
+            "    %1$s3 v1 = { m._11, -m._12, m._13 };\n"
+            "    %1$s3 v2 = { determinant(m1), determinant(m2), determinant(m3) };\n"
             "    return dot(v1, v2);\n"
             "}";
     static const char determinant4x4[] =
-            "%s determinant(%s4x4 m)\n"
+            "%1$s determinant(%1$s4x4 m)\n"
             "{\n"
-            "    %s3x3 m1 = { m._22, m._23, m._24, m._32, m._33, m._34, m._42, m._43, m._44 };\n"
-            "    %s3x3 m2 = { m._21, m._23, m._24, m._31, m._33, m._34, m._41, m._43, m._44 };\n"
-            "    %s3x3 m3 = { m._21, m._22, m._24, m._31, m._32, m._34, m._41, m._42, m._44 };\n"
-            "    %s3x3 m4 = { m._21, m._22, m._23, m._31, m._32, m._33, m._41, m._42, m._43 };\n"
-            "    %s4 v1 = { m._11, -m._12, m._13, -m._14 };\n"
-            "    %s4 v2 = { determinant(m1), determinant(m2), determinant(m3), determinant(m4) };\n"
+            "    %1$s3x3 m1 = { m._22, m._23, m._24, m._32, m._33, m._34, m._42, m._43, m._44 };\n"
+            "    %1$s3x3 m2 = { m._21, m._23, m._24, m._31, m._33, m._34, m._41, m._43, m._44 };\n"
+            "    %1$s3x3 m3 = { m._21, m._22, m._24, m._31, m._32, m._34, m._41, m._42, m._44 };\n"
+            "    %1$s3x3 m4 = { m._21, m._22, m._23, m._31, m._32, m._33, m._41, m._42, m._43 };\n"
+            "    %1$s4 v1 = { m._11, -m._12, m._13, -m._14 };\n"
+            "    %1$s4 v2 = { determinant(m1), determinant(m2), determinant(m3), determinant(m4) };\n"
             "    return dot(v1, v2);\n"
             "}";
     static const char *templates[] =
@@ -3736,23 +3731,7 @@ static bool intrinsic_determinant(struct hlsl_ctx *ctx,
     typename = type->e.numeric.type == HLSL_TYPE_HALF ? "half" : "float";
     template = templates[dim];
 
-    switch (dim)
-    {
-        case 2:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename);
-            break;
-        case 3:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
-                    typename, typename, typename, typename);
-            break;
-        case 4:
-            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
-                    typename, typename, typename, typename, typename);
-            break;
-        default:
-            vkd3d_unreachable();
-    }
-
+    body = hlsl_sprintf_alloc(ctx, template, typename);
     if (!body)
         return false;
 
@@ -4380,9 +4359,9 @@ static bool intrinsic_refract(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s refract(%s r, %s n, %s i)\n"
+            "%1$s refract(%1$s r, %1$s n, %2$s i)\n"
             "{\n"
-            "    %s d, t;\n"
+            "    %3$s d, t;\n"
             "    d = dot(r, n);\n"
             "    t = 1 - i.x * i.x * (1 - d * d);\n"
             "    return t >= 0.0 ? i.x * r - (i.x * d + sqrt(t)) * n : 0;\n"
@@ -4408,8 +4387,7 @@ static bool intrinsic_refract(struct hlsl_ctx *ctx,
     idx_type = convert_numeric_type(ctx, i_type, base);
     scal_type = hlsl_get_scalar_type(ctx, base);
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template, res_type->name, res_type->name,
-            res_type->name, idx_type->name, scal_type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, res_type->name, idx_type->name, scal_type->name)))
         return false;
 
     func = hlsl_compile_internal_function(ctx, "refract", body);
@@ -4544,9 +4522,9 @@ static bool intrinsic_smoothstep(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s smoothstep(%s low, %s high, %s x)\n"
+            "%1$s smoothstep(%1$s low, %1$s high, %1$s x)\n"
             "{\n"
-            "    %s p = saturate((x - low) / (high - low));\n"
+            "    %1$s p = saturate((x - low) / (high - low));\n"
             "    return (p * p) * (3 - 2 * p);\n"
             "}";
 
@@ -4554,7 +4532,7 @@ static bool intrinsic_smoothstep(struct hlsl_ctx *ctx,
         return false;
     type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_FLOAT, type->dimx, type->dimy);
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name, type->name, type->name, type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name)))
         return false;
     func = hlsl_compile_internal_function(ctx, "smoothstep", body);
     vkd3d_free(body);
@@ -4616,9 +4594,9 @@ static bool intrinsic_tanh(struct hlsl_ctx *ctx,
     char *body;
 
     static const char template[] =
-            "%s tanh(%s x)\n"
+            "%1$s tanh(%1$s x)\n"
             "{\n"
-            "    %s exp_pos, exp_neg;\n"
+            "    %1$s exp_pos, exp_neg;\n"
             "    exp_pos = exp(x);\n"
             "    exp_neg = exp(-x);\n"
             "    return (exp_pos - exp_neg) / (exp_pos + exp_neg);\n"
@@ -4628,8 +4606,7 @@ static bool intrinsic_tanh(struct hlsl_ctx *ctx,
         return false;
     type = arg->data_type;
 
-    if (!(body = hlsl_sprintf_alloc(ctx, template,
-            type->name, type->name, type->name)))
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name)))
         return false;
 
     func = hlsl_compile_internal_function(ctx, "tanh", body);

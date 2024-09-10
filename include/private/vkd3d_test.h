@@ -251,7 +251,7 @@ vkd3d_test_debug(const char *fmt, ...)
     if (0 < size && size < sizeof(buffer))
     {
         va_start(args, fmt);
-        vsnprintf(buffer + size, sizeof(buffer) - size, fmt, args);
+        vkd3d_vsnprintf(buffer + size, sizeof(buffer) - size, fmt, args);
         va_end(args);
     }
     buffer[sizeof(buffer) - 1] = '\0';
@@ -411,7 +411,7 @@ static inline void vkd3d_test_push_context(const char *fmt, ...)
     if (vkd3d_test_state.context_count < ARRAY_SIZE(vkd3d_test_state.context))
     {
         va_start(args, fmt);
-        vsnprintf(vkd3d_test_state.context[vkd3d_test_state.context_count],
+        vkd3d_vsnprintf(vkd3d_test_state.context[vkd3d_test_state.context_count],
                 sizeof(*vkd3d_test_state.context), fmt, args);
         va_end(args);
         vkd3d_test_state.context[vkd3d_test_state.context_count][sizeof(vkd3d_test_state.context[0]) - 1] = '\0';

@@ -136,7 +136,7 @@ const char *vkd3d_dbg_vsprintf(const char *fmt, va_list args)
     char *buffer;
 
     buffer = get_buffer();
-    vsnprintf(buffer, VKD3D_DEBUG_BUFFER_SIZE, fmt, args);
+    vkd3d_vsnprintf(buffer, VKD3D_DEBUG_BUFFER_SIZE, fmt, args);
     buffer[VKD3D_DEBUG_BUFFER_SIZE - 1] = '\0';
     return buffer;
 }

@@ -439,6 +439,37 @@ static inline int ascii_strcasecmp(const char *a, const char *b)
     return c_a - c_b;
 }
 
+/* vsnprintf that always allows positional arguments, irregardless of platform. */
+static inline int vkd3d_vsnprintf(char *str, size_t size, const char *fmt, va_list args)
+{
+#ifndef _WIN32
+    return vsnprintf(str, size, fmt, args);
+#else
+    va_list a;
+    int ret, bytes_wanted, bytes_to_write;
+
+    va_copy(a, args);
+    /* _vscprintf_p returns the number of bytes wanted, WITHOUT the nullbyte */
+    bytes_wanted = _vscprintf_p(fmt, a) + 1;
+    va_end(a);
+
+    /* Adhere to the C99 standard; allow null strings iff size=0,
+     * otherwise return a negative number. */
+    if (str == NULL)
+    {
+        if (size == 0)
+            return bytes_wanted;
+        else
+            return -1;
+    }
+
+    bytes_to_write = bytes_wanted >= size ? size : bytes_wanted;
+    ret = _vsprintf_p(str, bytes_to_write, fmt, args);
+    if (ret < 0) return ret;
+    return bytes_wanted;
+#endif
+}
+
 static inline uint64_t vkd3d_atomic_add_fetch_u64(uint64_t volatile *x, uint64_t val)
 {
 #if HAVE_SYNC_ADD_AND_FETCH
