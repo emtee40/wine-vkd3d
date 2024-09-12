@@ -7086,19 +7086,15 @@ colon_attribute:
 semantic:
       ':' any_identifier
         {
-            char *p;
-
             if (!($$.raw_name = hlsl_strdup(ctx, $2)))
                 YYABORT;
 
-            for (p = $2 + strlen($2); p > $2 && isdigit(p[-1]); --p)
-                ;
-            $$.name = $2;
-            $$.index = atoi(p);
+            if (!hlsl_semantic_fixup_from_raw_name(ctx, &$$))
+                YYABORT;
+
             $$.reported_missing = false;
             $$.reported_duplicated_output_next_index = 0;
             $$.reported_duplicated_input_incompatible_next_index = 0;
-            *p = 0;
         }
 
 /* FIXME: Writemasks */

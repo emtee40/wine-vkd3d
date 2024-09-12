@@ -197,7 +197,6 @@ static bool clean_constant_deref_offset_srcs(struct hlsl_ctx *ctx, struct hlsl_d
     return false;
 }
 
-
 /* Split uniforms into two variables representing the constant and temp
  * registers, and copy the former to the latter, so that writes to uniforms
  * work. */
@@ -241,14 +240,14 @@ static void prepend_uniform_copy(struct hlsl_ctx *ctx, struct hlsl_block *block,
     list_add_after(&load->node.entry, &store->entry);
 }
 
-static void validate_field_semantic(struct hlsl_ctx *ctx, struct hlsl_struct_field *field)
+static void validate_field_semantic(struct hlsl_ctx *ctx, struct hlsl_struct_field *field, struct hlsl_semantic *semantic)
 {
-    if (!field->semantic.name && hlsl_is_numeric_type(hlsl_get_multiarray_element_type(field->type))
-            && !field->semantic.reported_missing)
+    if (!semantic->name && hlsl_is_numeric_type(hlsl_get_multiarray_element_type(field->type))
+            && !semantic->reported_missing)
     {
         hlsl_error(ctx, &field->loc, VKD3D_SHADER_ERROR_HLSL_MISSING_SEMANTIC,
                 "Field '%s' is missing a semantic.", field->name);
-        field->semantic.reported_missing = true;
+        semantic->reported_missing = true;
     }
 }
 
@@ -345,6 +344,101 @@ static struct hlsl_ir_var *add_semantic_var(struct hlsl_ctx *ctx, struct hlsl_ir
 }
 
 static void prepend_input_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *lhs,
+        uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index);
+static void append_output_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *rhs,
+        uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index);
+
+static void attach_io_copy_recurse(bool input_mode, struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *load,
+        uint32_t modifiers, struct hlsl_semantic *higher_semantic, uint32_t semantic_index)
+{
+    struct vkd3d_shader_location *loc = &load->node.loc;
+    struct hlsl_type *type = load->node.data_type;
+    struct hlsl_ir_var *var = load->src.var;
+    struct hlsl_semantic *semantic = higher_semantic;
+    struct hlsl_ir_node *c;
+    unsigned int i;
+
+    if (type->class == HLSL_CLASS_ARRAY || type->class == HLSL_CLASS_STRUCT)
+    {
+        struct hlsl_ir_load *element_load;
+        struct hlsl_struct_field *field;
+        uint32_t elem_semantic_index;
+
+        for (i = 0; i < hlsl_type_element_count(type); ++i)
+        {
+            uint32_t element_modifiers = modifiers;
+            struct hlsl_semantic *cascaded_semantic = NULL;
+
+            if (type->class == HLSL_CLASS_ARRAY)
+            {
+                elem_semantic_index = semantic_index
+                        + i * hlsl_type_get_array_element_reg_size(type->e.array.type, HLSL_REGSET_NUMERIC) / 4;
+            }
+            else
+            {
+                field = &type->e.record.fields[i];
+                if (hlsl_type_is_resource(field->type))
+                {
+                    hlsl_fixme(ctx, &field->loc, "Prepend uniform copies for resource components within structs.");
+                    continue;
+                }
+
+                TRACE("cascading semantics onto field %i:%i %s : %s, higher semantic %s\n",
+                    field->loc.line, field->loc.column, field->name, field->semantic.raw_name, higher_semantic->raw_name);
+
+                cascaded_semantic = vkd3d_malloc(sizeof(struct hlsl_semantic));
+                hlsl_clone_semantic(ctx, cascaded_semantic, &field->semantic);
+                if (higher_semantic->raw_name)
+                {
+                    /* Clobber this name */
+                    cascaded_semantic->raw_name = hlsl_strdup(ctx, higher_semantic->raw_name);
+                    hlsl_semantic_fixup_from_raw_name(ctx, cascaded_semantic);
+                }
+
+                validate_field_semantic(ctx, field, cascaded_semantic);
+                semantic = cascaded_semantic;
+                elem_semantic_index = semantic->index;
+                loc = &field->loc;
+                element_modifiers |= field->storage_modifiers;
+
+                if (input_mode)
+                {
+                    /* TODO: 'sample' modifier is not supported yet */
+
+                    /* 'nointerpolation' always takes precedence, next the same is done for 'sample',
+                       remaining modifiers are combined. */
+                    if (element_modifiers & HLSL_STORAGE_NOINTERPOLATION)
+                    {
+                        element_modifiers &= ~HLSL_INTERPOLATION_MODIFIERS_MASK;
+                        element_modifiers |= HLSL_STORAGE_NOINTERPOLATION;
+                    }
+                }
+            }
+
+            if (!(c = hlsl_new_uint_constant(ctx, i, &var->loc)))
+                return;
+            list_add_after(&load->node.entry, &c->entry);
+
+            /* This redundant load is expected to be deleted later by DCE. */
+            if (!(element_load = hlsl_new_load_index(ctx, &load->src, c, loc)))
+                return;
+            list_add_after(&c->entry, &element_load->node.entry);
+
+            attach_io_copy_recurse(input_mode, ctx, block, element_load, element_modifiers, semantic, elem_semantic_index);
+
+            if (cascaded_semantic) vkd3d_free(cascaded_semantic);
+        }
+    }
+    else
+    {
+        if (input_mode)
+            prepend_input_copy(ctx, block, load, modifiers, semantic, semantic_index);
+        else
+            append_output_copy(ctx, block, load, modifiers, semantic, semantic_index);
+    }
+}
+
+static void prepend_input_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *lhs,
         uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index)
 {
     struct hlsl_type *type = lhs->node.data_type, *vector_type_src, *vector_type_dst;
@@ -408,73 +502,6 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, s
     }
 }
 
-static void prepend_input_copy_recurse(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *lhs,
-        uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index)
-{
-    struct vkd3d_shader_location *loc = &lhs->node.loc;
-    struct hlsl_type *type = lhs->node.data_type;
-    struct hlsl_ir_var *var = lhs->src.var;
-    struct hlsl_ir_node *c;
-    unsigned int i;
-
-    if (type->class == HLSL_CLASS_ARRAY || type->class == HLSL_CLASS_STRUCT)
-    {
-        struct hlsl_ir_load *element_load;
-        struct hlsl_struct_field *field;
-        uint32_t elem_semantic_index;
-
-        for (i = 0; i < hlsl_type_element_count(type); ++i)
-        {
-            uint32_t element_modifiers = modifiers;
-
-            if (type->class == HLSL_CLASS_ARRAY)
-            {
-                elem_semantic_index = semantic_index
-                        + i * hlsl_type_get_array_element_reg_size(type->e.array.type, HLSL_REGSET_NUMERIC) / 4;
-            }
-            else
-            {
-                field = &type->e.record.fields[i];
-                if (hlsl_type_is_resource(field->type))
-                {
-                    hlsl_fixme(ctx, &field->loc, "Prepend uniform copies for resource components within structs.");
-                    continue;
-                }
-                validate_field_semantic(ctx, field);
-                semantic = &field->semantic;
-                elem_semantic_index = semantic->index;
-                loc = &field->loc;
-                element_modifiers |= field->storage_modifiers;
-
-                /* TODO: 'sample' modifier is not supported yet */
-
-                /* 'nointerpolation' always takes precedence, next the same is done for 'sample',
-                   remaining modifiers are combined. */
-                if (element_modifiers & HLSL_STORAGE_NOINTERPOLATION)
-                {
-                    element_modifiers &= ~HLSL_INTERPOLATION_MODIFIERS_MASK;
-                    element_modifiers |= HLSL_STORAGE_NOINTERPOLATION;
-                }
-            }
-
-            if (!(c = hlsl_new_uint_constant(ctx, i, &var->loc)))
-                return;
-            list_add_after(&lhs->node.entry, &c->entry);
-
-            /* This redundant load is expected to be deleted later by DCE. */
-            if (!(element_load = hlsl_new_load_index(ctx, &lhs->src, c, loc)))
-                return;
-            list_add_after(&c->entry, &element_load->node.entry);
-
-            prepend_input_copy_recurse(ctx, block, element_load, element_modifiers, semantic, elem_semantic_index);
-        }
-    }
-    else
-    {
-        prepend_input_copy(ctx, block, lhs, modifiers, semantic, semantic_index);
-    }
-}
-
 /* Split inputs into two variables representing the semantic and temp registers,
  * and copy the former to the latter, so that writes to input variables work. */
 static void prepend_input_var_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_var *var)
@@ -486,7 +513,7 @@ static void prepend_input_var_copy(struct hlsl_ctx *ctx, struct hlsl_block *bloc
         return;
     list_add_head(&block->instrs, &load->node.entry);
 
-    prepend_input_copy_recurse(ctx, block, load, var->storage_modifiers, &var->semantic, var->semantic.index);
+    attach_io_copy_recurse(true, ctx, block, load, var->storage_modifiers, &var->semantic, var->semantic.index);
 }
 
 static void append_output_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *rhs,
@@ -545,56 +572,6 @@ static void append_output_copy(struct hlsl_ctx *ctx, struct hlsl_block *block, s
     }
 }
 
-static void append_output_copy_recurse(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_load *rhs,
-        uint32_t modifiers, struct hlsl_semantic *semantic, uint32_t semantic_index)
-{
-    struct vkd3d_shader_location *loc = &rhs->node.loc;
-    struct hlsl_type *type = rhs->node.data_type;
-    struct hlsl_ir_var *var = rhs->src.var;
-    struct hlsl_ir_node *c;
-    unsigned int i;
-
-    if (type->class == HLSL_CLASS_ARRAY || type->class == HLSL_CLASS_STRUCT)
-    {
-        struct hlsl_ir_load *element_load;
-        struct hlsl_struct_field *field;
-        uint32_t elem_semantic_index;
-
-        for (i = 0; i < hlsl_type_element_count(type); ++i)
-        {
-            if (type->class == HLSL_CLASS_ARRAY)
-            {
-                elem_semantic_index = semantic_index
-                        + i * hlsl_type_get_array_element_reg_size(type->e.array.type, HLSL_REGSET_NUMERIC) / 4;
-            }
-            else
-            {
-                field = &type->e.record.fields[i];
-                if (hlsl_type_is_resource(field->type))
-                    continue;
-                validate_field_semantic(ctx, field);
-                semantic = &field->semantic;
-                elem_semantic_index = semantic->index;
-                loc = &field->loc;
-            }
-
-            if (!(c = hlsl_new_uint_constant(ctx, i, &var->loc)))
-                return;
-            hlsl_block_add_instr(block, c);
-
-            if (!(element_load = hlsl_new_load_index(ctx, &rhs->src, c, loc)))
-                return;
-            hlsl_block_add_instr(block, &element_load->node);
-
-            append_output_copy_recurse(ctx, block, element_load, modifiers, semantic, elem_semantic_index);
-        }
-    }
-    else
-    {
-        append_output_copy(ctx, block, rhs, modifiers, semantic, semantic_index);
-    }
-}
-
 /* Split outputs into two variables representing the temp and semantic
  * registers, and copy the former to the latter, so that reads from output
  * variables work. */
@@ -607,7 +584,7 @@ static void append_output_var_copy(struct hlsl_ctx *ctx, struct hlsl_block *bloc
         return;
     hlsl_block_add_instr(block, &load->node);
 
-    append_output_copy_recurse(ctx, block, load, var->storage_modifiers, &var->semantic, var->semantic.index);
+    attach_io_copy_recurse(false, ctx, block, load, var->storage_modifiers, &var->semantic, var->semantic.index);
 }
 
 bool hlsl_transform_ir(struct hlsl_ctx *ctx, bool (*func)(struct hlsl_ctx *ctx, struct hlsl_ir_node *, void *),
