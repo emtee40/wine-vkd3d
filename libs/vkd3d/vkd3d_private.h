@@ -899,6 +899,8 @@ struct d3d12_root_descriptor_table_range
     unsigned int vk_binding_count;
     uint32_t set;
     uint32_t binding;
+    uint32_t image_set;
+    uint32_t image_binding;
 
     enum vkd3d_shader_descriptor_type type;
     uint32_t descriptor_magic;
@@ -920,6 +922,7 @@ struct d3d12_root_constant
 
 struct d3d12_root_descriptor
 {
+    uint32_t set;
     uint32_t binding;
 };
 
@@ -941,6 +944,8 @@ struct d3d12_descriptor_set_layout
     unsigned int table_index;
 };
 
+#define VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT (VKD3D_SHADER_DESCRIPTOR_TYPE_SAMPLER + 1)
+
 /* ID3D12RootSignature */
 struct d3d12_root_signature
 {
@@ -955,6 +960,7 @@ struct d3d12_root_signature
     struct d3d12_root_parameter *parameters;
     unsigned int parameter_count;
     uint32_t main_set;
+    uint32_t set_table[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
     uint64_t descriptor_table_mask;
     uint32_t push_descriptor_mask;

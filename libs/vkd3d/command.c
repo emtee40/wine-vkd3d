@@ -2807,8 +2807,8 @@ static bool vk_write_descriptor_set_from_d3d12_desc(VkWriteDescriptorSet *vk_des
 
             if (range->descriptor_count == UINT_MAX)
             {
-                vk_descriptor_write->dstSet = vk_descriptor_sets[set + 1];
-                vk_descriptor_write->dstBinding = 0;
+                vk_descriptor_write->dstSet = vk_descriptor_sets[range->image_set];
+                vk_descriptor_write->dstBinding = range->image_binding;
             }
             else
             {
@@ -3010,8 +3010,8 @@ static void d3d12_command_list_update_push_descriptors(struct d3d12_command_list
             vk_buffer_info = NULL;
         }
 
-        if (!vk_write_descriptor_set_from_root_descriptor(&descriptor_writes[descriptor_count],
-                root_parameter, bindings->descriptor_sets[0], vk_buffer_view, vk_buffer_info))
+        if (!vk_write_descriptor_set_from_root_descriptor(&descriptor_writes[descriptor_count], root_parameter,
+                bindings->descriptor_sets[root_parameter->u.descriptor.set], vk_buffer_view, vk_buffer_info))
             continue;
 
         ++descriptor_count;
@@ -4621,7 +4621,7 @@ static void d3d12_command_list_set_root_cbv(struct d3d12_command_list *list,
     {
         d3d12_command_list_prepare_descriptors(list, bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, bindings->descriptor_sets[0], NULL, &buffer_info);
+                root_parameter, bindings->descriptor_sets[root_parameter->u.descriptor.set], NULL, &buffer_info);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
 
         VKD3D_ASSERT(index < ARRAY_SIZE(bindings->push_descriptors));
@@ -4694,7 +4694,7 @@ static void d3d12_command_list_set_root_descriptor(struct d3d12_command_list *li
     {
         d3d12_command_list_prepare_descriptors(list, bind_point);
         vk_write_descriptor_set_from_root_descriptor(&descriptor_write,
-                root_parameter, bindings->descriptor_sets[0], &vk_buffer_view,  NULL);
+                root_parameter, bindings->descriptor_sets[root_parameter->u.descriptor.set], &vk_buffer_view,  NULL);
         VK_CALL(vkUpdateDescriptorSets(list->device->vk_device, 1, &descriptor_write, 0, NULL));
 
         VKD3D_ASSERT(index < ARRAY_SIZE(bindings->push_descriptors));
