@@ -1494,8 +1494,10 @@ static HRESULT vkd3d_create_pipeline_layout(struct d3d12_device *device,
 static HRESULT d3d12_root_signature_create_descriptor_set_layouts(struct d3d12_root_signature *root_signature,
         struct vkd3d_descriptor_set_context *context)
 {
-    unsigned int i;
+    unsigned int i, descriptor_count;
+    bool unbounded;
     HRESULT hr;
+    size_t j;
 
     if (!vkd3d_validate_descriptor_set_count(root_signature->device, root_signature->vk_set_count))
         return E_INVALIDARG;
@@ -1507,10 +1509,22 @@ static HRESULT d3d12_root_signature_create_descriptor_set_layouts(struct d3d12_r
 
         VKD3D_ASSERT(array->count);
 
+        if (!(unbounded = array->unbounded_offset != UINT_MAX))
+        {
+            descriptor_count = 0;
+            for (j = 0, descriptor_count = 0; j < array->count; ++j)
+                descriptor_count += array->bindings[j].descriptorCount;
+        }
+        else
+        {
+            descriptor_count = array->unbounded_offset;
+        }
+
         if (FAILED(hr = vkd3d_create_descriptor_set_layout(root_signature->device, array->flags, array->count,
-                array->unbounded_offset != UINT_MAX, array->bindings, &layout->vk_layout)))
+                unbounded, array->bindings, &layout->vk_layout)))
             return hr;
         layout->descriptor_type = array->descriptor_type;
+        layout->descriptor_count = descriptor_count;
         layout->unbounded_offset = array->unbounded_offset;
         layout->table_index = array->table_index;
     }

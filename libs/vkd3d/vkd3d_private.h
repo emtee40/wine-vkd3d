@@ -61,9 +61,12 @@
 /* D3D12 binding tier 3 has a limit of 2048 samplers. */
 #define VKD3D_MAX_DESCRIPTOR_SET_SAMPLERS 2048u
 /* Unbounded ranges can be excessively large, so this number is used to
- * limit the maximum size. Also, descriptor pools are bound to one allocator,
- * so this number should be limited to prevent excessive pool memory use. */
+ * limit the maximum size. It also limits the maximum pool size due to
+ * geometric growth. */
 #define VKD3D_MAX_VIRTUAL_HEAP_DESCRIPTORS_PER_TYPE (16 * 1024u)
+/* Determines the starting count for each allocator,
+ * which doubles each time the allocator creates a pool. */
+#define VKD3D_BASE_VIRTUAL_HEAP_DESCRIPTORS_PER_TYPE 1024u
 
 extern uint64_t object_global_serial_id;
 
@@ -960,6 +963,7 @@ struct d3d12_descriptor_set_layout
 {
     enum vkd3d_shader_descriptor_type descriptor_type;
     VkDescriptorSetLayout vk_layout;
+    unsigned int descriptor_count;
     unsigned int unbounded_offset;
     unsigned int table_index;
 };
@@ -1161,9 +1165,15 @@ struct vkd3d_buffer
     VkDeviceMemory vk_memory;
 };
 
+struct vkd3d_vk_descriptor_pool
+{
+    unsigned int descriptor_count;
+    VkDescriptorPool vk_pool;
+};
+
 struct vkd3d_vk_descriptor_pool_array
 {
-    VkDescriptorPool *pools;
+    struct vkd3d_vk_descriptor_pool *pools;
     size_t pools_capacity;
     size_t pool_count;
 };
@@ -1179,6 +1189,7 @@ struct d3d12_command_allocator
 
     VkCommandPool vk_command_pool;
 
+    unsigned int vk_pool_sizes[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
     VkDescriptorPool vk_descriptor_pools[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
     struct vkd3d_vk_descriptor_pool_array free_descriptor_pools[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
@@ -1565,7 +1576,8 @@ struct d3d12_device
     struct vkd3d_desc_object_cache view_desc_cache;
     struct vkd3d_desc_object_cache cbuffer_desc_cache;
 
-    unsigned int vk_pool_sizes[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
+    unsigned int vk_pool_base_sizes[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
+    unsigned int vk_pool_limits[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
     struct vkd3d_vk_descriptor_heap_layout vk_descriptor_heap_layouts[VKD3D_SET_INDEX_COUNT];
     bool use_vk_heaps;
 

@@ -1256,22 +1256,37 @@ VkResult vkd3d_create_timeline_semaphore(const struct d3d12_device *device, uint
 }
 
 static bool vkd3d_vk_descriptor_pool_array_add(struct vkd3d_vk_descriptor_pool_array *array,
-        VkDescriptorPool vk_pool)
+        unsigned int descriptor_count, VkDescriptorPool vk_pool)
 {
     if (!vkd3d_array_reserve((void **)&array->pools, &array->pools_capacity,
             array->pool_count + 1, sizeof(*array->pools)))
         return false;
 
-    array->pools[array->pool_count++] = vk_pool;
+    array->pools[array->pool_count].descriptor_count = descriptor_count;
+    array->pools[array->pool_count++].vk_pool = vk_pool;
+
     return true;
 }
 
-static VkDescriptorPool vkd3d_vk_descriptor_pool_array_pop(struct vkd3d_vk_descriptor_pool_array *array)
+static VkDescriptorPool vkd3d_vk_descriptor_pool_array_find(struct vkd3d_vk_descriptor_pool_array *array,
+        unsigned int *descriptor_count)
 {
-    if (!array->pool_count)
-        return VK_NULL_HANDLE;
+    VkDescriptorPool vk_pool;
+    size_t i;
 
-    return array->pools[--array->pool_count];
+    for (i = 0; i < array->pool_count; ++i)
+    {
+        if (array->pools[i].descriptor_count >= *descriptor_count)
+        {
+            *descriptor_count = array->pools[i].descriptor_count;
+            vk_pool = array->pools[i].vk_pool;
+            array->pools[i] = array->pools[--array->pool_count];
+
+            return vk_pool;
+        }
+    }
+
+    return VK_NULL_HANDLE;
 }
 
 static void vkd3d_vk_descriptor_pool_array_destroy_pools(struct vkd3d_vk_descriptor_pool_array *array,
@@ -1281,7 +1296,7 @@ static void vkd3d_vk_descriptor_pool_array_destroy_pools(struct vkd3d_vk_descrip
     size_t i;
 
     for (i = 0; i < array->pool_count; ++i)
-        VK_CALL(vkDestroyDescriptorPool(device->vk_device, array->pools[i], NULL));
+        VK_CALL(vkDestroyDescriptorPool(device->vk_device, array->pools[i].vk_pool, NULL));
     array->pool_count = 0;
 }
 
@@ -1299,7 +1314,7 @@ static void vkd3d_vk_descriptor_pool_array_try_move(struct vkd3d_vk_descriptor_p
 
     for (i = 0; i < src->pool_count; ++i)
     {
-        VK_CALL(vkResetDescriptorPool(device->vk_device, src->pools[i], 0));
+        VK_CALL(vkResetDescriptorPool(device->vk_device, src->pools[i].vk_pool, 0));
         dst->pools[dst->pool_count++] = src->pools[i];
     }
     src->pool_count = 0;
@@ -1427,9 +1442,9 @@ static bool d3d12_command_allocator_add_framebuffer(struct d3d12_command_allocat
 }
 
 static bool d3d12_command_allocator_add_descriptor_pool(struct d3d12_command_allocator *allocator,
-        enum vkd3d_shader_descriptor_type descriptor_type, VkDescriptorPool pool)
+        enum vkd3d_shader_descriptor_type descriptor_type, unsigned int descriptor_count, VkDescriptorPool pool)
 {
-    return vkd3d_vk_descriptor_pool_array_add(&allocator->descriptor_pools[descriptor_type], pool);
+    return vkd3d_vk_descriptor_pool_array_add(&allocator->descriptor_pools[descriptor_type], descriptor_count, pool);
 }
 
 static bool d3d12_command_allocator_add_view(struct d3d12_command_allocator *allocator,
@@ -1470,7 +1485,8 @@ static bool d3d12_command_allocator_add_transfer_buffer(struct d3d12_command_all
 }
 
 static VkDescriptorPool d3d12_command_allocator_allocate_descriptor_pool(
-        struct d3d12_command_allocator *allocator, enum vkd3d_shader_descriptor_type descriptor_type)
+        struct d3d12_command_allocator *allocator, enum vkd3d_shader_descriptor_type descriptor_type,
+        unsigned int descriptor_count, bool unbounded)
 {
     struct d3d12_device *device = allocator->device;
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
@@ -1480,17 +1496,23 @@ static VkDescriptorPool d3d12_command_allocator_allocate_descriptor_pool(
     VkDescriptorPool vk_pool;
     VkResult vr;
 
-    if (!(vk_pool = vkd3d_vk_descriptor_pool_array_pop(&allocator->free_descriptor_pools[descriptor_type])))
+    if (!(vk_pool = vkd3d_vk_descriptor_pool_array_find(&allocator->free_descriptor_pools[descriptor_type],
+            &descriptor_count)))
     {
+        unsigned int pool_size = allocator->vk_pool_sizes[descriptor_type];
+        unsigned int pool_limit = device->vk_pool_limits[descriptor_type];
+
         pool_desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_desc.pNext = NULL;
         pool_desc.flags = 0;
         pool_desc.maxSets = 512;
         pool_desc.poolSizeCount = 1;
+        descriptor_count = max(descriptor_count, pool_size);
+        descriptor_count = min(descriptor_count, pool_limit);
         /* Vulkan descriptor sets contain only those descriptor types necessary to implement
          * one vkd3d descriptor type, so each pool is created for a single vkd3d type. */
         vk_pool_sizes[0].type = vk_descriptor_type_from_vkd3d_descriptor_type(descriptor_type, true);
-        vk_pool_sizes[0].descriptorCount = device->vk_pool_sizes[descriptor_type];
+        vk_pool_sizes[0].descriptorCount = descriptor_count;
         if (descriptor_type == VKD3D_SHADER_DESCRIPTOR_TYPE_SRV || descriptor_type == VKD3D_SHADER_DESCRIPTOR_TYPE_UAV)
         {
             vk_pool_sizes[1].type = vk_descriptor_type_from_vkd3d_descriptor_type(descriptor_type, false);
@@ -1503,9 +1525,18 @@ static VkDescriptorPool d3d12_command_allocator_allocate_descriptor_pool(
             ERR("Failed to create descriptor pool, vr %d.\n", vr);
             return VK_NULL_HANDLE;
         }
+
+        if (pool_size < pool_limit)
+        {
+            pool_size <<= 1;
+            if (!unbounded)
+                pool_size = max(pool_size, descriptor_count);
+            pool_size = min(pool_size, pool_limit);
+            allocator->vk_pool_sizes[descriptor_type] = pool_size;
+        }
     }
 
-    if (!(d3d12_command_allocator_add_descriptor_pool(allocator, descriptor_type, vk_pool)))
+    if (!(d3d12_command_allocator_add_descriptor_pool(allocator, descriptor_type, descriptor_count, vk_pool)))
     {
         ERR("Failed to add descriptor pool.\n");
         VK_CALL(vkDestroyDescriptorPool(vk_device, vk_pool, NULL));
@@ -1516,8 +1547,8 @@ static VkDescriptorPool d3d12_command_allocator_allocate_descriptor_pool(
 }
 
 static VkDescriptorSet d3d12_command_allocator_allocate_descriptor_set(struct d3d12_command_allocator *allocator,
-        enum vkd3d_shader_descriptor_type descriptor_type, VkDescriptorSetLayout vk_set_layout,
-        unsigned int variable_binding_size, bool unbounded)
+        enum vkd3d_shader_descriptor_type descriptor_type, unsigned int descriptor_count,
+        VkDescriptorSetLayout vk_set_layout, unsigned int variable_binding_size, bool unbounded)
 {
     struct d3d12_device *device = allocator->device;
     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
@@ -1529,7 +1560,7 @@ static VkDescriptorSet d3d12_command_allocator_allocate_descriptor_set(struct d3
 
     if (!allocator->vk_descriptor_pools[descriptor_type])
         allocator->vk_descriptor_pools[descriptor_type] = d3d12_command_allocator_allocate_descriptor_pool(allocator,
-                descriptor_type);
+                descriptor_type, descriptor_count, unbounded);
     if (!allocator->vk_descriptor_pools[descriptor_type])
         return VK_NULL_HANDLE;
 
@@ -1552,7 +1583,7 @@ static VkDescriptorSet d3d12_command_allocator_allocate_descriptor_set(struct d3
     allocator->vk_descriptor_pools[descriptor_type] = VK_NULL_HANDLE;
     if (vr == VK_ERROR_FRAGMENTED_POOL || vr == VK_ERROR_OUT_OF_POOL_MEMORY_KHR)
         allocator->vk_descriptor_pools[descriptor_type] = d3d12_command_allocator_allocate_descriptor_pool(allocator,
-                descriptor_type);
+                descriptor_type, descriptor_count, unbounded);
     if (!allocator->vk_descriptor_pools[descriptor_type])
     {
         ERR("Failed to allocate descriptor set, vr %d.\n", vr);
@@ -1897,6 +1928,7 @@ static HRESULT d3d12_command_allocator_init(struct d3d12_command_allocator *allo
     }
 
     memset(allocator->vk_descriptor_pools, 0, sizeof(allocator->vk_descriptor_pools));
+    memcpy(allocator->vk_pool_sizes, device->vk_pool_base_sizes, sizeof(allocator->vk_pool_sizes));
 
     memset(&allocator->free_descriptor_pools, 0, sizeof(allocator->free_descriptor_pools));
 
@@ -2790,7 +2822,8 @@ static void d3d12_command_list_prepare_descriptors(struct d3d12_command_list *li
         }
 
         vk_descriptor_set = d3d12_command_allocator_allocate_descriptor_set(list->allocator,
-                layout->descriptor_type, layout->vk_layout, variable_binding_size, unbounded_offset != UINT_MAX);
+                layout->descriptor_type, layout->descriptor_count + variable_binding_size, layout->vk_layout,
+                variable_binding_size, unbounded_offset != UINT_MAX);
         bindings->descriptor_sets[bindings->descriptor_set_count++] = vk_descriptor_set;
     }
 
@@ -3081,7 +3114,7 @@ static void d3d12_command_list_update_uav_counter_descriptors(struct d3d12_comma
     if (!(vk_descriptor_writes = vkd3d_calloc(uav_counter_count, sizeof(*vk_descriptor_writes))))
         return;
     if (!(vk_descriptor_set = d3d12_command_allocator_allocate_descriptor_set(list->allocator,
-            VKD3D_SHADER_DESCRIPTOR_TYPE_UAV, state->uav_counters.vk_set_layout, 0, false)))
+            VKD3D_SHADER_DESCRIPTOR_TYPE_UAV, uav_counter_count, state->uav_counters.vk_set_layout, 0, false)))
         goto done;
 
     for (i = 0; i < uav_counter_count; ++i)
@@ -5413,7 +5446,7 @@ static void d3d12_command_list_clear_uav(struct d3d12_command_list *list,
     }
 
     if (!(write_set.dstSet = d3d12_command_allocator_allocate_descriptor_set(
-            list->allocator, VKD3D_SHADER_DESCRIPTOR_TYPE_UAV, pipeline.vk_set_layout, 0, false)))
+            list->allocator, VKD3D_SHADER_DESCRIPTOR_TYPE_UAV, 1, pipeline.vk_set_layout, 0, false)))
     {
         ERR("Failed to allocate descriptor set.\n");
         return;
