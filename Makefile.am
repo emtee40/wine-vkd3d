@@ -8,7 +8,6 @@ widl_headers = \
 	include/vkd3d_d3d12sdklayers.h \
 	include/vkd3d_d3d12shader.h \
 	include/vkd3d_d3dcommon.h \
-	include/vkd3d_d3dx9shader.h \
 	include/vkd3d_dxgi.h \
 	include/vkd3d_dxgi1_2.h \
 	include/vkd3d_dxgi1_3.h \
