@@ -67,8 +67,6 @@ typedef int HRESULT;
 # define DXGI_ERROR_UNSUPPORTED _HRESULT_TYPEDEF_(0x887a0004)
 # define DXGI_ERROR_ALREADY_EXISTS _HRESULT_TYPEDEF_(0x887a0036)
 
-# define D3DERR_INVALIDCALL _HRESULT_TYPEDEF_(0x8876086c)
-
 /* Basic types */
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
@@ -95,6 +93,7 @@ typedef int64_t DECLSPEC_ALIGN(8) INT64;
 typedef uint64_t DECLSPEC_ALIGN(8) UINT64;
 # endif
 typedef INT64 LONG64, LONGLONG;
+typedef UINT64 ULONGLONG;
 typedef long LONG_PTR;
 typedef unsigned long ULONG_PTR;
 
@@ -106,6 +105,9 @@ typedef unsigned short WCHAR;
 typedef wchar_t WCHAR;
 # endif /* VKD3D_WIN32_WCHAR */
 typedef void *HANDLE;
+
+typedef struct HDC__ *HDC;
+typedef struct HMONITOR__ *HMONITOR;
 
 typedef union _LARGE_INTEGER
 {
@@ -185,6 +187,40 @@ extern "C++"
 #endif /* defined(__cplusplus) && !defined(_MSC_VER) */
 
 typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
+
+typedef struct tagPOINT
+{
+    LONG x, y;
+} POINT;
+
+typedef struct _RECT
+{
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct tagPALETTEENTRY
+{
+    BYTE peRed, peGreen, peBlue, peFlags;
+} PALETTEENTRY;
+
+typedef struct _RGNDATAHEADER
+{
+    DWORD dwSize;
+    DWORD iType;
+    DWORD nCount;
+    DWORD nRgnSize;
+    RECT rcBound;
+} RGNDATAHEADER;
+
+typedef struct _RGNDATA
+{
+    RGNDATAHEADER rdh;
+    char Buffer[1];
+} RGNDATA;
+
 #endif  /* !defined(_WIN32) || defined(__WIDL__) */
 
 
@@ -234,6 +270,16 @@ typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
 # define BEGIN_INTERFACE
 # define END_INTERFACE
 # define MIDL_INTERFACE(x) struct
+# define STDMETHOD(method)        HRESULT (STDMETHODCALLTYPE *method)
+# define STDMETHOD_(type,method)  type (STDMETHODCALLTYPE *method)
+# define DECLARE_INTERFACE(iface) \
+        typedef interface iface { const struct iface##Vtbl *lpVtbl; } iface; \
+        typedef struct iface##Vtbl iface##Vtbl; \
+        struct iface##Vtbl
+# define DECLARE_INTERFACE_(iface, base) DECLARE_INTERFACE(iface)
+# define THIS INTERFACE *This
+# define THIS_ INTERFACE *This,
+# define PURE
 
 # ifdef __cplusplus
 #  define EXTERN_C extern "C"
@@ -265,6 +311,14 @@ typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
 #elif !defined(__WIDL__)
 
 # include <windows.h>
+
+/* MinGW's definition of DECLARE_INTERFACE has a misplaced "const" before the
+ * vtbl struct definition, which generates warnings. Fix it here. */
+# undef DECLARE_INTERFACE
+# define DECLARE_INTERFACE(iface) \
+        typedef interface iface { const struct iface##Vtbl *lpVtbl; } iface; \
+        typedef struct iface##Vtbl iface##Vtbl; \
+        struct iface##Vtbl
 
 #endif  /* _WIN32 */
 

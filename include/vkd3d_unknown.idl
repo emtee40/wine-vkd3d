@@ -19,6 +19,8 @@
 cpp_quote("#ifndef __VKD3D_UNKNOWN_H")
 cpp_quote("#define __VKD3D_UNKNOWN_H")
 
+import "vkd3d_windows.h";
+
 /* For IDL only. */
 cpp_quote("#if 0")
 typedef IID *REFIID;
@@ -37,13 +39,6 @@ typedef struct LUID
     LONG HighPart;
 } LUID;
 
-typedef struct _RECT
-{
-    LONG left;
-    LONG top;
-    LONG right;
-    LONG bottom;
-} RECT;
 cpp_quote("#endif")
 
 [uuid(00000000-0000-0000-C000-000000000046), object, local, pointer_default(unique)]
