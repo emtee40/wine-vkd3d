@@ -17,6 +17,7 @@
  */
 
 import "vkd3d_windows.h";
+#include "vkd3d_unknown.idl"
 import "vkd3d_d3d9types.h";
 
 typedef enum _D3DXREGISTER_SET

@@ -71,6 +71,7 @@ typedef int HRESULT;
 
 /* Basic types */
 typedef unsigned char BYTE;
+typedef unsigned short WORD;
 typedef unsigned int DWORD;
 typedef int INT;
 typedef unsigned int UINT;
@@ -93,7 +94,7 @@ typedef unsigned __int64 UINT64;
 typedef int64_t DECLSPEC_ALIGN(8) INT64;
 typedef uint64_t DECLSPEC_ALIGN(8) UINT64;
 # endif
-typedef INT64 LONG64;
+typedef INT64 LONG64, LONGLONG;
 typedef long LONG_PTR;
 typedef unsigned long ULONG_PTR;
 
@@ -105,6 +106,16 @@ typedef unsigned short WCHAR;
 typedef wchar_t WCHAR;
 # endif /* VKD3D_WIN32_WCHAR */
 typedef void *HANDLE;
+
+typedef union _LARGE_INTEGER
+{
+    struct
+    {
+        DWORD    LowPart;
+        LONG     HighPart;
+    } u;
+    LONGLONG QuadPart;
+} LARGE_INTEGER;
 
 /* GUID */
 # ifdef __WIDL__
@@ -181,6 +192,18 @@ typedef struct SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES;
 # include <stddef.h>
 # include <stdlib.h>
 # include <string.h>
+
+#ifdef NONAMELESSUNION
+# define DUMMYUNIONNAME u
+#else
+# define DUMMYUNIONNAME
+#endif /* NONAMELESSUNION */
+
+#ifdef NONAMELESSSTRUCT
+# define DUMMYSTRUCTNAME s
+#else
+# define DUMMYSTRUCTNAME
+#endif /* NONAMELESSSTRUCT */
 
 # define COM_NO_WINDOWS_H
 
