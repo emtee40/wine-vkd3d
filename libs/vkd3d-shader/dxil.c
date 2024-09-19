@@ -4831,9 +4831,9 @@ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_int
 {
     const struct sm6_value *resource, *sampler;
     struct vkd3d_shader_src_param *src_params;
+    unsigned int clamp, coord_component_count;
     struct vkd3d_shader_instruction *ins;
     struct vkd3d_shader_register coord;
-    unsigned int clamp;
 
     resource = operands[0];
     sampler = operands[1];
@@ -4843,7 +4843,7 @@ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_int
         return;
     }
 
-    if (!sm6_parser_emit_coordinate_construct(sm6, &operands[2], 3, NULL, state, &coord))
+    if (!(coord_component_count = sm6_parser_emit_coordinate_construct(sm6, &operands[2], 3, NULL, state, &coord)))
         return;
 
     clamp = sm6_value_get_constant_uint(operands[5]);
@@ -4852,7 +4852,7 @@ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_int
     vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_LOD);
     if (!(src_params = instruction_src_params_alloc(ins, 3, sm6)))
         return;
-    src_param_init_vector_from_reg(&src_params[0], &coord);
+    src_param_init_vector_components_from_reg(&src_params[0], &coord, coord_component_count);
     src_params[1].reg = resource->u.handle.reg;
     src_param_init_scalar(&src_params[1], !clamp);
     src_param_init_vector_from_reg(&src_params[2], &sampler->u.handle.reg);
