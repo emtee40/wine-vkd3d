@@ -5096,8 +5096,8 @@ static void sm6_parser_emit_dx_dot(struct sm6_parser *sm6, enum dx_intrinsic_opc
     vsir_instruction_init(ins, &sm6->p.location, handler_idx);
     if (!(src_params = instruction_src_params_alloc(ins, 2, sm6)))
         return;
-    src_param_init_vector_from_reg(&src_params[0], &regs[0]);
-    src_param_init_vector_from_reg(&src_params[1], &regs[1]);
+    src_param_init_vector_components_from_reg(&src_params[0], &regs[0], component_count);
+    src_param_init_vector_components_from_reg(&src_params[1], &regs[1], component_count);
 
     instruction_dst_param_init_ssa_scalar(ins, sm6);
 }
