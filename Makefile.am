@@ -31,6 +31,7 @@ vkd3d_public_headers = \
 	include/vkd3d_d3dcompiler.h \
 	include/vkd3d_d3dcompiler_types.h \
 	include/vkd3d_d3dx9.h \
+	include/vkd3d_d3dx9core.h \
 	include/vkd3d_d3dx9math.h \
 	include/vkd3d_d3dx9shader.h \
 	include/vkd3d_dxgibase.h \

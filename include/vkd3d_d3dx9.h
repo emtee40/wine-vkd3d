@@ -29,6 +29,7 @@
 
 #include "vkd3d_d3d9.h"
 #include "vkd3d_d3dx9math.h"
+#include "vkd3d_d3dx9core.h"
 
 #define _FACDD 0x876
 #define MAKE_DDHRESULT(code) MAKE_HRESULT(1, _FACDD, code)

@@ -68,6 +68,7 @@ typedef int HRESULT;
 # define DXGI_ERROR_ALREADY_EXISTS _HRESULT_TYPEDEF_(0x887a0036)
 
 /* Basic types */
+typedef char CHAR;
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
 typedef unsigned int DWORD;
@@ -221,6 +222,56 @@ typedef struct _RGNDATA
     char Buffer[1];
 } RGNDATA;
 
+typedef struct tagTEXTMETRICA
+{
+    LONG tmHeight;
+    LONG tmAscent;
+    LONG tmDescent;
+    LONG tmInternalLeading;
+    LONG tmExternalLeading;
+    LONG tmAveCharWidth;
+    LONG tmMaxCharWidth;
+    LONG tmWeight;
+    LONG tmOverhang;
+    LONG tmDigitizedAspectX;
+    LONG tmDigitizedAspectY;
+    BYTE tmFirstChar;
+    BYTE tmLastChar;
+    BYTE tmDefaultChar;
+    BYTE tmBreakChar;
+    BYTE tmItalic;
+    BYTE tmUnderlined;
+    BYTE tmStruckOut;
+    BYTE tmPitchAndFamily;
+    BYTE tmCharSet;
+} TEXTMETRICA;
+
+typedef struct tagTEXTMETRICW
+{
+    LONG tmHeight;
+    LONG tmAscent;
+    LONG tmDescent;
+    LONG tmInternalLeading;
+    LONG tmExternalLeading;
+    LONG tmAveCharWidth;
+    LONG tmMaxCharWidth;
+    LONG tmWeight;
+    LONG tmOverhang;
+    LONG tmDigitizedAspectX;
+    LONG tmDigitizedAspectY;
+    WCHAR tmFirstChar;
+    WCHAR tmLastChar;
+    WCHAR tmDefaultChar;
+    WCHAR tmBreakChar;
+    BYTE tmItalic;
+    BYTE tmUnderlined;
+    BYTE tmStruckOut;
+    BYTE tmPitchAndFamily;
+    BYTE tmCharSet;
+} TEXTMETRICW;
+
+#define LF_FACESIZE 32
+
 #define MAKE_HRESULT(sev,fac,code) ((HRESULT)(((unsigned int)(sev) << 31) | ((unsigned int)(fac) << 16) | ((unsigned int)(code))))
 
 #endif  /* !defined(_WIN32) || defined(__WIDL__) */
@@ -364,6 +415,8 @@ extern "C++" \
 # define DEFINE_ENUM_FLAG_OPERATORS(type)
 #endif
 #endif /* DEFINE_ENUM_FLAG_OPERATORS */
+
+#define DECL_WINELIB_TYPE_AW(x)
 
 #endif  /* _INC_WINDOWS */
 #endif  /* __VKD3D_WINDOWS_H */
