@@ -5540,7 +5540,7 @@ static void sm6_parser_emit_dx_raw_buffer_store(struct sm6_parser *sm6, enum dx_
         return;
     src_params_init_from_operands(src_params, &operands[1], operand_count - 1);
     data.data_type = VKD3D_DATA_UINT;
-    src_param_init_vector_from_reg(&src_params[operand_count - 1], &data);
+    src_param_init_vector_components_from_reg(&src_params[operand_count - 1], &data, component_count);
 
     dst_param = instruction_dst_params_alloc(ins, 1, sm6);
     dst_param_init_with_mask(dst_param, write_mask);
