@@ -2487,6 +2487,13 @@ static void src_param_init_vector_from_reg(struct vkd3d_shader_src_param *param,
     param->reg = *reg;
 }
 
+static void src_param_init_vector_components_from_reg(struct vkd3d_shader_src_param *param,
+        const struct vkd3d_shader_register *reg, unsigned int component_count)
+{
+    src_param_init_vector(param, component_count);
+    param->reg = *reg;
+}
+
 static void src_param_make_constant_uint(struct vkd3d_shader_src_param *param, unsigned int value)
 {
     src_param_init(param);
@@ -4079,6 +4086,7 @@ static void sm6_parser_emit_atomicrmw(struct sm6_parser *sm6, const struct dxil_
         struct function_emission_state *state, struct sm6_value *dst)
 {
     struct vkd3d_shader_register coord, const_offset, const_zero;
+    const unsigned int coord_component_count = 2;
     const struct vkd3d_shader_register *regs[2];
     struct vkd3d_shader_dst_param *dst_params;
     struct vkd3d_shader_src_param *src_params;
@@ -4140,7 +4148,7 @@ static void sm6_parser_emit_atomicrmw(struct sm6_parser *sm6, const struct dxil_
         }
         register_make_constant_uint(&const_zero, 0);
         regs[1] = &const_zero;
-        if (!sm6_parser_emit_reg_composite_construct(sm6, regs, 2, state, &coord))
+        if (!sm6_parser_emit_reg_composite_construct(sm6, regs, coord_component_count, state, &coord))
             return;
     }
 
@@ -4151,7 +4159,7 @@ static void sm6_parser_emit_atomicrmw(struct sm6_parser *sm6, const struct dxil_
     if (!(src_params = instruction_src_params_alloc(ins, 2, sm6)))
         return;
     if (ptr->structure_stride)
-        src_param_init_vector_from_reg(&src_params[0], &coord);
+        src_param_init_vector_components_from_reg(&src_params[0], &coord, coord_component_count);
     else
         src_param_make_constant_uint(&src_params[0], 0);
     src_param_init_from_value(&src_params[1], src);
