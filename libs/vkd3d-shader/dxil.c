@@ -4489,7 +4489,7 @@ static bool sm6_parser_emit_composite_construct(struct sm6_parser *sm6, const st
     return sm6_parser_emit_reg_composite_construct(sm6, operand_regs, component_count, state, reg);
 }
 
-static bool sm6_parser_emit_coordinate_construct(struct sm6_parser *sm6, const struct sm6_value **operands,
+static unsigned int sm6_parser_emit_coordinate_construct(struct sm6_parser *sm6, const struct sm6_value **operands,
         unsigned int max_operands, const struct sm6_value *z_operand, struct function_emission_state *state,
         struct vkd3d_shader_register *reg)
 {
@@ -4507,7 +4507,10 @@ static bool sm6_parser_emit_coordinate_construct(struct sm6_parser *sm6, const s
         operand_regs[component_count++] = &z_operand->u.reg;
     }
 
-    return sm6_parser_emit_reg_composite_construct(sm6, operand_regs, component_count, state, reg);
+    if (!sm6_parser_emit_reg_composite_construct(sm6, operand_regs, component_count, state, reg))
+        return 0;
+
+    return component_count;
 }
 
 static enum vkd3d_shader_opcode sm6_dx_map_void_op(enum dx_intrinsic_opcode op)
@@ -4700,10 +4703,10 @@ static enum vkd3d_shader_opcode map_dx_atomic_binop(const struct sm6_value *oper
 static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
         const struct sm6_value **operands, struct function_emission_state *state)
 {
+    unsigned int i, coord_component_count, coord_idx, coord_count = 1;
     struct sm6_value *dst = sm6_parser_get_current_value(sm6);
     enum vkd3d_shader_resource_type resource_type;
     bool is_cmp_xchg = op == DX_ATOMIC_CMP_XCHG;
-    unsigned int i, coord_idx, coord_count = 1;
     struct vkd3d_shader_dst_param *dst_params;
     struct vkd3d_shader_src_param *src_params;
     enum vkd3d_shader_opcode handler_idx;
@@ -4725,12 +4728,14 @@ static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intr
     if (resource_type != VKD3D_SHADER_RESOURCE_BUFFER || resource->u.handle.d->kind == RESOURCE_KIND_STRUCTUREDBUFFER)
     {
         coord_count = 2 + (resource_type != VKD3D_SHADER_RESOURCE_BUFFER);
-        if (!sm6_parser_emit_coordinate_construct(sm6, &operands[coord_idx], coord_count, NULL, state, &reg))
+        if (!(coord_component_count = sm6_parser_emit_coordinate_construct(sm6,
+                &operands[coord_idx], coord_count, NULL, state, &reg)))
             return;
     }
     else
     {
         reg = operands[coord_idx]->u.reg;
+        coord_component_count = 1;
     }
 
     for (i = coord_idx + coord_count; i < coord_idx + 3; ++i)
@@ -4749,7 +4754,7 @@ static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intr
 
     if (!(src_params = instruction_src_params_alloc(ins, 2 + is_cmp_xchg, sm6)))
         return;
-    src_param_init_vector_from_reg(&src_params[0], &reg);
+    src_param_init_vector_components_from_reg(&src_params[0], &reg, coord_component_count);
     if (is_cmp_xchg)
         src_param_init_from_value(&src_params[1], operands[4]);
     src_param_init_from_value(&src_params[1 + is_cmp_xchg], operands[5]);
