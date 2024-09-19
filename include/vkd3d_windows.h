@@ -221,6 +221,8 @@ typedef struct _RGNDATA
     char Buffer[1];
 } RGNDATA;
 
+#define MAKE_HRESULT(sev,fac,code) ((HRESULT)(((unsigned int)(sev) << 31) | ((unsigned int)(fac) << 16) | ((unsigned int)(code))))
+
 #endif  /* !defined(_WIN32) || defined(__WIDL__) */
 
 
