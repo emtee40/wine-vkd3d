@@ -5650,7 +5650,7 @@ static void sm6_parser_emit_dx_buffer_store(struct sm6_parser *sm6, enum dx_intr
         vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
                 "Ignoring structure offset for a typed buffer store.");
     }
-    src_param_init_vector_from_reg(&src_params[1], &texel);
+    src_param_init_vector_components_from_reg(&src_params[1], &texel, component_count);
 
     dst_param = instruction_dst_params_alloc(ins, 1, sm6);
     dst_param_init_with_mask(dst_param, write_mask);
