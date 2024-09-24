@@ -4175,6 +4175,7 @@ static enum vkd3d_shader_opcode map_binary_op(uint64_t code, const struct sm6_ty
         const struct sm6_type *type_b, struct sm6_parser *sm6)
 {
     bool is_int = sm6_type_is_bool_i16_i32_i64(type_a);
+    bool is_double = sm6_type_is_double(type_a);
     bool is_bool = sm6_type_is_bool(type_a);
     enum vkd3d_shader_opcode op;
     bool is_valid;
@@ -4199,7 +4200,7 @@ static enum vkd3d_shader_opcode map_binary_op(uint64_t code, const struct sm6_ty
         case BINOP_ADD:
         case BINOP_SUB:
             /* NEG is applied later for subtraction. */
-            op = is_int ? VKD3DSIH_IADD : VKD3DSIH_ADD;
+            op = is_int ? VKD3DSIH_IADD : (is_double ? VKD3DSIH_DADD : VKD3DSIH_ADD);
             is_valid = !is_bool;
             break;
         case BINOP_AND:
@@ -4215,7 +4216,7 @@ static enum vkd3d_shader_opcode map_binary_op(uint64_t code, const struct sm6_ty
             is_valid = is_int && !is_bool;
             break;
         case BINOP_MUL:
-            op = is_int ? VKD3DSIH_UMUL : VKD3DSIH_MUL;
+            op = is_int ? VKD3DSIH_UMUL : (is_double ? VKD3DSIH_DMUL : VKD3DSIH_MUL);
             is_valid = !is_bool;
             break;
         case BINOP_OR:
@@ -4223,7 +4224,7 @@ static enum vkd3d_shader_opcode map_binary_op(uint64_t code, const struct sm6_ty
             is_valid = is_int;
             break;
         case BINOP_SDIV:
-            op = is_int ? VKD3DSIH_IDIV : VKD3DSIH_DIV;
+            op = is_int ? VKD3DSIH_IDIV : (is_double ? VKD3DSIH_DDIV : VKD3DSIH_DIV);
             is_valid = !is_bool;
             break;
         case BINOP_SREM:
