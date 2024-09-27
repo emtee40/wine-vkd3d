@@ -2967,6 +2967,94 @@ static float register_get_float_value(const struct vkd3d_shader_register *reg)
     return bitcast_uint_to_float(reg->u.immconst_u32[0]);
 }
 
+/* Based on the implementation in the OpenGL Mathematics library. */
+static uint32_t half_to_float(uint16_t value)
+{
+    uint32_t s = (value & 0x8000u) << 16;
+    uint32_t e = (value >> 10) & 0x1fu;
+    uint32_t m = value & 0x3ffu;
+
+    if (!e)
+    {
+        if (!m)
+        {
+            /* Plus or minus zero */
+            return s;
+        }
+        else
+        {
+            /* Denormalized number -- renormalize it */
+
+            while (!(m & 0x400u))
+            {
+                m <<= 1;
+                --e;
+            }
+
+            ++e;
+            m &= ~0x400u;
+        }
+    }
+    else if (e == 31u)
+    {
+        /* Positive or negative infinity for zero 'm'.
+         * Nan for non-zero 'm' -- preserve sign and significand bits */
+        return s | 0x7f800000u | (m << 13);
+    }
+
+    /* Normalized number */
+    e += 127u - 15u;
+    m <<= 13;
+
+    /* Assemble s, e and m. */
+    return s | (e << 23) | m;
+}
+
+static uint32_t convert_raw_constant32(enum vkd3d_data_type data_type, uint32_t uint_value)
+{
+    int16_t i;
+
+    /* TODO: native 16-bit support. */
+    if (data_type != VKD3D_DATA_UINT16 && data_type != VKD3D_DATA_HALF)
+        return uint_value;
+
+    if (data_type == VKD3D_DATA_HALF)
+        return half_to_float(uint_value);
+
+    /* Values in DXIL have no signedness, so it is ambiguous whether 16-bit constants should or
+     * should not be sign-extended when 16-bit execution is not supported. The AMD RX 580 Windows
+     * driver has no 16-bit support, and sign-extends all 16-bit constant ints to 32 bits. These
+     * results differ from SM 5. The RX 6750 XT supports 16-bit execution, so constants are not
+     * extended, and results match SM 5. It seems best to replicate the sign-extension, and if
+     * execution is 16-bit, the values will be truncated. */
+    i = uint_value;
+    return (int32_t)i;
+}
+
+/* Unless native 16-bit execution is enabled (which requires SM 6.2), DXIL uses 16-bit types to
+ * represent minimum-precision types, and they can be implemented in either 16 or 32 bits.
+ * VSIR represents them with 32-bit types in combination with a minimum-precision flag. */
+static enum vkd3d_data_type data_type_convert_min_precision(enum vkd3d_data_type data_type,
+        enum vkd3d_shader_register_precision *precision)
+{
+    if (data_type == VKD3D_DATA_HALF)
+    {
+        data_type = VKD3D_DATA_FLOAT;
+        *precision = VKD3D_SHADER_REGISTER_PRECISION_MIN_FLOAT_16;
+    }
+    else if (data_type == VKD3D_DATA_UINT16)
+    {
+        data_type = VKD3D_DATA_UINT;
+        *precision = VKD3D_SHADER_REGISTER_PRECISION_MIN_UINT_16;
+    }
+    else
+    {
+        *precision = VKD3D_SHADER_REGISTER_PRECISION_DEFAULT;
+    }
+
+    return data_type;
+}
+
 static enum vkd3d_result value_allocate_constant_array(struct sm6_value *dst, const struct sm6_type *type,
         const uint64_t *operands, struct sm6_parser *sm6)
 {
@@ -6697,9 +6785,9 @@ static void sm6_parser_emit_cast(struct sm6_parser *sm6, const struct dxil_recor
     if (handler_idx == VKD3DSIH_NOP)
     {
         dst->u.reg = value->u.reg;
-        /* Set the result type for casts from 16-bit min precision. */
-        if (type->u.width != 16)
-            dst->u.reg.data_type = vkd3d_data_type_from_sm6_type(type);
+        /* Set the result type for casts from 16-bit min precision. If 16-bit,
+         * this will be converted to 32-bit in vsir_program_convert_min_precision(). */
+        dst->u.reg.data_type = vkd3d_data_type_from_sm6_type(type);
         return;
     }
 
@@ -10215,6 +10303,53 @@ static struct sm6_function *sm6_parser_get_function(const struct sm6_parser *sm6
     return NULL;
 }
 
+static void register_convert_min_precision(struct vkd3d_shader_register *reg)
+{
+    unsigned int i, component_count;
+
+    if (reg->type == VKD3DSPR_IMMCONST)
+    {
+        component_count = (reg->dimension == VSIR_DIMENSION_VEC4) ? VKD3D_VEC4_SIZE : 1;
+
+        for (i = 0; i < component_count; ++i)
+            reg->u.immconst_u32[i] = convert_raw_constant32(reg->data_type, reg->u.immconst_u32[i]);
+    }
+
+    reg->data_type = data_type_convert_min_precision(reg->data_type, &reg->precision);
+
+    for (i = 0; i < reg->idx_count; ++i)
+        if (reg->idx[i].rel_addr)
+            register_convert_min_precision(&reg->idx[i].rel_addr->reg);
+}
+
+/* Handling minimum-precision types during parsing would involve passing an
+ * additional parameter wherever a vsir_register is initialised, to allow
+ * a warning to be emitted if 16-bit types are used and native 16-bit is
+ * enabled, and to suppress conversion in the latter case when support is
+ * implemented. An additional complication is that the metadata refers to
+ * registers in the SSA value table, and converting these before we are
+ * done with metadata may have side effects which would make metadata
+ * handling fragile. Instead, we convert only registers used in the final
+ * instruction array. Minimum-precision is not supported for resource
+ * component types, and input/output signatures do not use 16-bit types to
+ * flag minimum precision, so both are untouched. TODO: handle immediate
+ * constant buffers, indexable temps and TGSMs. */
+static void vsir_program_convert_min_precision(struct vsir_program *program)
+{
+    unsigned int j;
+    size_t i;
+
+    for (i = 0; i < program->instructions.count; ++i)
+    {
+        struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
+
+        for (j = 0; j < ins->src_count; ++j)
+            register_convert_min_precision(&ins->src[j].reg);
+        for (j = 0; j < ins->dst_count; ++j)
+            register_convert_min_precision(&ins->dst[j].reg);
+    }
+}
+
 static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_program *program,
         const struct vkd3d_shader_compile_info *compile_info,
         struct vkd3d_shader_message_context *message_context, struct dxbc_shader_desc *dxbc_desc)
@@ -10550,6 +10685,8 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_pro
     }
 
     dxil_block_destroy(&sm6->root_block);
+
+    vsir_program_convert_min_precision(program);
 
     if (sm6->p.failed)
     {

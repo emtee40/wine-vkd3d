@@ -3984,15 +3984,14 @@ static uint32_t spirv_compiler_emit_load_constant(struct spirv_compiler *compile
     if (reg->dimension == VSIR_DIMENSION_SCALAR)
     {
         for (i = 0; i < component_count; ++i)
-            values[i] = convert_raw_constant32(reg->data_type, reg->u.immconst_u32[0]);
+            values[i] = reg->u.immconst_u32[0];
     }
     else
     {
         for (i = 0, j = 0; i < VKD3D_VEC4_SIZE; ++i)
         {
             if (write_mask & (VKD3DSP_WRITEMASK_0 << i))
-                values[j++] = convert_raw_constant32(reg->data_type,
-                        reg->u.immconst_u32[vsir_swizzle_get_component(swizzle, i)]);
+                values[j++] = reg->u.immconst_u32[vsir_swizzle_get_component(swizzle, i)];
         }
     }
 
