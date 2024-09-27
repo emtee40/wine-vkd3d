@@ -3898,6 +3898,27 @@ static enum vkd3d_result sm6_parser_globals_init(struct sm6_parser *sm6)
     return VKD3D_OK;
 }
 
+static enum vkd3d_shader_register_precision map_signature_minimum_precision(
+        enum vkd3d_shader_minimum_precision precision)
+{
+    switch (precision)
+    {
+        case VKD3D_SHADER_MINIMUM_PRECISION_NONE:
+            return VKD3D_SHADER_REGISTER_PRECISION_DEFAULT;
+        case VKD3D_SHADER_MINIMUM_PRECISION_FLOAT_16:
+            return VKD3D_SHADER_REGISTER_PRECISION_MIN_FLOAT_16;
+        case VKD3D_SHADER_MINIMUM_PRECISION_FIXED_8_2:
+            return VKD3D_SHADER_REGISTER_PRECISION_MIN_FLOAT_10;
+        case VKD3D_SHADER_MINIMUM_PRECISION_INT_16:
+            return VKD3D_SHADER_REGISTER_PRECISION_MIN_INT_16;
+        case VKD3D_SHADER_MINIMUM_PRECISION_UINT_16:
+            return VKD3D_SHADER_REGISTER_PRECISION_MIN_UINT_16;
+        default:
+            FIXME("Unhandled minimum precision %u.\n", precision);
+            return VKD3D_SHADER_REGISTER_PRECISION_DEFAULT;
+    }
+}
+
 static void dst_param_io_init(struct vkd3d_shader_dst_param *param,
         const struct signature_element *e, enum vkd3d_shader_register_type reg_type)
 {
@@ -3910,6 +3931,7 @@ static void dst_param_io_init(struct vkd3d_shader_dst_param *param,
     component_type = e->component_type == VKD3D_SHADER_COMPONENT_INT ? VKD3D_SHADER_COMPONENT_UINT : e->component_type;
     vsir_register_init(&param->reg, reg_type, vkd3d_data_type_from_component_type(component_type), 0);
     param->reg.dimension = VSIR_DIMENSION_VEC4;
+    param->reg.precision = map_signature_minimum_precision(e->min_precision);
 }
 
 static void src_params_init_from_operands(struct vkd3d_shader_src_param *src_params,
