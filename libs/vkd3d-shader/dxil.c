@@ -9701,6 +9701,9 @@ static void sm6_parser_emit_global_flags(struct sm6_parser *sm6, const struct sm
     rotated_flags = (rotated_flags >> 1) | ((rotated_flags & 1) << 4);
     global_flags = (global_flags & ~mask) | rotated_flags;
 
+    if (global_flags & VKD3DSGF_FORCE_NATIVE_LOW_PRECISION)
+        sm6->p.program->use_native_16_bit = true;
+
     ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_GLOBAL_FLAGS);
     ins->declaration.global_flags = global_flags;
     sm6->p.program->global_flags = global_flags;
@@ -10366,10 +10369,18 @@ static void register_convert_min_precision(struct vkd3d_shader_register *reg)
  * instruction array. Minimum-precision is not supported for resource
  * component types, and input/output signatures do not use 16-bit types to
  * flag minimum precision, so both are untouched. */
-static void vsir_program_convert_min_precision(struct vsir_program *program)
+static void vsir_program_convert_min_precision(struct vsir_program *program,
+        struct vkd3d_shader_message_context *message_context, const struct vkd3d_shader_location *location)
 {
     unsigned int j;
     size_t i;
+
+    if (program->use_native_16_bit)
+    {
+        FIXME("Implementing 16-bit types as 32-bit.");
+        vkd3d_shader_warning(message_context, location, VKD3D_SHADER_WARNING_DXIL_IGNORING_FORCE_16_BIT,
+                "Implementing 16-bit types as 32-bit.");
+    }
 
     for (i = 0; i < program->instructions.count; ++i)
     {
@@ -10718,7 +10729,7 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, struct vsir_pro
 
     dxil_block_destroy(&sm6->root_block);
 
-    vsir_program_convert_min_precision(program);
+    vsir_program_convert_min_precision(program, message_context, &location);
 
     if (sm6->p.failed)
     {
