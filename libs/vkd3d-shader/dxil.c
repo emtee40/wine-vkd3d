@@ -3060,6 +3060,7 @@ static enum vkd3d_result value_allocate_constant_array(struct sm6_value *dst, co
 {
     struct vkd3d_shader_immediate_constant_buffer *icb;
     const struct sm6_type *elem_type;
+    enum vkd3d_data_type data_type;
     unsigned int i, size, count;
 
     elem_type = type->u.array.elem_type;
@@ -3103,7 +3104,8 @@ static enum vkd3d_result value_allocate_constant_array(struct sm6_value *dst, co
     dst->u.icb = icb;
 
     icb->register_idx = sm6->icb_count++;
-    icb->data_type = vkd3d_data_type_from_sm6_type(elem_type);
+    data_type = vkd3d_data_type_from_sm6_type(elem_type);
+    icb->data_type = data_type_convert_min_precision(data_type, &icb->precision);
     icb->element_count = type->u.array.count;
     icb->component_count = 1;
     icb->is_null = !operands;
@@ -3121,7 +3123,7 @@ static enum vkd3d_result value_allocate_constant_array(struct sm6_value *dst, co
     else
     {
         for (i = 0; i < count; ++i)
-            icb->data[i] = operands[i];
+            icb->data[i] = convert_raw_constant32(data_type, operands[i]);
     }
 
     return VKD3D_OK;
@@ -10332,8 +10334,8 @@ static void register_convert_min_precision(struct vkd3d_shader_register *reg)
  * handling fragile. Instead, we convert only registers used in the final
  * instruction array. Minimum-precision is not supported for resource
  * component types, and input/output signatures do not use 16-bit types to
- * flag minimum precision, so both are untouched. TODO: handle immediate
- * constant buffers, indexable temps and TGSMs. */
+ * flag minimum precision, so both are untouched. TODO: handle indexable
+ * temps and TGSMs. */
 static void vsir_program_convert_min_precision(struct vsir_program *program)
 {
     unsigned int j;

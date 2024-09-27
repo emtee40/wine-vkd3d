@@ -846,6 +846,7 @@ static void shader_sm4_read_shader_data(struct vkd3d_shader_instruction *ins, ui
     }
     icb->register_idx = 0;
     icb->data_type = VKD3D_DATA_FLOAT;
+    icb->precision = VKD3D_SHADER_REGISTER_PRECISION_DEFAULT;
     icb->component_count = VKD3D_VEC4_SIZE;
     icb->element_count = icb_size / VKD3D_VEC4_SIZE;
     icb->is_null = false;

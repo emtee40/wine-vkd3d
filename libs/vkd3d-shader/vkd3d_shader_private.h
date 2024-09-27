@@ -910,6 +910,7 @@ struct vkd3d_shader_immediate_constant_buffer
 {
     unsigned int register_idx;
     enum vkd3d_data_type data_type;
+    enum vkd3d_shader_register_precision precision;
     /* total count is element_count * component_count */
     unsigned int element_count;
     unsigned int component_count;
