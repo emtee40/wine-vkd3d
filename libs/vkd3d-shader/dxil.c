@@ -710,19 +710,9 @@ enum sm6_block_terminator_type
     TERMINATOR_RET,
 };
 
-struct terminator_case
-{
-    const struct sm6_block *block;
-    uint64_t value;
-    bool is_default;
-};
-
 struct sm6_block_terminator
 {
-    struct vkd3d_shader_register conditional_reg;
     enum sm6_block_terminator_type type;
-    struct terminator_case *cases;
-    unsigned int case_count;
 };
 
 struct sm6_block
@@ -7382,9 +7372,11 @@ static void sm6_parser_emit_switch(struct sm6_parser *sm6, const struct dxil_rec
         struct sm6_function *function, struct sm6_block *code_block, struct vkd3d_shader_instruction *ins)
 {
     struct sm6_block_terminator *terminator = &code_block->terminator;
+    struct vkd3d_shader_src_param *src_params;
     const struct sm6_type *type;
     const struct sm6_value *src;
-    unsigned int i = 1, j;
+    uint64_t case_value;
+    unsigned int i = 1;
 
     if (record->operand_count < 3 || !(record->operand_count & 1))
     {
@@ -7416,26 +7408,21 @@ static void sm6_parser_emit_switch(struct sm6_parser *sm6, const struct dxil_rec
         return;
     }
 
-    terminator->conditional_reg = src->u.reg;
-    terminator->type = TERMINATOR_SWITCH;
+    vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_SWITCH_MONOLITHIC);
 
-    terminator->case_count = record->operand_count / 2u;
-    if (!(terminator->cases = vkd3d_calloc(terminator->case_count, sizeof(*terminator->cases))))
-    {
-        ERR("Failed to allocate case array.\n");
-        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
-                "Out of memory allocating a switch case array.");
+    if (!(src_params = instruction_src_params_alloc(ins, record->operand_count, sm6)))
         return;
-    }
 
-    /* Executes 'operand_count / 2' times because operand_count is uneven. */
-    for (; i < record->operand_count; i += 2)
-    {
-        j = i / 2u - 1;
-        terminator->cases[j].block = sm6_function_get_block(function, record->operands[i], sm6);
-        /* For structurisation it is convenient to store the default in the case array. */
-        terminator->cases[j].is_default = !j;
-    }
+    src_param_init_from_value(&src_params[0], src);
+
+    if (!sm6_function_validate_block_index(function, record->operands[2], sm6))
+        return;
+    /* Set the default block label id, 1-based. */
+    vsir_src_param_init_label(&src_params[1], record->operands[2] + 1);
+    /* Set a zero merge block label id as a placeholder until it is set during the structurisation pass. */
+    vsir_src_param_init_label(&src_params[2], 0);
+
+    terminator->type = TERMINATOR_SWITCH;
 
     for (i = 3; i < record->operand_count; i += 2)
     {
@@ -7455,10 +7442,31 @@ static void sm6_parser_emit_switch(struct sm6_parser *sm6, const struct dxil_rec
                     "A switch case value is not a constant.");
         }
 
-        terminator->cases[i / 2u].value = sm6_value_get_constant_uint64(src);
-    }
+        case_value = sm6_value_get_constant_uint64(src);
 
-    ins->opcode = VKD3DSIH_NOP;
+        /* Set the case constant value. 64-bit values are supported. */
+        if (src_params[0].reg.data_type == VKD3D_DATA_UINT64)
+        {
+            vsir_src_param_init(&src_params[i], VKD3DSPR_IMMCONST64, VKD3D_DATA_UINT64, 0);
+            src_params[i].reg.u.immconst_u64[0] = case_value;
+        }
+        else
+        {
+            if (case_value > UINT_MAX)
+            {
+                WARN("Truncating 64-bit constant %"PRIx64".\n", case_value);
+                vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_TYPE_MISMATCH,
+                        "Truncating 64-bit switch case value %"PRIx64" to 32 bits.", case_value);
+            }
+            vsir_src_param_init(&src_params[i], VKD3DSPR_IMMCONST, VKD3D_DATA_UINT, 0);
+            src_params[i].reg.u.immconst_u32[0] = case_value;
+        }
+
+        if (!sm6_function_validate_block_index(function, record->operands[i + 1], sm6))
+            return;
+        /* Set the case block label id, 1-based. */
+        vsir_src_param_init_label(&src_params[i + 1], record->operands[i + 1] + 1);
+    }
 }
 
 static void sm6_parser_emit_vselect(struct sm6_parser *sm6, const struct dxil_record *record,
@@ -8032,61 +8040,11 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
 
 static void sm6_block_emit_terminator(const struct sm6_block *block, struct sm6_parser *sm6)
 {
-    struct vkd3d_shader_src_param *src_params;
-    struct vkd3d_shader_instruction *ins;
-    unsigned int i, count;
-
     switch (block->terminator.type)
     {
         case TERMINATOR_BR:
-            /* Emitted during parsing. */
-            break;
-
         case TERMINATOR_SWITCH:
-            ins = sm6_parser_add_instruction(sm6, VKD3DSIH_SWITCH_MONOLITHIC);
-            if (!(src_params = instruction_src_params_alloc(ins, block->terminator.case_count * 2u + 1, sm6)))
-                return;
-            src_param_init(&src_params[0]);
-            src_params[0].reg = block->terminator.conditional_reg;
-            /* TODO: emit the merge block id. */
-            vsir_src_param_init_label(&src_params[2], 0);
-
-            for (i = 0, count = 3; i < block->terminator.case_count; ++i)
-            {
-                const struct terminator_case *switch_case;
-                const struct sm6_block *case_block;
-
-                switch_case = &block->terminator.cases[i];
-                if (!(case_block = switch_case->block))
-                {
-                    VKD3D_ASSERT(sm6->p.failed);
-                    continue;
-                }
-                if (switch_case->is_default)
-                {
-                    vsir_src_param_init_label(&src_params[1], case_block->id);
-                    continue;
-                }
-
-                if (src_params[0].reg.data_type == VKD3D_DATA_UINT64)
-                {
-                    vsir_src_param_init(&src_params[count], VKD3DSPR_IMMCONST64, VKD3D_DATA_UINT64, 0);
-                    src_params[count++].reg.u.immconst_u64[0] = switch_case->value;
-                }
-                else
-                {
-                    if (switch_case->value > UINT_MAX)
-                    {
-                        WARN("Truncating 64-bit constant %"PRIx64".\n", switch_case->value);
-                        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_TYPE_MISMATCH,
-                                "Truncating 64-bit switch case value %"PRIx64" to 32 bits.", switch_case->value);
-                    }
-                    vsir_src_param_init(&src_params[count], VKD3DSPR_IMMCONST, VKD3D_DATA_UINT, 0);
-                    src_params[count++].reg.u.immconst_u32[0] = switch_case->value;
-                }
-                vsir_src_param_init_label(&src_params[count++], case_block->id);
-            }
-
+            /* Emitted during parsing. */
             break;
 
         case TERMINATOR_RET:
@@ -10178,7 +10136,6 @@ static void sm6_block_destroy(struct sm6_block *block)
     for (i = 0; i < block->phi_count; ++i)
         sm6_phi_destroy(&block->phi[i]);
     vkd3d_free(block->phi);
-    vkd3d_free(block->terminator.cases);
     vkd3d_free(block);
 }
 
