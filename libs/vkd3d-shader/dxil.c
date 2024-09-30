@@ -2568,21 +2568,18 @@ static size_t sm6_parser_compute_max_value_count(struct sm6_parser *sm6,
     return value_count;
 }
 
-static size_t sm6_parser_get_value_index(struct sm6_parser *sm6, uint64_t idx)
+static size_t sm6_parser_get_value_index(struct sm6_parser *sm6, uint32_t idx)
 {
     size_t i;
 
-    /* The value relative index is 32 bits. */
-    if (idx > UINT32_MAX)
-        WARN("Ignoring upper 32 bits of relative index.\n");
-    i = (uint32_t)sm6->value_count - (uint32_t)idx;
+    i = (uint32_t)sm6->value_count - idx;
 
     /* This may underflow to produce a forward reference, but it must not exceed the final value count. */
     if (i >= sm6->cur_max_value)
     {
-        WARN("Invalid value index %"PRIx64" at %zu.\n", idx, sm6->value_count);
+        WARN("Invalid value index %x at %zu.\n", idx, sm6->value_count);
         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
-                "Invalid value relative index %u.", (unsigned int)idx);
+                "Invalid value relative index %u.", idx);
         return SIZE_MAX;
     }
     if (i == sm6->value_count)
@@ -2804,6 +2801,14 @@ static size_t sm6_parser_get_value_idx_by_ref(struct sm6_parser *sm6, const stru
     if (!dxil_record_validate_operand_min_count(record, idx + 1, sm6))
         return SIZE_MAX;
     val_ref = record->operands[idx++];
+
+    /* Normally only the lower 32 bits are set in the value relative index. */
+    if (val_ref > UINT32_MAX)
+    {
+        WARN("Ignoring upper 32 bits of relative index %"PRIx64".\n", val_ref);
+        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+                "Ignoring upper 32 bits of DXIL SSA value relative index %"PRIx64".", val_ref);
+    }
 
     operand = sm6_parser_get_value_index(sm6, val_ref);
     if (operand == SIZE_MAX)
