@@ -691,16 +691,8 @@ struct sm6_symbol
 
 struct incoming_value
 {
-    const struct sm6_block *block;
-    struct vkd3d_shader_register reg;
-};
-
-struct sm6_phi
-{
-    struct vkd3d_shader_register reg;
-    struct incoming_value *incoming;
-    size_t incoming_capacity;
-    size_t incoming_count;
+    unsigned int block_idx;
+    const struct sm6_value *src;
 };
 
 struct sm6_block
@@ -711,10 +703,6 @@ struct sm6_block
 
     /* A nonzero id. */
     unsigned int id;
-
-    struct sm6_phi *phi;
-    size_t phi_capacity;
-    size_t phi_count;
 };
 
 struct sm6_function
@@ -2831,6 +2819,46 @@ static size_t sm6_parser_get_value_idx_by_ref(struct sm6_parser *sm6, const stru
     return operand;
 }
 
+/* Decode a value with the sign stored in bit 0 instead of 63. */
+static int64_t decode_rotated_signed_value(uint64_t value)
+{
+    if (value != 1)
+    {
+        bool neg = value & 1;
+        value >>= 1;
+        return neg ? -value : value;
+    }
+    /* 1 maps to INT64_MIN, but negating zero would return zero. */
+    return INT64_MIN;
+}
+
+static const struct sm6_value *sm6_parser_get_value_by_rotated_signed_idx(struct sm6_parser *sm6,
+        uint64_t idx, const struct sm6_type *fwd_type)
+{
+    int64_t rotated_idx;
+    size_t operand;
+
+    rotated_idx = decode_rotated_signed_value(idx);
+
+    /* A value <= UINT32_MAX may be ok here because the LLVM source uses the lower 32 bits
+     * to calculate the value index, and so does sm6_parser_get_value_index(), but rotated
+     * values are intended to be encoded in as few bits as possible, e.g. 0xffffffff
+     * should be encoded as 0x3, which decodes to -1. */
+    if (rotated_idx > INT32_MAX || rotated_idx < INT32_MIN)
+    {
+        WARN("Ignoring upper 32 bits of relative index %"PRIx64".\n", rotated_idx);
+        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+                "Ignoring upper 32 bits of DXIL SSA value signed relative index %"PRIx64".", rotated_idx);
+    }
+
+    if ((operand = sm6_parser_get_value_index(sm6, rotated_idx)) == SIZE_MAX)
+        return NULL;
+
+    sm6_parser_pre_init_or_validate_referenced_value(sm6, operand, fwd_type);
+
+    return &sm6->values[operand];
+}
+
 static const struct sm6_value *sm6_parser_get_value_by_ref(struct sm6_parser *sm6,
         const struct dxil_record *record, const struct sm6_type *type, unsigned int *rec_idx)
 {
@@ -2900,17 +2928,6 @@ static bool sm6_parser_declare_function(struct sm6_parser *sm6, const struct dxi
     ++sm6->value_count;
 
     return true;
-}
-
-static inline uint64_t decode_rotated_signed_value(uint64_t value)
-{
-    if (value != 1)
-    {
-        bool neg = value & 1;
-        value >>= 1;
-        return neg ? -value : value;
-    }
-    return value << 63;
 }
 
 static float bitcast_uint_to_float(unsigned int value)
@@ -3929,26 +3946,6 @@ static struct sm6_block *sm6_block_create()
     return block;
 }
 
-static struct sm6_phi *sm6_block_phi_require_space(struct sm6_block *block, struct sm6_parser *sm6)
-{
-    struct sm6_phi *phi;
-
-    if (!vkd3d_array_reserve((void **)&block->phi, &block->phi_capacity, block->phi_count + 1, sizeof(*block->phi)))
-    {
-        ERR("Failed to allocate phi array.\n");
-        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
-                "Out of memory allocating a phi instruction.");
-        return NULL;
-    }
-    phi = &block->phi[block->phi_count++];
-
-    phi->incoming = NULL;
-    phi->incoming_capacity = 0;
-    phi->incoming_count = 0;
-
-    return phi;
-}
-
 struct function_emission_state
 {
     struct sm6_block *code_block;
@@ -4356,14 +4353,6 @@ static bool sm6_function_validate_block_index(const struct sm6_function *functio
         return false;
     }
     return true;
-}
-
-static const struct sm6_block *sm6_function_get_block(const struct sm6_function *function, uint64_t index,
-        struct sm6_parser *sm6)
-{
-    if (!sm6_function_validate_block_index(function, index, sm6))
-        return NULL;
-    return function->blocks[index];
 }
 
 static void sm6_parser_emit_br(struct sm6_parser *sm6, const struct dxil_record *record,
@@ -7183,18 +7172,17 @@ static int phi_incoming_compare(const void *a, const void *b)
 {
     const struct incoming_value *incoming_a = a, *incoming_b = b;
 
-    return (incoming_a->block > incoming_b->block) - (incoming_a->block < incoming_b->block);
+    return vkd3d_u32_compare(incoming_a->block_idx, incoming_b->block_idx);
 }
 
 static void sm6_parser_emit_phi(struct sm6_parser *sm6, const struct dxil_record *record,
-        struct sm6_function *function, struct sm6_block *code_block, struct vkd3d_shader_instruction *ins,
-        struct sm6_value *dst)
+        struct sm6_function *function, struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
 {
+    struct vkd3d_shader_src_param *src_params;
+    unsigned int i, j, incoming_count;
     struct incoming_value *incoming;
     const struct sm6_type *type;
-    struct sm6_phi *phi;
-    unsigned int i, j;
-    uint64_t src_idx;
+    const struct sm6_value *src;
 
     if (!(record->operand_count & 1))
     {
@@ -7216,63 +7204,82 @@ static void sm6_parser_emit_phi(struct sm6_parser *sm6, const struct dxil_record
     }
 
     dst->type = type;
-    register_init_ssa_scalar(&dst->u.reg, type, dst, sm6);
 
-    if (!(phi = sm6_block_phi_require_space(code_block, sm6)))
-        return;
-    phi->reg = dst->u.reg;
-    phi->incoming_count = record->operand_count / 2u;
+    incoming_count = record->operand_count / 2u;
 
-    if (!vkd3d_array_reserve((void **)&phi->incoming, &phi->incoming_capacity, phi->incoming_count,
-            sizeof(*phi->incoming)))
+    if (!(incoming = vkd3d_calloc(incoming_count, sizeof(*incoming))))
     {
         ERR("Failed to allocate phi incoming array.\n");
         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
                 "Out of memory allocating a phi incoming array.");
         return;
     }
-    incoming = phi->incoming;
 
     for (i = 1; i < record->operand_count; i += 2)
     {
-        src_idx = sm6->value_count - decode_rotated_signed_value(record->operands[i]);
-        /* May be a forward reference. */
-        if (src_idx >= sm6->cur_max_value)
+        /* Phi forward references are handled by the same mechanism as all others. Constant
+         * and undefined values are never forward references, and the only other valid
+         * incoming is an SSA value, which will be initialised if necessary. */
+        if (!(src = sm6_parser_get_value_by_rotated_signed_idx(sm6, record->operands[i], type)))
+            goto done;
+
+        if (!sm6_value_is_constant(src) && !sm6_value_is_undef(src) && !sm6_value_is_ssa(src))
         {
-            WARN("Invalid value index %"PRIu64".\n", src_idx);
+            FIXME("PHI incoming value is not a constant or SSA register.\n");
             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
-                    "Invalid value index %"PRIu64" for a phi incoming value.", src_idx);
-            return;
+                    "A PHI incoming value is not a constant or SSA register.");
+            goto done;
+        }
+        if (src->type != type)
+        {
+            WARN("Type mismatch.\n");
+            vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_TYPE_MISMATCH,
+                    "The type of a phi incoming value does not match the result type.");
         }
 
+        if (!sm6_function_validate_block_index(function, record->operands[i + 1], sm6))
+            goto done;
+
         j = i / 2u;
-        /* Store the value index in the register for later resolution. */
-        incoming[j].reg.idx[0].offset = src_idx;
-        incoming[j].block = sm6_function_get_block(function, record->operands[i + 1], sm6);
+        incoming[j].src = src;
+        incoming[j].block_idx = record->operands[i + 1];
     }
 
-    ins->opcode = VKD3DSIH_NOP;
+    qsort(incoming, incoming_count, sizeof(*incoming), phi_incoming_compare);
 
-    qsort(incoming, phi->incoming_count, sizeof(*incoming), phi_incoming_compare);
-
-    for (i = 1, j = 1; i < phi->incoming_count; ++i)
+    /* Deduplicate incomings. DXIL phi instructions can contain duplicates. */
+    for (i = 1, j = 1; i < incoming_count; ++i)
     {
-        if (incoming[i].block != incoming[i - 1].block)
+        if (incoming[i].block_idx != incoming[i - 1].block_idx)
         {
             incoming[j++] = incoming[i];
             continue;
         }
 
-        if (incoming[i].reg.idx[0].offset != incoming[i - 1].reg.idx[0].offset)
+        if (incoming[i].src != incoming[i - 1].src)
         {
             WARN("PHI conflict.\n");
             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
                     "Two phi incomings have the same block but different values.");
         }
     }
-    /* if (j == 1) we should be able to set dst->u.reg to incoming[0].reg, but structurisation
-     * may potentially add new incomings. */
-    phi->incoming_count = j;
+    incoming_count = j;
+
+    vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_PHI);
+    if (!(src_params = instruction_src_params_alloc(ins, incoming_count * 2u, sm6)))
+        goto done;
+
+    for (i = 0; i < incoming_count; ++i)
+    {
+        j = i * 2u;
+        src_param_init_from_value(&src_params[j], incoming[i].src);
+        vsir_src_param_init_label(&src_params[j + 1], incoming[i].block_idx + 1);
+    }
+
+    instruction_dst_param_init_ssa_scalar(ins, sm6);
+
+done:
+    vkd3d_free(incoming);
 }
 
 static void sm6_parser_emit_ret(struct sm6_parser *sm6, const struct dxil_record *record,
@@ -7807,44 +7814,6 @@ static struct sm6_block *sm6_function_create_block(struct sm6_function *function
     return block;
 }
 
-static enum vkd3d_result sm6_function_resolve_phi_incomings(const struct sm6_function *function,
-        struct sm6_parser *sm6)
-{
-    const struct sm6_block *block;
-    size_t i, j, block_idx;
-
-    for (block_idx = 0; block_idx < function->block_count; ++block_idx)
-    {
-        block = function->blocks[block_idx];
-
-        for (i = 0; i < block->phi_count; ++i)
-        {
-            struct sm6_phi *phi = &block->phi[i];
-            const struct sm6_value *src;
-
-            for (j = 0; j < phi->incoming_count; ++j)
-            {
-                src = &sm6->values[phi->incoming[j].reg.idx[0].offset];
-                if (!sm6_value_is_constant(src) && !sm6_value_is_undef(src) && !sm6_value_is_ssa(src))
-                {
-                    FIXME("PHI incoming value is not a constant or SSA register.\n");
-                    vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
-                            "A PHI incoming value is not a constant or SSA register.");
-                    return VKD3D_ERROR_INVALID_SHADER;
-                }
-                if (src->u.reg.data_type != phi->reg.data_type)
-                {
-                    WARN("Type mismatch.\n");
-                    vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_TYPE_MISMATCH,
-                            "The type of a phi incoming value does not match the result type.");
-                }
-                phi->incoming[j].reg = src->u.reg;
-            }
-        }
-    }
-
-    return VKD3D_OK;
-}
 
 static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const struct dxil_block *block,
         struct sm6_function *function)
@@ -7977,7 +7946,7 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
                 sm6_parser_emit_load(sm6, record, ins, dst);
                 break;
             case FUNC_CODE_INST_PHI:
-                sm6_parser_emit_phi(sm6, record, function, code_block, ins, dst);
+                sm6_parser_emit_phi(sm6, record, function, ins, dst);
                 break;
             case FUNC_CODE_INST_RET:
                 sm6_parser_emit_ret(sm6, record, ins);
@@ -8032,45 +8001,7 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const 
         return VKD3D_ERROR_INVALID_SHADER;
     }
 
-    return sm6_function_resolve_phi_incomings(function, sm6);
-}
-
-static void sm6_block_emit_phi(const struct sm6_block *block, struct sm6_parser *sm6)
-{
-    struct vkd3d_shader_instruction *ins;
-    unsigned int i, j, incoming_count;
-    const struct sm6_phi *src_phi;
-
-    for (i = 0; i < block->phi_count; ++i)
-    {
-        struct vkd3d_shader_src_param *src_params;
-        struct vkd3d_shader_dst_param *dst_param;
-
-        src_phi = &block->phi[i];
-        incoming_count = src_phi->incoming_count;
-
-        ins = sm6_parser_add_instruction(sm6, VKD3DSIH_PHI);
-        if (!(src_params = instruction_src_params_alloc(ins, incoming_count * 2u, sm6)))
-            return;
-        if (!(dst_param = instruction_dst_params_alloc(ins, 1, sm6)))
-            return;
-
-        for (j = 0; j < incoming_count; ++j)
-        {
-            const struct sm6_block *incoming_block = src_phi->incoming[j].block;
-            unsigned int index = j * 2;
-
-            src_param_init(&src_params[index]);
-            src_params[index].reg = src_phi->incoming[j].reg;
-            if (incoming_block)
-                vsir_src_param_init_label(&src_params[index + 1], incoming_block->id);
-            else
-                VKD3D_ASSERT(sm6->p.failed);
-        }
-
-        dst_param_init(dst_param);
-        dst_param->reg = src_phi->reg;
-    }
+    return VKD3D_OK;
 }
 
 static enum vkd3d_result sm6_parser_module_init(struct sm6_parser *sm6, const struct dxil_block *block,
@@ -8154,14 +8085,13 @@ static enum vkd3d_result sm6_function_emit_blocks(const struct sm6_function *fun
         const struct sm6_block *block = function->blocks[i];
 
         /* Space for the label. */
-        if (!sm6_parser_require_space(sm6, block->instruction_count + block->phi_count + 1))
+        if (!sm6_parser_require_space(sm6, block->instruction_count + 1))
         {
             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
                     "Out of memory emitting shader instructions.");
             return VKD3D_ERROR_OUT_OF_MEMORY;
         }
         sm6_parser_emit_label(sm6, block->id);
-        sm6_block_emit_phi(block, sm6);
 
         memcpy(&program->instructions.elements[program->instructions.count], block->instructions,
                 block->instruction_count * sizeof(*block->instructions));
@@ -10100,19 +10030,9 @@ static void sm6_symtab_cleanup(struct sm6_symbol *symbols, size_t count)
     vkd3d_free(symbols);
 }
 
-static void sm6_phi_destroy(struct sm6_phi *phi)
-{
-    vkd3d_free(phi->incoming);
-}
-
 static void sm6_block_destroy(struct sm6_block *block)
 {
-    unsigned int i;
-
     vkd3d_free(block->instructions);
-    for (i = 0; i < block->phi_count; ++i)
-        sm6_phi_destroy(&block->phi[i]);
-    vkd3d_free(block->phi);
     vkd3d_free(block);
 }
 
