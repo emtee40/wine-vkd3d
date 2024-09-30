@@ -7268,7 +7268,11 @@ static void sm6_parser_emit_ret(struct sm6_parser *sm6, const struct dxil_record
         return;
 
     if (record->operand_count)
+    {
         FIXME("Non-void return is not implemented.\n");
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND_COUNT,
+                "Non-void return is not implemented.");
+    }
 
     vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_RET);
 }
