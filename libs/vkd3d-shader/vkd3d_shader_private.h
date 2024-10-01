@@ -924,6 +924,7 @@ struct vkd3d_shader_indexable_temp
     unsigned int register_size;
     unsigned int alignment;
     enum vkd3d_data_type data_type;
+    enum vkd3d_shader_register_precision precision;
     unsigned int component_count;
     bool has_function_scope;
     const struct vkd3d_shader_immediate_constant_buffer *initialiser;

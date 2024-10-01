@@ -3525,7 +3525,9 @@ static void sm6_parser_declare_indexable_temp(struct sm6_parser *sm6, const stru
     ins->declaration.indexable_temp.register_idx = sm6->indexable_temp_count++;
     ins->declaration.indexable_temp.register_size = count;
     ins->declaration.indexable_temp.alignment = alignment;
-    ins->declaration.indexable_temp.data_type = data_type;
+    /* Minimum-precision conversions for declarations are done during parsing. */
+    ins->declaration.indexable_temp.data_type = data_type_convert_min_precision(data_type,
+            &ins->declaration.indexable_temp.precision);
     ins->declaration.indexable_temp.component_count = 1;
     ins->declaration.indexable_temp.has_function_scope = has_function_scope;
     /* The initialiser value index will be resolved later so forward references can be handled. */
@@ -10334,8 +10336,7 @@ static void register_convert_min_precision(struct vkd3d_shader_register *reg)
  * handling fragile. Instead, we convert only registers used in the final
  * instruction array. Minimum-precision is not supported for resource
  * component types, and input/output signatures do not use 16-bit types to
- * flag minimum precision, so both are untouched. TODO: handle indexable
- * temps and TGSMs. */
+ * flag minimum precision, so both are untouched. TODO: handle TGSMs. */
 static void vsir_program_convert_min_precision(struct vsir_program *program)
 {
     unsigned int j;
