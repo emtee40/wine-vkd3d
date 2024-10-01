@@ -3541,13 +3541,20 @@ static void sm6_parser_declare_tgsm_raw(struct sm6_parser *sm6, const struct sm6
 {
     enum vkd3d_data_type data_type = vkd3d_data_type_from_sm6_type(elem_type);
     struct vkd3d_shader_instruction *ins;
+    struct vkd3d_shader_register *reg;
     unsigned int byte_count;
 
     ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_TGSM_RAW);
     dst_param_init(&ins->declaration.tgsm_raw.reg);
-    register_init_with_id(&ins->declaration.tgsm_raw.reg.reg, VKD3DSPR_GROUPSHAREDMEM, data_type, sm6->tgsm_count++);
-    dst->u.reg = ins->declaration.tgsm_raw.reg.reg;
+    reg = &ins->declaration.tgsm_raw.reg.reg;
+    register_init_with_id(reg, VKD3DSPR_GROUPSHAREDMEM, data_type, sm6->tgsm_count++);
+    dst->u.reg = *reg;
     dst->structure_stride = 0;
+
+    /* Except for declarations, minimum-precision conversions happen in
+     * a later pass, therefore dst->u.reg is set before conversion. */
+    reg->data_type = data_type_convert_min_precision(data_type, &reg->precision);
+
     ins->declaration.tgsm_raw.alignment = alignment;
     byte_count = elem_type->u.width / 8u;
     if (byte_count != 4)
@@ -10336,7 +10343,7 @@ static void register_convert_min_precision(struct vkd3d_shader_register *reg)
  * handling fragile. Instead, we convert only registers used in the final
  * instruction array. Minimum-precision is not supported for resource
  * component types, and input/output signatures do not use 16-bit types to
- * flag minimum precision, so both are untouched. TODO: handle TGSMs. */
+ * flag minimum precision, so both are untouched. */
 static void vsir_program_convert_min_precision(struct vsir_program *program)
 {
     unsigned int j;
