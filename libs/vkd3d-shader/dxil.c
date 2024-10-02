@@ -3835,6 +3835,8 @@ static enum vkd3d_shader_register_type register_type_from_dxil_semantic_kind(
             return VKD3DSPR_DEPTHOUTGE;
         case VKD3D_SHADER_SV_DEPTH_LESS_EQUAL:
             return VKD3DSPR_DEPTHOUTLE;
+        case VKD3D_SHADER_SV_PRIMITIVE_ID:
+            return VKD3DSPR_PRIMID;
         default:
             return VKD3DSPR_INVALID;
     }
@@ -8506,6 +8508,8 @@ static const enum vkd3d_shader_sysval_semantic sysval_semantic_table[] =
     [SEMANTIC_KIND_VERTEXID]             = VKD3D_SHADER_SV_VERTEX_ID,
     [SEMANTIC_KIND_INSTANCEID]           = VKD3D_SHADER_SV_INSTANCE_ID,
     [SEMANTIC_KIND_POSITION]             = VKD3D_SHADER_SV_POSITION,
+    [SEMANTIC_KIND_RTARRAYINDEX]         = VKD3D_SHADER_SV_RENDER_TARGET_ARRAY_INDEX,
+    [SEMANTIC_KIND_VIEWPORTARRAYINDEX]   = VKD3D_SHADER_SV_VIEWPORT_ARRAY_INDEX,
     [SEMANTIC_KIND_CLIPDISTANCE]         = VKD3D_SHADER_SV_CLIP_DISTANCE,
     [SEMANTIC_KIND_CULLDISTANCE]         = VKD3D_SHADER_SV_CULL_DISTANCE,
     [SEMANTIC_KIND_PRIMITIVEID]          = VKD3D_SHADER_SV_PRIMITIVE_ID,

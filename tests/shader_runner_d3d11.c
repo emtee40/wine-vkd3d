@@ -891,6 +891,21 @@ static bool d3d11_runner_draw(struct shader_runner *r,
         ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
     ID3D11DeviceContext_RSSetState(context, runner->rasterizer_state);
 
+    if (r->viewport_count)
+    {
+        D3D11_VIEWPORT viewports[ARRAY_SIZE(r->viewports)];
+        for (i = 0; i < r->viewport_count; ++i)
+        {
+            viewports[i].TopLeftX = r->viewports[i].x;
+            viewports[i].TopLeftY = r->viewports[i].y;
+            viewports[i].Width = r->viewports[i].width;
+            viewports[i].Height = r->viewports[i].height;
+            viewports[i].MinDepth = 0.0f;
+            viewports[i].MaxDepth = 1.0f;
+        }
+        ID3D11DeviceContext_RSSetViewports(runner->immediate_context, r->viewport_count, viewports);
+    }
+
     ID3D11DeviceContext_DrawInstanced(context, vertex_count, instance_count, 0, 0);
 
     ID3D11PixelShader_Release(ps);
@@ -915,7 +930,8 @@ struct d3d11_resource_readback
     ID3D11Resource *resource;
 };
 
-static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d11_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d11_shader_runner *runner = d3d11_shader_runner(r);
     struct d3d11_resource_readback *rb = malloc(sizeof(*rb));

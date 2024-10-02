@@ -353,6 +353,8 @@ static bool d3d9_runner_draw(struct shader_runner *r,
 
     if (instance_count > 1)
         fatal_error("Unhandled instance count %u.\n", instance_count);
+    if (r->viewport_count)
+        fatal_error("Unhandled viewports.\n");
 
     if (!(vs_code = compile_shader(runner, runner->r.vs_source, "vs")))
         return false;
@@ -519,7 +521,8 @@ struct d3d9_resource_readback
     IDirect3DSurface9 *surface;
 };
 
-static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res)
+static struct resource_readback *d3d9_runner_get_resource_readback(struct shader_runner *r, struct resource *res,
+        unsigned int subresource)
 {
     struct d3d9_shader_runner *runner = d3d9_shader_runner(r);
     struct d3d9_resource_readback *rb = malloc(sizeof(*rb));
