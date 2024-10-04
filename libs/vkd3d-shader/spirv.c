@@ -7370,6 +7370,7 @@ static enum GLSLstd450 spirv_compiler_map_ext_glsl_instruction(
         {VKD3DSIH_DMAX,            GLSLstd450NMax},
         {VKD3DSIH_DMIN,            GLSLstd450NMin},
         {VKD3DSIH_EXP,             GLSLstd450Exp2},
+        {VKD3DSIH_EXP_NATURAL,     GLSLstd450Exp},
         {VKD3DSIH_FIRSTBIT_HI,     GLSLstd450FindUMsb},
         {VKD3DSIH_FIRSTBIT_LO,     GLSLstd450FindILsb},
         {VKD3DSIH_FIRSTBIT_SHI,    GLSLstd450FindSMsb},
