@@ -1,7 +1,7 @@
 /*
  * Shader runner which uses libvkd3d-shader to compile HLSL -> D3D bytecode -> SPIR-V
  *
- * Copyright 2020-2022 Zebediah Figura for CodeWeavers
+ * Copyright 2020-2024 Elizabeth Figura for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -267,15 +267,27 @@ static void vulkan_runner_destroy_resource(struct shader_runner *r, struct resou
     free(resource);
 }
 
+static enum vkd3d_shader_fog_fragment_mode get_fog_fragment_mode(enum fog_mode mode)
+{
+    switch (mode)
+    {
+        case FOG_MODE_DISABLE: return VKD3D_SHADER_FOG_FRAGMENT_NONE;
+        case FOG_MODE_NONE: return VKD3D_SHADER_FOG_FRAGMENT_LINEAR;
+        default: fatal_error("Unhandled fog mode %#x.\n", mode);
+    }
+}
+
 static bool compile_hlsl_and_scan(struct vulkan_shader_runner *runner, enum shader_type type)
 {
+    struct vkd3d_shader_parameter_info parameter_info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_PARAMETER_INFO};
     struct vkd3d_shader_compile_info info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO};
+    struct vkd3d_shader_parameter1 parameters[1];
     enum vkd3d_result ret;
 
     if (!(runner->d3d_blobs[type] = compile_hlsl(&runner->r, type)))
         return false;
 
-    info.next = &runner->signatures[type];
+    info.next = &parameter_info;
     info.source.code = ID3D10Blob_GetBufferPointer(runner->d3d_blobs[type]);
     info.source.size = ID3D10Blob_GetBufferSize(runner->d3d_blobs[type]);
     if (runner->r.minimum_shader_model < SHADER_MODEL_4_0)
@@ -283,6 +295,15 @@ static bool compile_hlsl_and_scan(struct vulkan_shader_runner *runner, enum shad
     else
         info.source_type = VKD3D_SHADER_SOURCE_DXBC_TPF;
     info.target_type = VKD3D_SHADER_TARGET_SPIRV_BINARY;
+
+    parameter_info.next = &runner->signatures[type];
+    parameter_info.parameter_count = ARRAY_SIZE(parameters);
+    parameter_info.parameters = parameters;
+
+    parameters[0].name = VKD3D_SHADER_PARAMETER_NAME_FOG_FRAGMENT_MODE;
+    parameters[0].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[0].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32;
+    parameters[0].u.immediate_constant.u.u32 = get_fog_fragment_mode(runner->r.fog_mode);
 
     runner->signatures[type].type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_SIGNATURE_INFO;
     runner->signatures[type].next = NULL;
@@ -306,7 +327,7 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
     struct vkd3d_shader_varying_map varying_map[12];
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_compile_option options[2];
-    struct vkd3d_shader_parameter1 parameters[17];
+    struct vkd3d_shader_parameter1 parameters[21];
     unsigned int i;
     char *messages;
     int ret;
@@ -459,6 +480,30 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
     parameters[16].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
     parameters[16].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32;
     parameters[16].u.immediate_constant.u.u32 = runner->r.point_sprite;
+
+    parameters[17].name = VKD3D_SHADER_PARAMETER_NAME_FOG_COLOUR;
+    parameters[17].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[17].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32_VEC4;
+    memcpy(parameters[17].u.immediate_constant.u.f32_vec4, &runner->r.fog_colour, sizeof(struct vec4));
+
+    parameters[18].name = VKD3D_SHADER_PARAMETER_NAME_FOG_FRAGMENT_MODE;
+    parameters[18].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[18].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32;
+    parameters[18].u.immediate_constant.u.u32 = get_fog_fragment_mode(runner->r.fog_mode);
+
+    parameters[19].name = VKD3D_SHADER_PARAMETER_NAME_FOG_END;
+    parameters[19].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[19].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32;
+
+    parameters[20].name = VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE;
+    parameters[20].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[20].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32;
+
+    if (runner->r.fog_mode == FOG_MODE_NONE)
+    {
+        parameters[19].u.immediate_constant.u.f32 = 0.0f;
+        parameters[20].u.immediate_constant.u.f32 = -1.0f;
+    }
 
     parameter_info.parameter_count = ARRAY_SIZE(parameters);
     parameter_info.parameters = parameters;
@@ -1653,6 +1698,7 @@ static bool init_vulkan_runner(struct vulkan_shader_runner *runner)
     }
 
     runner->caps.shader_caps[SHADER_CAP_CLIP_PLANES] = true;
+    runner->caps.shader_caps[SHADER_CAP_FOG] = true;
     runner->caps.shader_caps[SHADER_CAP_POINT_SIZE] = true;
 
     device_desc.pEnabledFeatures = &features;
@@ -1754,6 +1800,9 @@ void run_shader_tests_vulkan(void)
     runner.caps.minimum_shader_model = SHADER_MODEL_2_0;
     runner.caps.maximum_shader_model = SHADER_MODEL_3_0;
     run_shader_tests(&runner.r, &runner.caps, &vulkan_runner_ops, NULL);
+
+    /* Fog requires remapping, which is only correct for sm1. */
+    runner.caps.shader_caps[SHADER_CAP_FOG] = false;
 
     runner.caps.minimum_shader_model = SHADER_MODEL_4_0;
     runner.caps.maximum_shader_model = SHADER_MODEL_5_1;

@@ -3316,13 +3316,19 @@ static uint32_t spirv_compiler_emit_variable(struct spirv_compiler *compiler,
 static const struct vkd3d_spec_constant_info
 {
     enum vkd3d_shader_parameter_name name;
-    uint32_t default_value;
+    union
+    {
+        uint32_t u;
+        float f;
+    } default_value;
     const char *debug_name;
 }
 vkd3d_shader_parameters[] =
 {
-    {VKD3D_SHADER_PARAMETER_NAME_RASTERIZER_SAMPLE_COUNT, 1, "sample_count"},
-    {VKD3D_SHADER_PARAMETER_NAME_ALPHA_TEST_REF, 0, "alpha_test_ref"},
+    {VKD3D_SHADER_PARAMETER_NAME_RASTERIZER_SAMPLE_COUNT, {.u = 1}, "sample_count"},
+    {VKD3D_SHADER_PARAMETER_NAME_ALPHA_TEST_REF, {.f = 0.0}, "alpha_test_ref"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_END, {.f = 1.0}, "fog_end"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE, {.f = 1.0}, "fog_scale"},
 };
 
 static const struct vkd3d_spec_constant_info *get_spec_constant_info(enum vkd3d_shader_parameter_name name)
@@ -3383,7 +3389,7 @@ static uint32_t spirv_compiler_emit_spec_constant(struct spirv_compiler *compile
     const struct vkd3d_spec_constant_info *info;
 
     info = get_spec_constant_info(name);
-    default_value = info ? info->default_value : 0;
+    default_value = info ? info->default_value.u : 0;
 
     scalar_type_id = vkd3d_spirv_get_type_id(builder, vkd3d_component_type_from_data_type(type), 1);
     vector_type_id = vkd3d_spirv_get_type_id(builder, vkd3d_component_type_from_data_type(type), component_count);

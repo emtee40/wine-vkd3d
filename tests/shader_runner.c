@@ -335,6 +335,7 @@ static const char *const shader_cap_strings[] =
     [SHADER_CAP_CLIP_PLANES]     = "clip-planes",
     [SHADER_CAP_DEPTH_BOUNDS]    = "depth-bounds",
     [SHADER_CAP_FLOAT64]         = "float64",
+    [SHADER_CAP_FOG]             = "fog",
     [SHADER_CAP_GEOMETRY_SHADER] = "geometry-shader",
     [SHADER_CAP_INT64]           = "int64",
     [SHADER_CAP_POINT_SIZE]      = "point-size",
@@ -1424,6 +1425,28 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
         else
             runner->point_sprite = false;
     }
+    else if (match_string(line, "fog", &line))
+    {
+        if (match_string(line, "disable", &line))
+            runner->fog_mode = FOG_MODE_DISABLE;
+        else if (match_string(line, "none", &line))
+            runner->fog_mode = FOG_MODE_NONE;
+        else if (match_string(line, "linear", &line))
+            runner->fog_mode = FOG_MODE_LINEAR;
+        else if (match_string(line, "exp", &line))
+            runner->fog_mode = FOG_MODE_EXP;
+        else if (match_string(line, "exp2", &line))
+            runner->fog_mode = FOG_MODE_EXP2;
+        else
+            fatal_error("Invalid fog mode '%s'.\n", line);
+    }
+    else if (match_string(line, "fog-colour", &line))
+    {
+        struct vec4 *v = &runner->fog_colour;
+
+        if (sscanf(line, "%f %f %f %f", &v->x, &v->y, &v->z, &v->w) < 4)
+            fatal_error("Malformed float4 constant '%s'.\n", line);
+    }
     else
     {
         fatal_error("Unknown test directive '%s'.\n", line);
@@ -1872,6 +1895,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     runner->point_size = 1.0f;
     runner->point_size_min = 1.0f;
     runner->point_size_max = FLT_MAX;
+    runner->fog_mode = FOG_MODE_DISABLE;
 
     runner->sample_mask = ~0u;
     runner->depth_bounds = false;

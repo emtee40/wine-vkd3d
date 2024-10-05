@@ -27,3 +27,46 @@ float4 main(float2 fog : fog) : sv_target
 [test]
 todo(msl) draw quad
 probe (0, 0) rgba (0.1, 0.2, 0, 1)
+
+
+[require]
+fog
+
+[input layout]
+0 r32g32b32a32-float position
+
+[vb 0]
+-1.0 -1.0 0.2 1.0
+-1.0  1.0 0.2 1.0
+ 1.0 -1.0 0.6 1.0
+ 1.0  1.0 0.6 1.0
+
+[vertex shader]
+float4 main(float4 pos : position, out float fog : fog) : sv_position
+{
+    fog = 0.2;
+    return pos;
+}
+
+[pixel shader]
+float4 main() : sv_target
+{
+    return float4(0, 0, 1, 1);
+}
+
+[test]
+fog-colour 0.0 1.0 1.0 1.0
+
+fog disable
+draw triangle strip 4
+probe (160, 120) rgba (0.0, 0.0, 1.0, 1.0)
+probe (480, 360) rgba (0.0, 0.0, 1.0, 1.0)
+probe (160, 120) rgba (0.0, 0.0, 1.0, 1.0)
+probe (480, 360) rgba (0.0, 0.0, 1.0, 1.0)
+
+fog none
+draw triangle strip 4
+probe (160, 120) rgba (0.0, 0.8, 1.0, 1.0)
+probe (480, 360) rgba (0.0, 0.8, 1.0, 1.0)
+probe (160, 120) rgba (0.0, 0.8, 1.0, 1.0)
+probe (480, 360) rgba (0.0, 0.8, 1.0, 1.0)

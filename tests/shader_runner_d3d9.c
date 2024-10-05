@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Zebediah Figura for CodeWeavers
+ * Copyright 2021-2024 Elizabeth Figura for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -145,6 +145,7 @@ static bool init_test_context(struct d3d9_shader_runner *runner)
     runner->caps.minimum_shader_model = SHADER_MODEL_2_0;
     runner->caps.maximum_shader_model = SHADER_MODEL_3_0;
     runner->caps.shader_caps[SHADER_CAP_CLIP_PLANES] = true;
+    runner->caps.shader_caps[SHADER_CAP_FOG] = true;
     runner->caps.shader_caps[SHADER_CAP_POINT_SIZE] = true;
 
     return true;
@@ -325,16 +326,19 @@ static bool d3d9_runner_dispatch(struct shader_runner *r, unsigned int x, unsign
     fatal_error("Compute shaders are not supported.\n");
 }
 
+static uint32_t d3d_color_from_vec4(const struct vec4 *v)
+{
+    return vkd3d_make_u32(vkd3d_make_u16(v->z * 255.0, v->y * 255.0),
+            vkd3d_make_u16(v->x * 255.0, v->w * 255.0));
+}
+
 static void d3d9_runner_clear(struct shader_runner *r, struct resource *resource, const struct vec4 *clear_value)
 {
     struct d3d9_shader_runner *runner = d3d9_shader_runner(r);
-    unsigned int colour;
     HRESULT hr;
 
-    colour = vkd3d_make_u32(vkd3d_make_u16(clear_value->z * 255.0, clear_value->y * 255.0),
-            vkd3d_make_u16(clear_value->x * 255.0, clear_value->w * 255.0));
-
-    hr = IDirect3DDevice9_ColorFill(runner->device, d3d9_resource(resource)->surface, NULL, colour);
+    hr = IDirect3DDevice9_ColorFill(runner->device, d3d9_resource(resource)->surface,
+            NULL, d3d_color_from_vec4(clear_value));
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 }
 
@@ -496,6 +500,16 @@ static bool d3d9_runner_draw(struct shader_runner *r,
     hr = IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE_MAX, float_to_int(runner->r.point_size_max));
     ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
     hr = IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSPRITEENABLE, runner->r.point_sprite);
+    ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGENABLE, (runner->r.fog_mode != FOG_MODE_DISABLE));
+    ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+    if (runner->r.fog_mode != FOG_MODE_DISABLE)
+    {
+        hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGTABLEMODE, runner->r.fog_mode);
+        ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+    }
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGCOLOR, d3d_color_from_vec4(&runner->r.fog_colour));
     ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
 
     hr = IDirect3DDevice9_CreateVertexDeclaration(device, decl_elements, &vertex_declaration);
