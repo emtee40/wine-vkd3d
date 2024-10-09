@@ -3671,6 +3671,38 @@ static bool intrinsic_cross(struct hlsl_ctx *ctx,
     return !!add_binary_arithmetic_expr(ctx, params->instrs, HLSL_OP2_ADD, mul2, mul1_neg, loc);
 }
 
+/* TODO: SM5 has a countbits opcode, which may be worth implementing for more efficiency.
+ */
+static bool intrinsic_countbits(struct hlsl_ctx *ctx,
+        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_function_decl *func;
+    struct hlsl_type *type;
+    char *body;
+
+    /* Based on https://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetParallel */
+    static const char template[] =
+            "%s countbits(%s x)\n"
+            "{\n"
+            "    x = x - ((x >> 1) & 0x55555555);\n"
+            "    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);\n"
+            "    return ((x + (x >> 4) & 0x0F0F0F0F) * 0x01010101) >> 24;\n"
+            "}\n";
+
+    if (!(type = elementwise_intrinsic_get_common_type(ctx, params, loc)))
+        return false;
+    type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_UINT, type->dimx, type->dimy);
+
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name)))
+        return false;
+    func = hlsl_compile_internal_function(ctx, "countbits", body);
+    vkd3d_free(body);
+    if (!func)
+        return false;
+
+    return add_user_call(ctx, func, params, loc);
+}
+
 static bool intrinsic_ddx(struct hlsl_ctx *ctx,
         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
 {
@@ -3984,6 +4016,114 @@ static bool intrinsic_f16tof32(struct hlsl_ctx *ctx,
 
     operands[0] = params->args[0];
     return add_expr(ctx, params->instrs, HLSL_OP1_F16TOF32, operands, type, loc);
+}
+
+/* TODO: SM5 has a firstbit_hi/firstbit_shi opcode,
+ * which may be worth implementing for more efficiency. */
+static bool intrinsic_firstbithigh(struct hlsl_ctx *ctx,
+        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_function_decl *func;
+    struct hlsl_ir_node *arg;
+    struct hlsl_type *type;
+    char *body;
+
+    /* Based on graphics.stanford.edu/~seander/bithacks.html
+     * "Find the log base 2 of an N-bit integer in O(lg(N)) operations"
+     *
+     * firstbithigh has strange semantics:
+     * - For unsigned values, it returns the bit position of the most
+     *   significant set bit.
+     * - For signed values, if the value is *positive* it returns the position
+     *   of the most significant set bit as above. If the value is *negative*,
+     *   it returns the position of the most significant UNSET bit!
+     * All indices count from the least significant bit.
+     */
+    static const char template[] =
+            "%s firstbithigh(%s x)\n"
+            "{\n"
+            /* For signed numbers, if x < 0, then actually find the first
+             * *low* bit.
+             * (If x is unsigned, x < 0 is always false, conveniently.) */
+            "    x = (x < 0) ? ~x : x;"
+            "    %s r, shift, v = x;\n"
+            "    r = (v > 0xFFFF) << 4; v >>= r;\n"
+            "    shift = (v > 0xFF) << 3; \n"
+            "    v >>= shift; r |= shift;\n"
+            "    shift = (v > 0xF) << 2;\n"
+            "    v >>= shift; r |= shift;\n"
+            "    shift = (v > 0x3) << 1;\n"
+            "    v >>= shift; r |= shift;\n"
+            "    r |= (v >> 1);\n"
+            /* In all cases, the bit is indexed from the right. */
+            "    return (x == 0) ? -1 : r;\n"
+            "}\n";
+
+    arg = params->args[0];
+    type = arg->data_type;
+    if (type->e.numeric.type != HLSL_TYPE_INT && type->e.numeric.type != HLSL_TYPE_UINT)
+    {
+        struct vkd3d_string_buffer *string;
+
+        if ((string = hlsl_type_to_string(ctx, type)))
+            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                    "Wrong type for argument 0 of firstbithigh(): expected 'int' or 'uint', but got '%s'.",
+                    string->buffer);
+        hlsl_release_string_buffer(ctx, string);
+    }
+
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name,
+        type->name)))
+        return false;
+    func = hlsl_compile_internal_function(ctx, "firstbithigh", body);
+    vkd3d_free(body);
+    if (!func)
+        return false;
+
+    return add_user_call(ctx, func, params, loc);
+}
+
+/* TODO: SM5 has a firstbit_lo opcode, which may be worth implementing for more efficiency. */
+static bool intrinsic_firstbitlow(struct hlsl_ctx *ctx,
+        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_function_decl *func;
+    struct hlsl_type *type;
+    char *body;
+
+    /* Based on graphics.stanford.edu/~seander/bithacks.html
+     * "Count the consecutive zero bits (trailing) on the right
+     *  in parallel".
+     * Due to counting from 0, this is the same as the index of
+     * the first bit set. */
+    static const char template[] =
+            "%s firstbitlow(%s v)\n"
+            "{\n"
+            "    %s c = 32;\n"
+            "    v &= -v;\n"
+            "    c -= v                ? 1  : 0;\n"
+            "    c -= (v & 0x0000FFFF) ? 16 : 0;\n"
+            "    c -= (v & 0x00FF00FF) ? 8  : 0;\n"
+            "    c -= (v & 0x0F0F0F0F) ? 4  : 0;\n"
+            "    c -= (v & 0x33333333) ? 2  : 0;\n"
+            "    c -= (v & 0x55555555) ? 1  : 0;\n"
+            /* Native behavior is firstbitlow(0) == -1 */
+            "    return v == 0 ? -1 : c;\n"
+            "}\n";
+
+    if (!(type = elementwise_intrinsic_get_common_type(ctx, params, loc)))
+        return false;
+    type = hlsl_get_numeric_type(ctx, type->class, HLSL_TYPE_UINT, type->dimx, type->dimy);
+
+    if (!(body = hlsl_sprintf_alloc(ctx, template, type->name, type->name,
+        type->name)))
+        return false;
+    func = hlsl_compile_internal_function(ctx, "firstbitlow", body);
+    vkd3d_free(body);
+    if (!func)
+        return false;
+
+    return add_user_call(ctx, func, params, loc);
 }
 
 static bool intrinsic_floor(struct hlsl_ctx *ctx,
@@ -5117,6 +5257,7 @@ intrinsic_functions[] =
     {"clip",                                1, true,  intrinsic_clip},
     {"cos",                                 1, true,  intrinsic_cos},
     {"cosh",                                1, true,  intrinsic_cosh},
+    {"countbits",                           1, true,  intrinsic_countbits},
     {"cross",                               2, true,  intrinsic_cross},
     {"ddx",                                 1, true,  intrinsic_ddx},
     {"ddx_coarse",                          1, true,  intrinsic_ddx_coarse},
@@ -5133,6 +5274,8 @@ intrinsic_functions[] =
     {"exp2",                                1, true,  intrinsic_exp2},
     {"f16tof32",                            1, true,  intrinsic_f16tof32},
     {"faceforward",                         3, true,  intrinsic_faceforward},
+    {"firstbithigh",                        1, true,  intrinsic_firstbithigh},
+    {"firstbitlow",                         1, true,  intrinsic_firstbitlow},
     {"floor",                               1, true,  intrinsic_floor},
     {"fmod",                                2, true,  intrinsic_fmod},
     {"frac",                                1, true,  intrinsic_frac},
