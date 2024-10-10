@@ -5313,10 +5313,9 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
 }
 
 static void spirv_compiler_emit_input_register(struct spirv_compiler *compiler,
-        const struct vkd3d_shader_dst_param *dst)
+        const struct vkd3d_shader_register *reg)
 {
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
-    const struct vkd3d_shader_register *reg = &dst->reg;
     const struct vkd3d_spirv_builtin *builtin;
     struct vkd3d_symbol reg_symbol;
     struct rb_entry *entry;
@@ -5849,12 +5848,10 @@ static void spirv_compiler_emit_shader_epilogue_function(struct spirv_compiler *
 
 static void spirv_compiler_emit_hull_shader_builtins(struct spirv_compiler *compiler)
 {
-    struct vkd3d_shader_dst_param dst;
+    struct vkd3d_shader_register reg;
 
-    memset(&dst, 0, sizeof(dst));
-    vsir_register_init(&dst.reg, VKD3DSPR_OUTPOINTID, VKD3D_DATA_FLOAT, 0);
-    dst.write_mask = VKD3DSP_WRITEMASK_0;
-    spirv_compiler_emit_input_register(compiler, &dst);
+    vsir_register_init(&reg, VKD3DSPR_OUTPOINTID, VKD3D_DATA_FLOAT, 0);
+    spirv_compiler_emit_input_register(compiler, &reg);
 }
 
 static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *compiler)
@@ -6692,13 +6689,13 @@ static void spirv_compiler_emit_dcl_tgsm_structured(struct spirv_compiler *compi
 static void spirv_compiler_emit_dcl_input(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
-    const struct vkd3d_shader_dst_param *dst = &instruction->declaration.dst;
+    const struct vkd3d_shader_register *reg = &instruction->declaration.dst.reg;
 
     /* INPUT and PATCHCONST are handled in spirv_compiler_emit_io_declarations().
      * OUTPOINTID is handled in spirv_compiler_emit_hull_shader_builtins(). */
-    if (dst->reg.type != VKD3DSPR_INPUT && dst->reg.type != VKD3DSPR_PATCHCONST
-            && dst->reg.type != VKD3DSPR_OUTPOINTID)
-        spirv_compiler_emit_input_register(compiler, dst);
+    if (reg->type != VKD3DSPR_INPUT && reg->type != VKD3DSPR_PATCHCONST
+            && reg->type != VKD3DSPR_OUTPOINTID)
+        spirv_compiler_emit_input_register(compiler, reg);
 }
 
 static void spirv_compiler_emit_dcl_output(struct spirv_compiler *compiler,
@@ -10598,10 +10595,10 @@ static void spirv_compiler_emit_io_declarations(struct spirv_compiler *compiler)
 
     if (compiler->program->has_point_coord)
     {
-        struct vkd3d_shader_dst_param dst;
+        struct vkd3d_shader_register reg;
 
-        vsir_dst_param_init(&dst, VKD3DSPR_POINT_COORD, VKD3D_DATA_FLOAT, 0);
-        spirv_compiler_emit_input_register(compiler, &dst);
+        vsir_register_init(&reg, VKD3DSPR_POINT_COORD, VKD3D_DATA_FLOAT, 0);
+        spirv_compiler_emit_input_register(compiler, &reg);
     }
 }
 
