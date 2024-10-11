@@ -1,0 +1,632 @@
+[require]
+shader model >= 4.0
+
+[input layout]
+0 r32g32-float POSITION
+1 r32-float CLIP_DISTANCE
+
+[vb 0]
+-1.0 -1.0
+-1.0  1.0
+ 1.0 -1.0
+ 1.0  1.0
+
+[vb 1]
+1.0
+1.0
+1.0
+1.0
+
+[rtv 0]
+format r32g32b32a32-float
+size (2d, 640, 480)
+
+[vertex shader todo]
+struct input
+{
+    float4 position : POSITION;
+    float distance : CLIP_DISTANCE;
+};
+
+struct vertex
+{
+    float4 position : SV_POSITION;
+    float clip : SV_ClipDistance;
+};
+
+void main(input vin, out vertex vertex)
+{
+    vertex.position = vin.position;
+    vertex.clip = vin.distance;
+}
+
+[pixel shader]
+float4 main(const in float4 position : SV_Position) : SV_Target
+{
+    return float4(0.0f, 1.0f, 0.0f, 1.0f);
+}
+
+[test]
+clear rtv 0 1.0 1.0 1.0 1.0
+todo(sm<6) draw triangle strip 4
+probe (0, 0, 640, 480) rgba (0.0, 1.0, 0.0, 1.0)
+
+[vb 1]
+0.0
+0.0
+0.0
+0.0
+
+[test]
+clear rtv 0 1.0 1.0 1.0 1.0
+todo(sm<6) draw triangle strip 4
+probe (0, 0, 640, 480) rgba (0.0, 1.0, 0.0, 1.0)
+
+[vb 1]
+-1.0
+-1.0
+-1.0
+-1.0
+
+[test]
+clear rtv 0 1.0 1.0 1.0 1.0
+todo(sm<6) draw triangle strip 4
+probe (0, 0, 640, 480) rgba (1.0, 1.0, 1.0, 1.0)
+
+[vb 1]
+1.0
+1.0
+-1.0
+-1.0
+
+[test]
+clear rtv 0 1.0 1.0 1.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 1.0, 1.0)
+
+[vb 1]
+-1.0
+1.0
+-1.0
+1.0
+
+[test]
+clear rtv 0 1.0 1.0 1.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (320, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 1.0, 1.0)
+
+% A single clip distance
+
+[vertex shader todo]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    float clip : SV_ClipDistance;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.clip = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (0.0, 1.0, 0.0, 1.0)
+
+% A single clip distance, disguised as an array
+
+[vertex shader todo]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    float clip[1] : SV_ClipDistance1;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.clip[0] = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (0.0, 1.0, 0.0, 1.0)
+
+% Two clip distances
+
+[vertex shader todo]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    o.clip.y = 0.15f + 0.6f * pos.x - 0.4f * pos.y;
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (0.0, 1.0, 0.0, 1.0)
+
+% Five clip distances
+
+[vertex shader todo]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float3 clip2 : SV_ClipDistance1;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    o.clip.y = 0.15f + 0.6f * pos.x - 0.4f * pos.y;
+    o.clip2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    o.clip2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+    o.clip2.z = 0.25f - 0.6f * pos.x - 0.4f * pos.y;
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (1.0, 1.0, 0.0, 1.0)
+
+% Now it works. Here all the cull distances are effectively ignored, because
+% they do not leave the only triangle entirely on one side (also, they
+% coincide with other clip distances)
+
+[vertex shader todo]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float3 clip2 : SV_ClipDistance1;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    o.clip.y = 0.15f + 0.6f * pos.x - 0.4f * pos.y;
+    o.clip2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    o.clip2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+    o.clip2.z = 0.25f - 0.6f * pos.x - 0.4f * pos.y;
+    o.cull.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    o.cull2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    o.cull2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (1.0, 1.0, 0.0, 1.0)
+
+% Let clip and cull distances go through a geometry shader
+
+[geometry shader todo]
+struct vs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float3 clip2 : SV_ClipDistance1;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+    [maxvertexcount(3)]
+void main(triangle vs_out input[3], inout TriangleStream<vs_out> stream)
+{
+    unsigned int i;
+    vs_out output;
+
+    for (i = 0; i < 3; ++i)
+    {
+        output = input[i];
+        stream.Append(output);
+    }
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (1.0, 1.0, 0.0, 1.0)
+
+% Generate clip and cull distances in the geometry shader
+
+[vertex shader]
+static const float2 vertices[3] =
+{
+    {-1.0f,  1.0f},
+    { 3.0f,  1.0f},
+    {-1.0f, -3.0f},
+};
+
+struct vs_out
+{
+    float4 position : SV_Position;
+    uint id : VERTEXID;
+};
+
+void main(uint id : SV_VertexID, out vs_out o)
+{
+    const float2 pos = vertices[id];
+    o.position = float4(pos, 0.0f, 1.0f);
+    o.id = id;
+}
+
+[geometry shader todo]
+struct vs_out
+{
+    float4 position : SV_Position;
+    uint id : VERTEXID;
+};
+
+struct gs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float3 clip2 : SV_ClipDistance1;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+void emit_position(float4 pos, inout TriangleStream<gs_out> stream)
+{
+    gs_out output;
+
+    output.position = pos;
+    output.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    output.clip.y = 0.15f + 0.6f * pos.x - 0.4f * pos.y;
+    output.clip2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    output.clip2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+    output.clip2.z = 0.25f - 0.6f * pos.x - 0.4f * pos.y;
+    output.cull.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    output.cull2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    output.cull2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+
+    stream.Append(output);
+}
+
+    [maxvertexcount(3)]
+void main(triangle vs_out input[3], inout TriangleStream<gs_out> stream)
+{
+    unsigned int i;
+
+    for (i = 0; i < 3; ++i)
+        emit_position(input[i].position, stream);
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (1.0, 1.0, 0.0, 1.0)
+
+% Now let's test cull distances for real: we remove the clip distances
+% they duplicate and use the geometry shader to create many little triangles
+% around the test points; first we check that we're drawing properly disabling
+% all clipping and culling
+
+[geometry shader todo]
+struct vs_out
+{
+    float4 position : SV_Position;
+    uint id : VERTEXID;
+};
+
+struct gs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+void emit_position(float4 pos, inout TriangleStream<gs_out> stream)
+{
+    gs_out output;
+
+    output.position = pos;
+    output.clip = 1.0f;
+    output.cull = 1.0f;
+    output.cull2 = 1.0f;
+
+    stream.Append(output);
+}
+
+static const float4 displacements[3] =
+{
+    { 0.01f,  0.01f, 0.0f, 0.0f},
+    {-0.02f,  0.01f, 0.0f, 0.0f},
+    { 0.01f, -0.02f, 0.0f, 0.0f},
+};
+
+    [maxvertexcount(27)]
+void main(triangle vs_out input[3], inout TriangleStream<gs_out> stream)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < 3; ++i)
+    {
+        for (j = 0; j < 3; ++j)
+        {
+            float4 pos = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            pos.x = 0.5f - 0.5f * i;
+            pos.y = 0.5f - 0.5f * j;
+
+            emit_position(pos + displacements[0], stream);
+            emit_position(pos + displacements[1], stream);
+            emit_position(pos + displacements[2], stream);
+
+            stream.RestartStrip();
+        }
+    }
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (0.0, 1.0, 0.0, 1.0)
+
+% Then we add clipping and culling: at first only a few distances
+
+[geometry shader todo]
+struct vs_out
+{
+    float4 position : SV_Position;
+    uint id : VERTEXID;
+};
+
+struct gs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+void emit_position(float4 pos, inout TriangleStream<gs_out> stream)
+{
+    gs_out output;
+
+    output.position = pos;
+    output.clip = 1.0f;
+    output.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    output.cull = 1.0f;
+    output.cull.x = 0.25f - 0.6f * pos.x - 0.4f * pos.y;
+    output.cull2 = 1.0f;
+
+    stream.Append(output);
+}
+
+static const float4 displacements[3] =
+{
+    { 0.01f,  0.01f, 0.0f, 0.0f},
+    {-0.02f,  0.01f, 0.0f, 0.0f},
+    { 0.01f, -0.02f, 0.0f, 0.0f},
+};
+
+    [maxvertexcount(27)]
+void main(triangle vs_out input[3], inout TriangleStream<gs_out> stream)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < 3; ++i)
+    {
+        for (j = 0; j < 3; ++j)
+        {
+            float4 pos = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            pos.x = 0.5f - 0.5f * i;
+            pos.y = 0.5f - 0.5f * j;
+
+            emit_position(pos + displacements[0], stream);
+            emit_position(pos + displacements[1], stream);
+            emit_position(pos + displacements[2], stream);
+
+            stream.RestartStrip();
+        }
+    }
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (0.0, 1.0, 0.0, 1.0)
+
+% Then enough to get rid of nearly all test points
+
+[geometry shader todo]
+struct vs_out
+{
+    float4 position : SV_Position;
+    uint id : VERTEXID;
+};
+
+struct gs_out
+{
+    float4 position : SV_Position;
+    float2 clip : SV_ClipDistance;
+    float2 cull2 : SV_CullDistance1;
+    float1 cull : SV_CullDistance;
+};
+
+void emit_position(float4 pos, inout TriangleStream<gs_out> stream)
+{
+    gs_out output;
+
+    output.position = pos;
+    output.clip.x = 0.15f + 0.6f * pos.x + 0.4f * pos.y;
+    output.clip.y = 0.15f + 0.6f * pos.x - 0.4f * pos.y;
+    output.cull.x = 0.25f - 0.6f * pos.x - 0.4f * pos.y;
+    output.cull2.x = 0.55f - 0.6f * pos.x + 0.4f * pos.y;
+    output.cull2.y = 0.25f - 0.6f * pos.x + 0.4f * pos.y;
+
+    stream.Append(output);
+}
+
+static const float4 displacements[3] =
+{
+    { 0.05f,  0.05f, 0.0f, 0.0f},
+    {-0.1f,   0.05f, 0.0f, 0.0f},
+    { 0.05f, -0.1f,  0.0f, 0.0f},
+};
+
+    [maxvertexcount(27)]
+void main(triangle vs_out input[3], inout TriangleStream<gs_out> stream)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < 3; ++i)
+    {
+        for (j = 0; j < 3; ++j)
+        {
+            float4 pos = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            pos.x = 0.5f - 0.5f * i;
+            pos.y = 0.5f - 0.5f * j;
+
+            emit_position(pos + displacements[0], stream);
+            emit_position(pos + displacements[1], stream);
+            emit_position(pos + displacements[2], stream);
+
+            stream.RestartStrip();
+        }
+    }
+}
+
+[test]
+clear rtv 0 1.0 1.0 0.0 1.0
+todo(sm<6) draw triangle strip 4
+probe rtv 0 (160, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (160, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 240) rgba (0.0, 1.0, 0.0, 1.0)
+probe rtv 0 (320, 360) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 120) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 240) rgba (1.0, 1.0, 0.0, 1.0)
+probe rtv 0 (480, 360) rgba (1.0, 1.0, 0.0, 1.0)
