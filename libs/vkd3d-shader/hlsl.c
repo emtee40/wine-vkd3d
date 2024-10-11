@@ -2786,6 +2786,17 @@ struct vkd3d_string_buffer *hlsl_type_to_string(struct hlsl_ctx *ctx, const stru
                 return string;
             }
 
+            if (type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+            {
+                vkd3d_string_buffer_printf(string, "StructuredBuffer");
+                if ((inner_string = hlsl_type_to_string(ctx, type->e.resource.format)))
+                {
+                    vkd3d_string_buffer_printf(string, "<%s>", inner_string->buffer);
+                    hlsl_release_string_buffer(ctx, inner_string);
+                }
+                return string;
+            }
+
             VKD3D_ASSERT(hlsl_is_numeric_type(type->e.resource.format));
             VKD3D_ASSERT(type->e.resource.format->e.numeric.type < ARRAY_SIZE(base_types));
             if (type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER)

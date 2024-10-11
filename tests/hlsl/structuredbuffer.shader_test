@@ -1,0 +1,16 @@
+[require]
+shader model >= 4.0
+
+[pixel shader fail]
+struct apple
+{
+    float2 a;
+    Texture2D tex;
+};
+
+StructuredBuffer<struct apple> ap;
+
+float4 main() : sv_target
+{
+    return 0;
+}

@@ -3436,6 +3436,8 @@ static D3D_SHADER_INPUT_TYPE sm4_resource_type(const struct hlsl_type *type)
         case HLSL_CLASS_SAMPLER:
             return D3D_SIT_SAMPLER;
         case HLSL_CLASS_TEXTURE:
+            if (type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+                return D3D_SIT_STRUCTURED;
             return D3D_SIT_TEXTURE;
         case HLSL_CLASS_UAV:
             return D3D_SIT_UAV_RWTYPED;
@@ -3450,6 +3452,10 @@ static enum vkd3d_sm4_data_type sm4_data_type(const struct hlsl_type *type)
 {
     const struct hlsl_type *format = type->e.resource.format;
 
+    if (type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+        return VKD3D_SM4_DATA_MIXED;
+
+    VKD3D_ASSERT(hlsl_is_numeric_type(type->e.resource.format));
     switch (format->e.numeric.type)
     {
         case HLSL_TYPE_DOUBLE:
@@ -4836,6 +4842,10 @@ static void write_sm4_dcl_textures(const struct tpf_compiler *tpf, const struct 
                 case HLSL_SAMPLER_DIM_RAW_BUFFER:
                     instr.opcode = VKD3D_SM5_OP_DCL_RESOURCE_RAW;
                     break;
+                case HLSL_SAMPLER_DIM_STRUCTURED_BUFFER:
+                    instr.opcode = VKD3D_SM5_OP_DCL_RESOURCE_STRUCTURED;
+                    instr.byte_stride = component_type->e.resource.format->reg_size[HLSL_REGSET_NUMERIC] * 4;
+                    break;
                 default:
                     instr.opcode = VKD3D_SM4_OP_DCL_RESOURCE;
                     break;
@@ -5043,6 +5053,7 @@ static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_no
     bool uav = (hlsl_deref_get_regset(tpf->ctx, resource) == HLSL_REGSET_UAVS);
     const struct vkd3d_shader_version *version = &tpf->program->shader_version;
     bool raw = resource_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER;
+    bool structured = resource_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER;
     unsigned int coords_writemask = VKD3DSP_WRITEMASK_ALL;
     struct sm4_instruction instr;
 
@@ -5051,6 +5062,8 @@ static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_no
         instr.opcode = VKD3D_SM5_OP_LD_UAV_TYPED;
     else if (raw)
         instr.opcode = VKD3D_SM5_OP_LD_RAW;
+    else if (structured)
+        instr.opcode = VKD3D_SM5_OP_LD_STRUCTURED;
     else
         instr.opcode = multisampled ? VKD3D_SM4_OP_LD2DMS : VKD3D_SM4_OP_LD;
 
@@ -5067,7 +5080,11 @@ static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_no
     sm4_dst_from_node(&instr.dsts[0], dst);
     instr.dst_count = 1;
 
-    if (!uav)
+    if (structured)
+    {
+        coords_writemask = VKD3DSP_WRITEMASK_0;
+    }
+    else if (!uav)
     {
         /* Mipmap level is in the last component in the IR, but needs to be in the W
          * component in the instruction. */
@@ -5080,21 +5097,30 @@ static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_no
     }
 
     sm4_src_from_node(tpf, &instr.srcs[0], coords, coords_writemask);
+    instr.src_count = 1;
 
-    sm4_src_from_deref(tpf, &instr.srcs[1], resource, instr.dsts[0].write_mask, &instr);
+    if (structured)
+    {
+        struct vkd3d_shader_register *reg = &instr.srcs[instr.src_count].reg;
 
-    instr.src_count = 2;
+        reg->type = VKD3DSPR_IMMCONST;
+        reg->dimension = VSIR_DIMENSION_SCALAR;
+
+        ++instr.src_count;
+    }
+
+    sm4_src_from_deref(tpf, &instr.srcs[instr.src_count], resource, instr.dsts[0].write_mask, &instr);
+    ++instr.src_count;
 
     if (multisampled)
     {
         if (sample_index->type == HLSL_IR_CONSTANT)
         {
-            struct vkd3d_shader_register *reg = &instr.srcs[2].reg;
+            struct vkd3d_shader_register *reg = &instr.srcs[instr.src_count].reg;
             struct hlsl_ir_constant *index;
 
             index = hlsl_ir_constant(sample_index);
 
-            memset(&instr.srcs[2], 0, sizeof(instr.srcs[2]));
             reg->type = VKD3DSPR_IMMCONST;
             reg->dimension = VSIR_DIMENSION_SCALAR;
             reg->u.immconst_u32[0] = index->value.u[0].u;
@@ -5105,7 +5131,7 @@ static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_no
         }
         else
         {
-            sm4_src_from_node(tpf, &instr.srcs[2], sample_index, 0);
+            sm4_src_from_node(tpf, &instr.srcs[instr.src_count], sample_index, 0);
         }
 
         ++instr.src_count;
@@ -5896,7 +5922,8 @@ static void tpf_write_shdr(struct tpf_compiler *tpf, struct hlsl_ir_function_dec
             const struct extern_resource *resource = &extern_resources[i];
             const struct hlsl_type *type = resource->component_type;
 
-            if (type && type->class == HLSL_CLASS_TEXTURE && type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)
+            if (type && (type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER
+                    || type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER))
             {
                 global_flags |= VKD3DSGF_ENABLE_RAW_AND_STRUCTURED_BUFFERS;
                 break;
