@@ -203,12 +203,24 @@ static inline bool compare_uvec4(const struct uvec4 *v1, const struct uvec4 *v2)
     return v1->x == v2->x && v1->y == v2->y && v1->z == v2->z && v1->w == v2->w;
 }
 
+static inline bool compare_u64vec2(const struct u64vec2 *v1, const struct u64vec2 *v2)
+{
+    return compare_uint64(v1->x, v2->x, 0)
+            && compare_uint64(v1->y, v2->y, 0);
+}
+
 static inline bool compare_vec4(const struct vec4 *v1, const struct vec4 *v2, unsigned int ulps)
 {
     return compare_float(v1->x, v2->x, ulps)
             && compare_float(v1->y, v2->y, ulps)
             && compare_float(v1->z, v2->z, ulps)
             && compare_float(v1->w, v2->w, ulps);
+}
+
+static inline bool compare_dvec2(const struct dvec2 *v1, const struct dvec2 *v2, unsigned int ulps)
+{
+    return compare_double(v1->x, v2->x, ulps)
+            && compare_double(v1->y, v2->y, ulps);
 }
 
 static inline void set_rect(RECT *rect, int left, int top, int right, int bottom)
@@ -251,9 +263,19 @@ static const struct vec4 *get_readback_vec4(const struct resource_readback *rb, 
     return get_readback_data(rb, x, y, 0, sizeof(struct vec4));
 }
 
+static const struct dvec2 *get_readback_dvec2(const struct resource_readback *rb, unsigned int x, unsigned int y)
+{
+    return get_readback_data(rb, x, y, 0, sizeof(struct dvec2));
+}
+
 static const struct uvec4 *get_readback_uvec4(const struct resource_readback *rb, unsigned int x, unsigned int y)
 {
     return get_readback_data(rb, x, y, 0, sizeof(struct uvec4));
+}
+
+static const struct u64vec2 *get_readback_u64vec2(const struct resource_readback *rb, unsigned int x, unsigned int y)
+{
+    return get_readback_data(rb, x, y, 0, sizeof(struct u64vec2));
 }
 
 #define check_readback_data_float(a, b, c, d) check_readback_data_float_(__LINE__, a, b, c, d)
@@ -407,6 +429,36 @@ static inline void check_readback_data_vec4_(unsigned int line, const struct res
             got.x, got.y, got.z, got.w, expected->x, expected->y, expected->z, expected->w, x, y);
 }
 
+#define check_readback_data_dvec2(a, b, c, d) check_readback_data_dvec2_(__LINE__, a, b, c, d)
+static inline void check_readback_data_dvec2_(unsigned int line, const struct resource_readback *rb,
+        const RECT *rect, const struct dvec2 *expected, unsigned int max_diff)
+{
+    RECT r = {0, 0, rb->width, rb->height};
+    unsigned int x = 0, y = 0;
+    struct dvec2 got = {0};
+    bool all_match = true;
+
+    if (rect)
+        r = *rect;
+
+    for (y = r.top; y < r.bottom; ++y)
+    {
+        for (x = r.left; x < r.right; ++x)
+        {
+            got = *get_readback_dvec2(rb, x, y);
+            if (!compare_dvec2(&got, expected, max_diff))
+            {
+                all_match = false;
+                break;
+            }
+        }
+        if (!all_match)
+            break;
+    }
+    ok_(line)(all_match, "Got {%.15e, %.15e}, expected {%.15e, %.15e} at (%u, %u).\n",
+            got.x, got.y, expected->x, expected->y, x, y);
+}
+
 #define check_readback_data_ivec4(a, b, c) check_readback_data_uvec4_(__LINE__, a, b, (const struct uvec4 *)(c))
 #define check_readback_data_uvec4(a, b, c) check_readback_data_uvec4_(__LINE__, a, b, c)
 static inline void check_readback_data_uvec4_(unsigned int line, const struct resource_readback *rb,
@@ -436,6 +488,37 @@ static inline void check_readback_data_uvec4_(unsigned int line, const struct re
     }
     ok_(line)(all_match, "Got {0x%08x, 0x%08x, 0x%08x, 0x%08x}, expected {0x%08x, 0x%08x, 0x%08x, 0x%08x} at (%u, %u).\n",
             got.x, got.y, got.z, got.w, expected->x, expected->y, expected->z, expected->w, x, y);
+}
+
+#define check_readback_data_i64vec2(a, b, c) check_readback_data_u64vec2_(__LINE__, a, b, (const struct u64vec2 *)(c))
+#define check_readback_data_u64vec2(a, b, c) check_readback_data_u64vec2_(__LINE__, a, b, c)
+static inline void check_readback_data_u64vec2_(unsigned int line, const struct resource_readback *rb,
+        const RECT *rect, const struct u64vec2 *expected)
+{
+    RECT r = {0, 0, rb->width, rb->height};
+    unsigned int x = 0, y = 0;
+    struct u64vec2 got = {0};
+    bool all_match = true;
+
+    if (rect)
+        r = *rect;
+
+    for (y = r.top; y < r.bottom; ++y)
+    {
+        for (x = r.left; x < r.right; ++x)
+        {
+            got = *get_readback_u64vec2(rb, x, y);
+            if (!compare_u64vec2(&got, expected))
+            {
+                all_match = false;
+                break;
+            }
+        }
+        if (!all_match)
+            break;
+    }
+    ok_(line)(all_match, "Got {0x%016"PRIx64", 0x%016"PRIx64"}, expected {0x%016"PRIx64", 0x%016"PRIx64"} at (%u, %u).\n",
+            got.x, got.y, expected->x, expected->y, x, y);
 }
 
 struct test_options
