@@ -9143,12 +9143,13 @@ static unsigned int loop_unrolling_get_max_iterations(struct hlsl_ctx *ctx, stru
     return 1024;
 }
 
-static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
-        struct hlsl_block *loop_parent, struct hlsl_ir_loop *loop)
+static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_loop *loop)
 {
     unsigned int max_iterations, i, index;
     struct copy_propagation_state state;
+    struct hlsl_block draft;
 
+    hlsl_block_init(&draft);
     copy_propagation_state_init(ctx, &state);
 
     index = 2;
@@ -9191,7 +9192,7 @@ static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *
 
             if (type == HLSL_IR_JUMP_BREAK)
             {
-                list_move_before(&loop->node.entry, &tmp_dst.instrs);
+                hlsl_block_add_block(&draft, &tmp_dst);
                 hlsl_block_cleanup(&tmp_dst);
                 break;
             }
@@ -9202,7 +9203,7 @@ static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *
         copy_propagation_pop_scope(&state);
         copy_propagation_push_scope(ctx, &state);
         run_const_passes_with_state(ctx, &tmp_dst, &state, &index);
-        list_move_before(&loop->node.entry, &tmp_dst.instrs);
+        hlsl_block_add_block(&draft, &tmp_dst);
         hlsl_block_cleanup(&tmp_dst);
     }
 
@@ -9217,6 +9218,8 @@ static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *
         goto fail;
     }
 
+    list_move_before(&loop->node.entry, &draft.instrs);
+    hlsl_block_cleanup(&draft);
     list_remove(&loop->node.entry);
     hlsl_free_instr(&loop->node);
     copy_propagation_state_destroy(&state);
@@ -9225,6 +9228,7 @@ static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *
 
 fail:
     copy_propagation_state_destroy(&state);
+    hlsl_block_cleanup(&draft);
 
     return false;
 }
@@ -9248,8 +9252,7 @@ fail:
  * "copyprop from the beginning of the program up to the instruction we're
  * currently processing" from the callback]; we'd have to use a dedicated
  * recursive function instead. */
-static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
-        struct hlsl_block **containing_block)
+static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx *ctx, struct hlsl_block *block)
 {
     struct hlsl_ir_node *instr;
 
@@ -9262,14 +9265,11 @@ static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx 
                 struct hlsl_ir_loop *nested_loop;
                 struct hlsl_ir_loop *loop = hlsl_ir_loop(instr);
 
-                if ((nested_loop = loop_unrolling_find_unrollable_loop(ctx, &loop->body, containing_block)))
+                if ((nested_loop = loop_unrolling_find_unrollable_loop(ctx, &loop->body)))
                     return nested_loop;
 
                 if (loop->unroll_type == HLSL_IR_LOOP_UNROLL || loop->unroll_type == HLSL_IR_LOOP_FORCE_UNROLL)
-                {
-                    *containing_block = block;
                     return loop;
-                }
 
                 break;
             }
@@ -9278,9 +9278,9 @@ static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx 
                 struct hlsl_ir_loop *loop;
                 struct hlsl_ir_if *iff = hlsl_ir_if(instr);
 
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->then_block, containing_block)))
+                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->then_block)))
                     return loop;
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->else_block, containing_block)))
+                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->else_block)))
                     return loop;
 
                 break;
@@ -9293,7 +9293,7 @@ static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx 
 
                 LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
                 {
-                    if ((loop = loop_unrolling_find_unrollable_loop(ctx, &c->body, containing_block)))
+                    if ((loop = loop_unrolling_find_unrollable_loop(ctx, &c->body)))
                         return loop;
                 }
 
@@ -9311,28 +9311,13 @@ static void transform_unroll_loops(struct hlsl_ctx *ctx, struct hlsl_block *bloc
 {
     while (true)
     {
-        struct hlsl_block clone, *containing_block;
-        struct hlsl_ir_loop *loop, *cloned_loop;
+        struct hlsl_ir_loop *loop = NULL;
 
-        if (!(loop = loop_unrolling_find_unrollable_loop(ctx, block, &containing_block)))
+        if (!(loop = loop_unrolling_find_unrollable_loop(ctx, block)))
             return;
 
-        if (!hlsl_clone_block(ctx, &clone, block))
-            return;
-
-        cloned_loop = loop_unrolling_find_unrollable_loop(ctx, &clone, &containing_block);
-        VKD3D_ASSERT(cloned_loop);
-
-        if (!loop_unrolling_unroll_loop(ctx, &clone, containing_block, cloned_loop))
-        {
-            hlsl_block_cleanup(&clone);
+        if (!loop_unrolling_unroll_loop(ctx, block, loop))
             loop->unroll_type = HLSL_IR_LOOP_FORCE_LOOP;
-            continue;
-        }
-
-        hlsl_block_cleanup(block);
-        hlsl_block_init(block);
-        hlsl_block_add_block(block, &clone);
     }
 }
 
