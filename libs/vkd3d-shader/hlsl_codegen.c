@@ -9233,92 +9233,23 @@ fail:
     return false;
 }
 
-/*
- * loop_unrolling_find_unrollable_loop() is not the normal way to do things;
- * normal passes simply iterate over the whole block and apply a transformation
- * to every relevant instruction. However, loop unrolling can fail, and we want
- * to leave the loop in its previous state in that case. That isn't a problem by
- * itself, except that loop unrolling needs copy-prop in order to work properly,
- * and copy-prop state at the time of the loop depends on the rest of the program
- * up to that point. This means we need to clone the whole program, and at that
- * point we have to search it again anyway to find the clone of the loop we were
- * going to unroll.
- *
- * FIXME: Ideally we wouldn't clone the whole program; instead we would run copyprop
- * up until the loop instruction, clone just that loop, then use copyprop again
- * with the saved state after unrolling. However, copyprop currently isn't built
- * for that yet [notably, it still relies on indices]. Note also this still doesn't
- * really let us use transform_ir() anyway [since we don't have a good way to say
- * "copyprop from the beginning of the program up to the instruction we're
- * currently processing" from the callback]; we'd have to use a dedicated
- * recursive function instead. */
-static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx *ctx, struct hlsl_block *block)
+static bool unroll_loops(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, void *context)
 {
-    struct hlsl_ir_node *instr;
+    struct hlsl_ir_loop *loop;
+    struct hlsl_block *block = context;
 
-    LIST_FOR_EACH_ENTRY(instr, &block->instrs, struct hlsl_ir_node, entry)
-    {
-        switch (instr->type)
-        {
-            case HLSL_IR_LOOP:
-            {
-                struct hlsl_ir_loop *nested_loop;
-                struct hlsl_ir_loop *loop = hlsl_ir_loop(instr);
+    if (node->type != HLSL_IR_LOOP)
+        return true;
 
-                if ((nested_loop = loop_unrolling_find_unrollable_loop(ctx, &loop->body)))
-                    return nested_loop;
+    loop = hlsl_ir_loop(node);
 
-                if (loop->unroll_type == HLSL_IR_LOOP_UNROLL || loop->unroll_type == HLSL_IR_LOOP_FORCE_UNROLL)
-                    return loop;
+    if (loop->unroll_type != HLSL_IR_LOOP_UNROLL && loop->unroll_type != HLSL_IR_LOOP_FORCE_UNROLL)
+        return true;
 
-                break;
-            }
-            case HLSL_IR_IF:
-            {
-                struct hlsl_ir_loop *loop;
-                struct hlsl_ir_if *iff = hlsl_ir_if(instr);
+    if (!loop_unrolling_unroll_loop(ctx, block, loop))
+        loop->unroll_type = HLSL_IR_LOOP_FORCE_LOOP;
 
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->then_block)))
-                    return loop;
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->else_block)))
-                    return loop;
-
-                break;
-            }
-            case HLSL_IR_SWITCH:
-            {
-                struct hlsl_ir_switch *s = hlsl_ir_switch(instr);
-                struct hlsl_ir_switch_case *c;
-                struct hlsl_ir_loop *loop;
-
-                LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
-                {
-                    if ((loop = loop_unrolling_find_unrollable_loop(ctx, &c->body)))
-                        return loop;
-                }
-
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    return NULL;
-}
-
-static void transform_unroll_loops(struct hlsl_ctx *ctx, struct hlsl_block *block)
-{
-    while (true)
-    {
-        struct hlsl_ir_loop *loop = NULL;
-
-        if (!(loop = loop_unrolling_find_unrollable_loop(ctx, block)))
-            return;
-
-        if (!loop_unrolling_unroll_loop(ctx, block, loop))
-            loop->unroll_type = HLSL_IR_LOOP_FORCE_LOOP;
-    }
+    return true;
 }
 
 static bool lower_f16tof32(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, struct hlsl_block *block)
@@ -9567,7 +9498,7 @@ static void process_entry_function(struct hlsl_ctx *ctx,
         hlsl_transform_ir(ctx, lower_discard_nz, body, NULL);
     }
 
-    transform_unroll_loops(ctx, body);
+    hlsl_transform_ir(ctx, unroll_loops, body, body);
     hlsl_run_const_passes(ctx, body);
 
     remove_unreachable_code(ctx, body);
