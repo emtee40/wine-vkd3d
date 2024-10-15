@@ -5332,6 +5332,14 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
     }
     e = &signature->elements[row_index];
 
+    if (column_index >= vsir_write_mask_component_count(e->mask))
+    {
+        WARN("Invalid column index %u.\n", column_index);
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                "Invalid input column index %u.", column_index);
+        return;
+    }
+
     if (!e->sysval_semantic)
         column_index += vsir_write_mask_get_component_idx(e->mask);
 
