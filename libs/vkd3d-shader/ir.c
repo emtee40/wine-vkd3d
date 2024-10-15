@@ -1737,7 +1737,7 @@ static bool shader_dst_param_io_normalise(struct vkd3d_shader_dst_param *dst_par
 static void shader_src_param_io_normalise(struct vkd3d_shader_src_param *src_param,
         struct io_normaliser *normaliser)
 {
-    unsigned int i, id_idx, reg_idx, write_mask, element_idx, component_idx;
+    unsigned int id_idx, reg_idx, write_mask, element_idx;
     struct vkd3d_shader_register *reg = &src_param->reg;
     const struct shader_signature *signature;
     const struct signature_element *e;
@@ -1805,13 +1805,6 @@ static void shader_src_param_io_normalise(struct vkd3d_shader_src_param *src_par
         id_idx = shader_register_normalise_arrayed_addressing(reg, id_idx, e->register_index);
     reg->idx[id_idx].offset = element_idx;
     reg->idx_count = id_idx + 1;
-
-    if ((component_idx = vsir_write_mask_get_component_idx(e->mask)))
-    {
-        for (i = 0; i < VKD3D_VEC4_SIZE; ++i)
-            if (vsir_swizzle_get_component(src_param->swizzle, i))
-                src_param->swizzle -= component_idx << VKD3D_SHADER_SWIZZLE_SHIFT(i);
-    }
 }
 
 static void shader_instruction_normalise_io_params(struct vkd3d_shader_instruction *ins,

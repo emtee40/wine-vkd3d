@@ -5162,7 +5162,6 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
     enum vkd3d_shader_component_type component_type;
     const struct vkd3d_spirv_builtin *builtin;
     enum vkd3d_shader_sysval_semantic sysval;
-    uint32_t write_mask, reg_write_mask;
     struct vkd3d_symbol *symbol = NULL;
     uint32_t val_id, input_id, var_id;
     uint32_t type_id, float_type_id;
@@ -5171,6 +5170,7 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
     struct rb_entry *entry = NULL;
     bool use_private_var = false;
     unsigned int array_sizes[2];
+    uint32_t write_mask;
 
     shader_signature = reg_type == VKD3DSPR_PATCHCONST
             ? &compiler->patch_constant_signature : &compiler->input_signature;
@@ -5211,12 +5211,10 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
     if (needs_private_io_variable(builtin))
     {
         use_private_var = true;
-        reg_write_mask = write_mask;
     }
     else
     {
         component_idx = vsir_write_mask_get_component_idx(write_mask);
-        reg_write_mask = write_mask >> component_idx;
     }
 
     storage_class = SpvStorageClassInput;
@@ -5271,7 +5269,7 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
 
     vkd3d_symbol_set_register_info(&reg_symbol, var_id, storage_class,
             use_private_var ? VKD3D_SHADER_COMPONENT_FLOAT : component_type,
-            use_private_var ? VKD3DSP_WRITEMASK_ALL : reg_write_mask);
+            use_private_var ? VKD3DSP_WRITEMASK_ALL : write_mask);
     reg_symbol.info.reg.is_aggregate = array_sizes[0] || array_sizes[1];
     VKD3D_ASSERT(!builtin || !builtin->spirv_array_size || use_private_var || array_sizes[0] || array_sizes[1]);
     spirv_compiler_put_symbol(compiler, &reg_symbol);

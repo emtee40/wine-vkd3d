@@ -5332,6 +5332,9 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
     }
     e = &signature->elements[row_index];
 
+    if (!e->sysval_semantic)
+        column_index += vsir_write_mask_get_component_idx(e->mask);
+
     if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
         return;
     src_param->reg = params[row_index].reg;
