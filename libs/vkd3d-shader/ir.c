@@ -1616,6 +1616,21 @@ static unsigned int shader_register_normalise_arrayed_addressing(struct vkd3d_sh
     return id_idx;
 }
 
+static void shader_src_param_io_normalise(struct vkd3d_shader_src_param *src_param,
+        struct io_normaliser *normaliser);
+
+static void register_normalise_io_relative_addresses(const struct vkd3d_shader_register *reg,
+        struct io_normaliser *normaliser)
+{
+    unsigned int i;
+
+    /* fxc apparently always loads I/O registers into a temp before using
+     * them as a relative address, but we handle them here just in case. */
+    for (i = 0; i < reg->idx_count; ++i)
+        if (reg->idx[i].rel_addr)
+            shader_src_param_io_normalise(reg->idx[i].rel_addr, normaliser);
+}
+
 static bool shader_dst_param_io_normalise(struct vkd3d_shader_dst_param *dst_param, bool is_io_dcl,
          struct io_normaliser *normaliser)
  {
@@ -1755,6 +1770,8 @@ static void shader_src_param_io_normalise(struct vkd3d_shader_src_param *src_par
     struct vkd3d_shader_register *reg = &src_param->reg;
     const struct shader_signature *signature;
     const struct signature_element *e;
+
+    register_normalise_io_relative_addresses(reg, normaliser);
 
     /* Input/output registers from one phase can be used as inputs in
      * subsequent phases. Specifically:
