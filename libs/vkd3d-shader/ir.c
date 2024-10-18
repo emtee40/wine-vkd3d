@@ -1640,6 +1640,9 @@ static bool shader_dst_param_io_normalise(struct vkd3d_shader_dst_param *dst_par
     const struct shader_signature *signature;
     const struct signature_element *e;
 
+    if (!is_io_dcl)
+        register_normalise_io_relative_addresses(reg, normaliser);
+
     switch (reg->type)
     {
         case VKD3DSPR_OUTPUT:
