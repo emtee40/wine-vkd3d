@@ -436,9 +436,6 @@ static void msl_generate_descriptor_struct_declarations(struct msl_generator *ge
     struct vkd3d_string_buffer *buffer = gen->buffer;
     unsigned int i;
 
-    if (!info->descriptor_count)
-        return;
-
     vkd3d_string_buffer_printf(buffer, "struct vkd3d_%s_descriptors\n{\n", gen->prefix);
 
     for (i = 0; i < info->descriptor_count; ++i)
@@ -459,6 +456,12 @@ static void msl_generate_descriptor_struct_declarations(struct msl_generator *ge
                 break;
         }
         vkd3d_string_buffer_printf(buffer, "\n");
+    }
+
+    if (!info->descriptor_count)
+    {
+        msl_print_indent(buffer, 1);
+        vkd3d_string_buffer_printf(buffer, "constant int *null_descriptor [[id(0)]];\n");
     }
 
     vkd3d_string_buffer_printf(buffer, "};\n\n");
@@ -748,13 +751,9 @@ static void msl_generate_entrypoint(struct msl_generator *gen)
 
     vkd3d_string_buffer_printf(gen->buffer, "vkd3d_%s_out shader_entry(\n", gen->prefix);
 
-    if (gen->descriptor_info->descriptor_count)
-    {
-        msl_print_indent(gen->buffer, 2);
-        /* TODO: Configurable argument buffer binding location. */
-        vkd3d_string_buffer_printf(gen->buffer,
-                "constant vkd3d_%s_descriptors& descriptors [[buffer(0)]],\n", gen->prefix);
-    }
+    msl_print_indent(gen->buffer, 2);
+    /* TODO: Configurable argument buffer binding location. */
+    vkd3d_string_buffer_printf(gen->buffer, "constant vkd3d_%s_descriptors& descriptors [[buffer(0)]],\n", gen->prefix);
 
     msl_print_indent(gen->buffer, 2);
     vkd3d_string_buffer_printf(gen->buffer, "vkd3d_%s_in input [[stage_in]])\n{\n", gen->prefix);
@@ -767,9 +766,7 @@ static void msl_generate_entrypoint(struct msl_generator *gen)
     msl_generate_entrypoint_prologue(gen);
 
     vkd3d_string_buffer_printf(gen->buffer, "    %s_main(%s_in, %s_out", gen->prefix, gen->prefix, gen->prefix);
-    if (gen->descriptor_info->descriptor_count)
-        vkd3d_string_buffer_printf(gen->buffer, ", descriptors");
-    vkd3d_string_buffer_printf(gen->buffer, ");\n");
+    vkd3d_string_buffer_printf(gen->buffer, ", descriptors);\n");
 
     msl_generate_entrypoint_epilogue(gen);
 
@@ -800,10 +797,9 @@ static void msl_generator_generate(struct msl_generator *gen)
 
     vkd3d_string_buffer_printf(gen->buffer,
             "void %s_main(thread vkd3d_vec4 *v, "
-            "thread vkd3d_vec4 *o",
-            gen->prefix);
-    if (gen->descriptor_info->descriptor_count)
-        vkd3d_string_buffer_printf(gen->buffer, ", constant vkd3d_%s_descriptors& descriptors", gen->prefix);
+            "thread vkd3d_vec4 *o, "
+            "constant vkd3d_%s_descriptors& descriptors",
+            gen->prefix, gen->prefix);
     vkd3d_string_buffer_printf(gen->buffer, ")\n{\n");
 
     ++gen->indent;
