@@ -426,7 +426,7 @@ static void msl_generate_cbv_declaration(struct msl_generator *gen,
     size /= VKD3D_VEC4_SIZE * sizeof(uint32_t);
 
     vkd3d_string_buffer_printf(buffer,
-            "constant vkd3d_vec4 (&cb_%u)[%zu] [[id(%u)]];", cbv->register_id, size, binding->binding);
+            "constant vkd3d_vec4 *cb_%u [[id(%u)]];", cbv->register_id, binding->binding);
 };
 
 static void msl_generate_descriptor_struct_declarations(struct msl_generator *gen)
