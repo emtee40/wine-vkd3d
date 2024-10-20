@@ -715,7 +715,7 @@ static void msl_generate_entrypoint_epilogue(struct msl_generator *gen)
             case VKD3D_SHADER_SV_POSITION:
                 vkd3d_string_buffer_printf(buffer, "    output.shader_out_%u", i);
                 msl_print_write_mask(buffer, e->mask);
-                vkd3d_string_buffer_printf(buffer, " = %s_out", gen->prefix);
+                vkd3d_string_buffer_printf(buffer, " = %s_out[%u]", gen->prefix, e->register_index);
                 msl_print_register_datatype(buffer, gen, vkd3d_data_type_from_component_type(e->component_type));
                 msl_print_write_mask(buffer, e->mask);
                 break;
