@@ -1655,7 +1655,8 @@ int spirv_compile(struct vsir_program *program, uint64_t config_flags,
 
 int msl_compile(struct vsir_program *program, uint64_t config_flags,
         const struct vkd3d_shader_scan_descriptor_info1 *descriptor_info,
-        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context);
+        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_code *out,
+        struct vkd3d_shader_message_context *message_context);
 
 enum vkd3d_md5_variant
 {
