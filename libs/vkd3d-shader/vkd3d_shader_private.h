@@ -759,20 +759,6 @@ enum vkd3d_shader_dst_modifier
     VKD3DSPDM_MASK = 7,
 };
 
-enum vkd3d_shader_interpolation_mode
-{
-    VKD3DSIM_NONE = 0,
-    VKD3DSIM_CONSTANT = 1,
-    VKD3DSIM_LINEAR = 2,
-    VKD3DSIM_LINEAR_CENTROID = 3,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE = 4,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE_CENTROID = 5,
-    VKD3DSIM_LINEAR_SAMPLE = 6,
-    VKD3DSIM_LINEAR_NOPERSPECTIVE_SAMPLE = 7,
-
-    VKD3DSIM_COUNT = 8,
-};
-
 enum vkd3d_shader_global_flags
 {
     VKD3DSGF_REFACTORING_ALLOWED               = 0x01,

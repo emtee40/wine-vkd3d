@@ -111,6 +111,11 @@ enum vkd3d_shader_structure_type
      * \since 1.13
      */
     VKD3D_SHADER_STRUCTURE_TYPE_PARAMETER_INFO,
+    /**
+     * The structure is a vkd3d_shader_scan_signature_info1 structure.
+     * \since 1.14
+     */
+    VKD3D_SHADER_STRUCTURE_TYPE_SCAN_SIGNATURE_INFO1,
 
     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_STRUCTURE_TYPE),
 };
@@ -2103,9 +2108,54 @@ enum vkd3d_shader_minimum_precision
 };
 
 /**
+ * Interpolation mode of a shader varying, returned as part of
+ * struct vkd3d_shader_signature_element1.
+ *
+ * \since 1.14
+ */
+enum vkd3d_shader_interpolation_mode
+{
+    VKD3D_SHADER_IM_NONE                          = 0,
+    VKD3D_SHADER_IM_CONSTANT                      = 1,
+    VKD3D_SHADER_IM_LINEAR                        = 2,
+    VKD3D_SHADER_IM_LINEAR_CENTROID               = 3,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE          = 4,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_CENTROID = 5,
+    VKD3D_SHADER_IM_LINEAR_SAMPLE                 = 6,
+    VKD3D_SHADER_IM_LINEAR_NOPERSPECTIVE_SAMPLE   = 7,
+
+    VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_IM),
+};
+
+/**
  * A single shader varying, returned as part of struct vkd3d_shader_signature.
+ *
+ * This structure is an earlier version of struct vkd3d_shader_signature_element1
+ * which does not contain a register count or interpolation mode, and therefore
+ * cannot return complete information on signature elements for Shader Model 4
+ * and higher; refer to that structure for usage information.
  */
 struct vkd3d_shader_signature_element
+{
+    const char *semantic_name;
+    unsigned int semantic_index;
+    unsigned int stream_index;
+    enum vkd3d_shader_sysval_semantic sysval_semantic;
+    enum vkd3d_shader_component_type component_type;
+    unsigned int register_index;
+    unsigned int mask;
+    unsigned int used_mask;
+    enum vkd3d_shader_minimum_precision min_precision;
+};
+
+/**
+ * A single shader varying, returned as part of struct vkd3d_shader_signature1.
+ *
+ * This structure is an extended version of struct vkd3d_shader_signature.
+ *
+ * \since 1.14
+ */
+struct vkd3d_shader_signature_element1
 {
     /** Semantic name. */
     const char *semantic_name;
@@ -2125,6 +2175,8 @@ struct vkd3d_shader_signature_element
     enum vkd3d_shader_component_type component_type;
     /** Register index. */
     unsigned int register_index;
+    /** Register count. This field is > 1 for arrayed elements. */
+    unsigned int register_count;
     /** Mask of the register components allocated to this varying. */
     unsigned int mask;
     /**
@@ -2136,6 +2188,8 @@ struct vkd3d_shader_signature_element
     unsigned int used_mask;
     /** Minimum interpolation precision. */
     enum vkd3d_shader_minimum_precision min_precision;
+    /** Interpolation mode. */
+    enum vkd3d_shader_interpolation_mode interpolation_mode;
 };
 
 /**
@@ -2149,6 +2203,24 @@ struct vkd3d_shader_signature
 {
     /** Pointer to an array of varyings. */
     struct vkd3d_shader_signature_element *elements;
+    /** Size, in elements, of \ref elements. */
+    unsigned int element_count;
+};
+
+/**
+ * Description of a shader input or output signature. This structure is used
+ * in struct vkd3d_shader_scan_signature_info1, and supports signatures
+ * containing interpolation modes and/or register counts.
+ *
+ * The helper function vkd3d_shader_find_signature_element1() will look up a
+ * varying element by its semantic name, semantic index, and stream index.
+ *
+ * \since 1.14
+ */
+struct vkd3d_shader_signature1
+{
+    /** Pointer to an array of varyings. */
+    struct vkd3d_shader_signature_element1 *elements;
     /** Size, in elements, of \ref elements. */
     unsigned int element_count;
 };
@@ -2244,12 +2316,42 @@ static inline uint32_t vkd3d_shader_create_swizzle(enum vkd3d_shader_swizzle_com
 /**
  * A chained structure containing descriptions of shader inputs and outputs.
  *
+ * This structure is an earlier version of struct vkd3d_shader_scan_signature_info1
+ * which stores signatures in struct vkd3d_shader_signature, and therefore
+ * cannot return complete information on signature elements parsed from Shader
+ * Model 4 and higher shaders; refer to struct vkd3d_shader_scan_signature_info1
+ * for usage information.
+ *
+ * \since 1.9
+ */
+struct vkd3d_shader_scan_signature_info
+{
+    /** Must be set to VKD3D_SHADER_STRUCTURE_TYPE_SCAN_SIGNATURE_INFO. */
+    enum vkd3d_shader_structure_type type;
+    /** Optional pointer to a structure containing further parameters. */
+    const void *next;
+
+    /** The shader input varyings. */
+    struct vkd3d_shader_signature input;
+
+    /** The shader output varyings. */
+    struct vkd3d_shader_signature output;
+
+    /** The shader patch constant varyings. */
+    struct vkd3d_shader_signature patch_constant;
+};
+
+/**
+ * A chained structure containing descriptions of shader inputs and outputs.
+ *
  * This structure is currently implemented only for DXBC and legacy D3D bytecode
  * source types.
- * For DXBC shaders, the returned information is parsed directly from the
- * signatures embedded in the DXBC shader.
- * For legacy D3D shaders, the returned information is synthesized based on
- * registers declared or used by shader instructions.
+ * For DXBC shaders without embedded DXIL code, the returned information is
+ * parsed directly from the signatures embedded in the DXBC shader, except for
+ * the interpolation modes, which are parsed from the relevant TPF declarations,
+ * if present. If the shader contains DXIL code, the information is parsed from
+ * the DXIL metadata. For legacy D3D shaders, the returned information is
+ * synthesized based on registers declared or used by shader instructions.
  * For all other shader types, the structure is zeroed.
  *
  * All members (except for \ref type and \ref next) are output-only.
@@ -2258,7 +2360,7 @@ static inline uint32_t vkd3d_shader_create_swizzle(enum vkd3d_shader_swizzle_com
  * vkd3d_shader_compile_info.
  *
  * Members of this structure are allocated by vkd3d-shader and should be freed
- * with vkd3d_shader_free_scan_signature_info() when no longer needed.
+ * with vkd3d_shader_free_scan_signature_info1() when no longer needed.
  *
  * All signatures may contain pointers into the input shader, and should only
  * be accessed while the input shader remains valid.
@@ -2280,9 +2382,9 @@ static inline uint32_t vkd3d_shader_create_swizzle(enum vkd3d_shader_swizzle_com
  * - Shader model 3 pixel shader system value input registers (pixel position
  *   and face).
  *
- * \since 1.9
+ * \since 1.14
  */
-struct vkd3d_shader_scan_signature_info
+struct vkd3d_shader_scan_signature_info1
 {
     /** Must be set to VKD3D_SHADER_STRUCTURE_TYPE_SCAN_SIGNATURE_INFO. */
     enum vkd3d_shader_structure_type type;
@@ -2290,13 +2392,13 @@ struct vkd3d_shader_scan_signature_info
     const void *next;
 
     /** The shader input varyings. */
-    struct vkd3d_shader_signature input;
+    struct vkd3d_shader_signature1 input;
 
     /** The shader output varyings. */
-    struct vkd3d_shader_signature output;
+    struct vkd3d_shader_signature1 output;
 
     /** The shader patch constant varyings. */
-    struct vkd3d_shader_signature patch_constant;
+    struct vkd3d_shader_signature1 patch_constant;
 };
 
 /**
@@ -2760,8 +2862,20 @@ VKD3D_SHADER_API int vkd3d_shader_parse_input_signature(const struct vkd3d_shade
 /**
  * Find a single element of a parsed input signature.
  *
+ * This function is an earlier version of vkd3d_shader_find_signature_element1()
+ * which searches a struct vkd3d_shader_signature; refer to that function for
+ * usage information.
+ */
+VKD3D_SHADER_API struct vkd3d_shader_signature_element *vkd3d_shader_find_signature_element(
+        const struct vkd3d_shader_signature *signature, const char *semantic_name,
+        unsigned int semantic_index, unsigned int stream_index);
+/**
+ * Find a single element of a parsed input signature.
+ *
+ * This function is an extended version of vkd3d_shader_find_signature_element().
+ *
  * \param signature The parsed input signature. This structure is normally
- * populated by vkd3d_shader_parse_input_signature().
+ * populated by vkd3d_shader_scan().
  *
  * \param semantic_name Semantic name of the desired element. This function
  * performs a case-insensitive comparison with respect to the ASCII plane.
@@ -2775,9 +2889,11 @@ VKD3D_SHADER_API int vkd3d_shader_parse_input_signature(const struct vkd3d_shade
  * \return A description of the element matching the requested parameters, or
  * NULL if no such element was found. If not NULL, the return value points into
  * the \a signature parameter and should not be explicitly freed.
+ *
+ * \since 1.14
  */
-VKD3D_SHADER_API struct vkd3d_shader_signature_element *vkd3d_shader_find_signature_element(
-        const struct vkd3d_shader_signature *signature, const char *semantic_name,
+VKD3D_SHADER_API struct vkd3d_shader_signature_element1 *vkd3d_shader_find_signature_element1(
+        const struct vkd3d_shader_signature1 *signature, const char *semantic_name,
         unsigned int semantic_index, unsigned int stream_index);
 /**
  * Free a structural representation of a shader input signature allocated by
@@ -2922,14 +3038,25 @@ VKD3D_SHADER_API int vkd3d_shader_serialize_dxbc(size_t section_count,
  * Free members of struct vkd3d_shader_scan_signature_info allocated by
  * vkd3d_shader_scan().
  *
- * This function may free members of vkd3d_shader_scan_signature_info, but
- * does not free the structure itself.
- *
- * \param info Scan information to free.
+ * This function is an earlier version of vkd3d_shader_free_scan_signature_info1()
+ * which frees a struct vkd3d_shader_scan_signature_info; refer to that function for
+ * usage information.
  *
  * \since 1.9
  */
 VKD3D_SHADER_API void vkd3d_shader_free_scan_signature_info(struct vkd3d_shader_scan_signature_info *info);
+/**
+ * Free members of struct vkd3d_shader_scan_signature_info1 allocated by
+ * vkd3d_shader_scan().
+ *
+ * This function may free members of vkd3d_shader_scan_signature_info1, but
+ * does not free the structure itself.
+ *
+ * \param info Scan information to free.
+ *
+ * \since 1.14
+ */
+VKD3D_SHADER_API void vkd3d_shader_free_scan_signature_info1(struct vkd3d_shader_scan_signature_info1 *info);
 
 /**
  * Build a mapping of output varyings in a shader stage to input varyings in
@@ -3021,6 +3148,10 @@ typedef int (*PFN_vkd3d_shader_parse_input_signature)(const struct vkd3d_shader_
 typedef struct vkd3d_shader_signature_element * (*PFN_vkd3d_shader_find_signature_element)(
         const struct vkd3d_shader_signature *signature, const char *semantic_name,
         unsigned int semantic_index, unsigned int stream_index);
+/** Type of vkd3d_shader_find_signature_element1(). \since 1.14 */
+typedef struct vkd3d_shader_signature_element1 * (*PFN_vkd3d_shader_find_signature_element1)(
+        const struct vkd3d_shader_signature1 *signature, const char *semantic_name,
+        unsigned int semantic_index, unsigned int stream_index);
 /** Type of vkd3d_shader_free_shader_signature(). */
 typedef void (*PFN_vkd3d_shader_free_shader_signature)(struct vkd3d_shader_signature *signature);
 
@@ -3046,6 +3177,8 @@ typedef void (*PFN_vkd3d_shader_build_varying_map)(const struct vkd3d_shader_sig
         unsigned int *count, struct vkd3d_shader_varying_map *varyings);
 /** Type of vkd3d_shader_free_scan_signature_info(). \since 1.9 */
 typedef void (*PFN_vkd3d_shader_free_scan_signature_info)(struct vkd3d_shader_scan_signature_info *info);
+/** Type of vkd3d_shader_free_scan_signature_info1(). \since 1.14 */
+typedef void (*PFN_vkd3d_shader_free_scan_signature_info1)(struct vkd3d_shader_scan_signature_info1 *info);
 
 /** Type of vkd3d_shader_free_scan_combined_resource_sampler_info(). \since 1.10 */
 typedef void (*PFN_vkd3d_shader_free_scan_combined_resource_sampler_info)(
