@@ -1905,7 +1905,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
 
                 case STATE_TEST:
                     if (test_action == TEST_ACTION_SKIP_EXECUTION)
-                        vkd3d_test_skip(line_number, "Missing capabilities.\n");
+                        skip("Missing capabilities.\n");
                     break;
 
                 case STATE_REQUIRE:
