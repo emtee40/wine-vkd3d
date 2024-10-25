@@ -247,6 +247,7 @@ enum vkd3d_shader_error
     VKD3D_SHADER_ERROR_VSIR_INVALID_PARAMETER           = 9020,
     VKD3D_SHADER_ERROR_VSIR_MISSING_SEMANTIC            = 9021,
     VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE           = 9022,
+    VKD3D_SHADER_ERROR_VSIR_OUT_OF_MEMORY               = 9023,
 
     VKD3D_SHADER_WARNING_VSIR_DYNAMIC_DESCRIPTOR_ARRAY  = 9300,
 
@@ -1417,7 +1418,7 @@ struct vsir_program
     unsigned int input_control_point_count, output_control_point_count;
     struct vsir_thread_group_size thread_group_size;
     unsigned int flat_constant_count[3];
-    unsigned int block_count;
+    unsigned int block_count; /* maximum block count in any function */
     unsigned int temp_count;
     unsigned int ssa_count;
     enum vsir_global_flags global_flags;

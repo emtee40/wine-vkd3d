@@ -3113,14 +3113,15 @@ static void ssas_to_temps_block_info_cleanup(struct ssas_to_temps_block_info *bl
     vkd3d_free(block_info);
 }
 
-static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_program *program,
-        struct vsir_transformation_context *ctx)
+static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps_in_function(struct vsir_program *program,
+        struct vkd3d_shader_message_context *message_context, size_t *pos)
 {
-    size_t ins_capacity = 0, ins_count = 0, phi_count, incoming_count, i;
     struct ssas_to_temps_block_info *info, *block_info = NULL;
-    struct vkd3d_shader_instruction *instructions = NULL;
+    struct vkd3d_shader_location location = {0};
     struct ssas_to_temps_alloc alloc = {0};
     unsigned int current_label = 0;
+    bool finish = false;
+    size_t i;
 
     VKD3D_ASSERT(program->cf_type == VSIR_CF_BLOCKS);
 
@@ -3133,17 +3134,26 @@ static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_
     if (!ssas_to_temps_alloc_init(&alloc, program->ssa_count, program->temp_count))
         goto fail;
 
-    for (i = 0, phi_count = 0, incoming_count = 0; i < program->instructions.count; ++i)
+    for (i = *pos; i < program->instructions.count; ++i)
     {
         struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
         unsigned int j, temp_idx;
+
+        location = ins->location;
+
+        /* Parsing may begin at a phase instruction, and must stop at the next one. */
+        if (i > *pos && (ins->opcode == VKD3DSIH_HS_CONTROL_POINT_PHASE
+                || ins->opcode == VKD3DSIH_HS_FORK_PHASE || ins->opcode == VKD3DSIH_HS_JOIN_PHASE))
+        {
+            break;
+        }
 
         /* Only phi src/dst SSA values need be converted here. Structurisation may
          * introduce new cases of undominated SSA use, which will be handled later. */
         if (ins->opcode != VKD3DSIH_PHI)
             continue;
-        ++phi_count;
 
+        /* Replace each phi dst register with a unique temp. */
         temp_idx = alloc.next_temp_idx++;
 
         for (j = 0; j < ins->src_count; j += 2)
@@ -3158,30 +3168,30 @@ static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_
 
             if (!(vkd3d_array_reserve((void **)&info->incomings, &info->incoming_capacity, info->incoming_count + 1,
                     sizeof(*info->incomings))))
+            {
+                ERR("Failed to allocate incomings.\n");
                 goto fail;
+            }
 
             incoming = &info->incomings[info->incoming_count++];
             incoming->src = &ins->src[j];
             incoming->dst = ins->dst;
 
             alloc.table[ins->dst->reg.idx[0].offset] = temp_idx;
-
-            ++incoming_count;
         }
 
         materialize_ssas_to_temps_process_reg(program, &alloc, &ins->dst->reg);
     }
 
-    if (!phi_count)
+    if (!alloc.next_temp_idx)
         goto done;
 
-    if (!reserve_instructions(&instructions, &ins_capacity, program->instructions.count + incoming_count - phi_count))
-        goto fail;
-
-    for (i = 0; i < program->instructions.count; ++i)
+    for (i = *pos; i < program->instructions.count; ++i)
     {
-        struct vkd3d_shader_instruction *mov_ins, *ins = &program->instructions.elements[i];
+        struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
         size_t j;
+
+        location = ins->location;
 
         for (j = 0; j < ins->dst_count; ++j)
             materialize_ssas_to_temps_process_reg(program, &alloc, &ins->dst[j].reg);
@@ -3191,6 +3201,12 @@ static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_
 
         switch (ins->opcode)
         {
+            case VKD3DSIH_HS_CONTROL_POINT_PHASE:
+            case VKD3DSIH_HS_FORK_PHASE:
+            case VKD3DSIH_HS_JOIN_PHASE:
+                finish = i > *pos;
+                break;
+
             case VKD3DSIH_LABEL:
                 current_label = label_from_src_param(&ins->src[0]);
                 break;
@@ -3199,44 +3215,56 @@ static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_
             case VKD3DSIH_SWITCH_MONOLITHIC:
                 info = &block_info[current_label - 1];
 
+                if (!info->incoming_count)
+                    break;
+
+                if (!shader_instruction_array_insert_at(&program->instructions, i, info->incoming_count))
+                    goto fail;
+                ins = &program->instructions.elements[i];
+                i += info->incoming_count;
+
+                /* Replace phis with temps by writing the temp in each incoming block of
+                 * the phi instruction. If a block has successors, i.e. is not an exit,
+                 * find which temp values to write by looking up the info recorded earlier. */
                 for (j = 0; j < info->incoming_count; ++j)
                 {
                     struct phi_incoming_to_temp *incoming = &info->incomings[j];
 
-                    mov_ins = &instructions[ins_count++];
-                    if (!vsir_instruction_init_with_params(program, mov_ins, &ins->location, VKD3DSIH_MOV, 1, 0))
+                    if (!vsir_instruction_init_with_params(program, ins, &location, VKD3DSIH_MOV, 1, 0))
                         goto fail;
-                    *mov_ins->dst = *incoming->dst;
-                    mov_ins->src = incoming->src;
-                    mov_ins->src_count = 1;
+                    *ins->dst = *incoming->dst;
+                    ins->src = incoming->src;
+                    ins->src_count = 1;
+                    ++ins;
                 }
                 break;
 
             case VKD3DSIH_PHI:
+                vkd3d_shader_instruction_make_nop(ins);
                 continue;
 
             default:
                 break;
         }
 
-        instructions[ins_count++] = *ins;
+        if (finish)
+            break;
     }
 
-    vkd3d_free(program->instructions.elements);
-    program->instructions.elements = instructions;
-    program->instructions.capacity = ins_capacity;
-    program->instructions.count = ins_count;
     program->temp_count = alloc.next_temp_idx;
 done:
+    *pos = i;
     ssas_to_temps_block_info_cleanup(block_info, program->block_count);
     vkd3d_free(alloc.table);
 
     return VKD3D_OK;
 
 fail:
-    vkd3d_free(instructions);
     ssas_to_temps_block_info_cleanup(block_info, program->block_count);
     vkd3d_free(alloc.table);
+
+    vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_VSIR_OUT_OF_MEMORY,
+            "Out of memory materialising phis to temps.");
 
     return VKD3D_ERROR_OUT_OF_MEMORY;
 }
@@ -3737,8 +3765,8 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
         size_t *pos)
 {
     struct vsir_block *current_block = NULL;
+    size_t i, defined_block_count = 0;
     enum vkd3d_result ret;
-    size_t i;
 
     memset(cfg, 0, sizeof(*cfg));
     cfg->message_context = message_context;
@@ -3780,6 +3808,7 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
                 current_block->begin = &program->instructions.elements[i + 1];
                 if (!cfg->entry)
                     cfg->entry = current_block;
+                ++defined_block_count;
                 break;
             }
 
@@ -3794,7 +3823,7 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
             case VKD3DSIH_HS_FORK_PHASE:
             case VKD3DSIH_HS_JOIN_PHASE:
                 VKD3D_ASSERT(!current_block);
-                finish = true;
+                finish = i > *pos;
                 break;
 
             default:
@@ -3807,6 +3836,8 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
 
     *pos = i;
     cfg->function_end = *pos;
+    /* program->block_count is the max in any function. Set the count for this function. */
+    cfg->block_count = defined_block_count;
 
     for (i = 0; i < cfg->block_count; ++i)
     {
@@ -5520,10 +5551,12 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps_in_f
     return ret;
 }
 
-static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(struct vsir_program *program,
-        struct vsir_transformation_context *ctx)
+typedef enum vkd3d_result (*vsir_function_handler)(struct vsir_program *program,
+        struct vkd3d_shader_message_context *message_context, size_t *pos);
+
+static enum vkd3d_result vsir_program_iterate_functions(struct vsir_program *program,
+        vsir_function_handler handler, struct vkd3d_shader_message_context *message_context)
 {
-    struct vkd3d_shader_message_context *message_context = ctx->message_context;
     enum vkd3d_result ret;
     size_t i;
 
@@ -5537,9 +5570,8 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
         {
             case VKD3DSIH_LABEL:
                 VKD3D_ASSERT(program->shader_version.type != VKD3D_SHADER_TYPE_HULL);
-                TRACE("Materializing undominated SSAs in a non-hull shader.\n");
-                if ((ret = vsir_program_materialize_undominated_ssas_to_temps_in_function(
-                        program, message_context, &i)) < 0)
+                TRACE("Iterating program body in a non-hull shader.\n");
+                if ((ret = handler(program, message_context, &i)) < 0)
                     return ret;
                 VKD3D_ASSERT(i == program->instructions.count);
                 break;
@@ -5548,10 +5580,8 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
             case VKD3DSIH_HS_FORK_PHASE:
             case VKD3DSIH_HS_JOIN_PHASE:
                 VKD3D_ASSERT(program->shader_version.type == VKD3D_SHADER_TYPE_HULL);
-                TRACE("Materializing undominated SSAs in phase %u of a hull shader.\n", ins->opcode);
-                ++i;
-                if ((ret = vsir_program_materialize_undominated_ssas_to_temps_in_function(
-                        program, message_context, &i)) < 0)
+                TRACE("Iterating phase %u of a hull shader.\n", ins->opcode);
+                if ((ret = handler(program, message_context, &i)) < 0)
                     return ret;
                 break;
 
@@ -5562,6 +5592,21 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
     }
 
     return VKD3D_OK;
+}
+
+static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    return vsir_program_iterate_functions(program,
+            vsir_program_materialize_undominated_ssas_to_temps_in_function, ctx->message_context);
+}
+
+static enum vkd3d_result vsir_program_materialise_phi_ssas_to_temps(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    /* Label ids begin at 1 for each function, so each function must be handled separately. */
+    return vsir_program_iterate_functions(program,
+            vsir_program_materialise_phi_ssas_to_temps_in_function, ctx->message_context);
 }
 
 static bool find_colour_signature_idx(const struct shader_signature *signature, uint32_t *index)
