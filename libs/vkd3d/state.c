@@ -265,25 +265,6 @@ static enum vkd3d_shader_visibility vkd3d_shader_visibility_from_d3d12(D3D12_SHA
     }
 }
 
-static VkDescriptorType vk_descriptor_type_from_vkd3d_descriptor_type(enum vkd3d_shader_descriptor_type type,
-        bool is_buffer)
-{
-    switch (type)
-    {
-        case VKD3D_SHADER_DESCRIPTOR_TYPE_SRV:
-            return is_buffer ? VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        case VKD3D_SHADER_DESCRIPTOR_TYPE_UAV:
-            return is_buffer ? VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        case VKD3D_SHADER_DESCRIPTOR_TYPE_CBV:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        case VKD3D_SHADER_DESCRIPTOR_TYPE_SAMPLER:
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
-        default:
-            FIXME("Unhandled descriptor range type type %#x.\n", type);
-            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    }
-}
-
 static enum vkd3d_shader_descriptor_type vkd3d_descriptor_type_from_d3d12_range_type(
         D3D12_DESCRIPTOR_RANGE_TYPE type)
 {
@@ -717,6 +698,7 @@ struct vk_binding_array
     VkDescriptorSetLayoutBinding *bindings;
     size_t capacity, count;
 
+    enum vkd3d_shader_descriptor_type descriptor_type;
     unsigned int table_index;
     unsigned int unbounded_offset;
     uint32_t set_index;
@@ -807,13 +789,15 @@ static struct vk_binding_array *d3d12_root_signature_current_vk_binding_array(
 }
 
 static uint32_t d3d12_root_signature_append_vk_binding_array(struct d3d12_root_signature *root_signature,
-        VkDescriptorSetLayoutCreateFlags flags, struct vkd3d_descriptor_set_context *context)
+        enum vkd3d_shader_descriptor_type descriptor_type, VkDescriptorSetLayoutCreateFlags flags,
+        struct vkd3d_descriptor_set_context *context)
 {
     struct vk_binding_array *array;
 
     if (!(array = d3d12_root_signature_current_vk_binding_array(root_signature, context)))
         return 0;
 
+    array->descriptor_type = descriptor_type;
     array->table_index = context->table_index;
     array->unbounded_offset = context->unbounded_offset;
     array->set_index = root_signature->vk_set_count;
@@ -832,7 +816,7 @@ static struct vk_binding_array *d3d12_root_signature_vk_binding_array_for_type(
     {
         if (context->push_descriptor_set == UINT32_MAX)
             context->push_descriptor_set = d3d12_root_signature_append_vk_binding_array(root_signature,
-                    VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, context);
+                    descriptor_type, VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR, context);
         return &context->vk_bindings[context->push_descriptor_set];
     }
 
@@ -842,12 +826,12 @@ static struct vk_binding_array *d3d12_root_signature_vk_binding_array_for_type(
     if (context->sets[descriptor_type].set_index == UINT32_MAX)
     {
         set = context->sets[descriptor_type].set_index = d3d12_root_signature_append_vk_binding_array(root_signature,
-                0, context);
+                descriptor_type, 0, context);
         root_signature->set_table[descriptor_type] = set;
     }
     else if (context->sets[descriptor_type].unbounded)
     {
-        set = d3d12_root_signature_append_vk_binding_array(root_signature, 0, context);
+        set = d3d12_root_signature_append_vk_binding_array(root_signature, descriptor_type, 0, context);
     }
     else
     {
@@ -1526,6 +1510,7 @@ static HRESULT d3d12_root_signature_create_descriptor_set_layouts(struct d3d12_r
         if (FAILED(hr = vkd3d_create_descriptor_set_layout(root_signature->device, array->flags, array->count,
                 array->unbounded_offset != UINT_MAX, array->bindings, &layout->vk_layout)))
             return hr;
+        layout->descriptor_type = array->descriptor_type;
         layout->unbounded_offset = array->unbounded_offset;
         layout->table_index = array->table_index;
     }
