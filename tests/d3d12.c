@@ -23653,11 +23653,12 @@ static int compare_id(const void *a, const void *b)
 static void test_uav_counters(void)
 {
     ID3D12Resource *buffer, *out_buffer, *counter_buffer;
+    D3D12_STATIC_SAMPLER_DESC static_sampler = {0};
     D3D12_ROOT_SIGNATURE_DESC root_signature_desc;
     D3D12_DESCRIPTOR_RANGE descriptor_ranges[1];
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc;
     ID3D12GraphicsCommandList *command_list;
-    D3D12_ROOT_PARAMETER root_parameters[1];
+    D3D12_ROOT_PARAMETER root_parameters[2];
     ID3D12DescriptorHeap *descriptor_heap;
     struct d3d12_resource_readback rb;
     struct test_context context;
@@ -23711,8 +23712,26 @@ static void test_uav_counters(void)
         0x00000001, 0x0010000a, 0x00000000, 0x00004001, 0x00000000, 0x0010001a, 0x00000000, 0x0100003e,
     };
 
-    static const unsigned int counter_offsets[] = {0, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT,
-            D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2};
+    static const struct
+    {
+        unsigned int parameter_count;
+        unsigned int sampler_count;
+        unsigned int counter_offset;
+    } tests[] =
+    {
+        {1, 0, 0},
+        {1, 0, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT},
+        {1, 0, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2},
+        {1, 1, 0},
+        {1, 1, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT},
+        {1, 1, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2},
+        {2, 0, 0},
+        {2, 0, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT},
+        {2, 0, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2},
+        {2, 1, 0},
+        {2, 1, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT},
+        {2, 1, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2},
+    };
 
     if (!init_compute_test_context(&context))
         return;
@@ -23729,13 +23748,24 @@ static void test_uav_counters(void)
     root_parameters[0].DescriptorTable.NumDescriptorRanges = 1;
     root_parameters[0].DescriptorTable.pDescriptorRanges = descriptor_ranges;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    root_signature_desc.NumParameters = 1;
+    root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    root_parameters[1].Descriptor.ShaderRegister = 0;
+    root_parameters[1].Descriptor.RegisterSpace = 0;
+    root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    root_signature_desc.NumParameters = 0;
     root_signature_desc.pParameters = root_parameters;
     root_signature_desc.NumStaticSamplers = 0;
     root_signature_desc.pStaticSamplers = NULL;
+    static_sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    static_sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    static_sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    static_sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    static_sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    static_sampler.ShaderRegister = 0;
+    static_sampler.RegisterSpace = 0;
+    static_sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    root_signature_desc.pStaticSamplers = &static_sampler;
     root_signature_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-    hr = create_root_signature(device, &root_signature_desc, &context.root_signature);
-    ok(SUCCEEDED(hr), "Failed to create root signature, hr %#x.\n", hr);
 
     descriptor_heap = create_gpu_descriptor_heap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 3);
 
@@ -23746,11 +23776,22 @@ static void test_uav_counters(void)
     counter_buffer = create_default_buffer(device, D3D12_UAV_COUNTER_PLACEMENT_ALIGNMENT * 2 + sizeof(uint32_t),
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
 
-    for (i = 0; i < ARRAY_SIZE(counter_offsets); ++i)
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
         unsigned int j;
 
-        vkd3d_test_push_context("Offset %u", counter_offsets[i]);
+        vkd3d_test_push_context("Test %u", i);
+
+        if (tests[i].parameter_count != root_signature_desc.NumParameters
+                || tests[i].sampler_count != root_signature_desc.NumStaticSamplers)
+        {
+            if (context.root_signature)
+                ID3D12RootSignature_Release(context.root_signature);
+            root_signature_desc.NumParameters = tests[i].parameter_count;
+            root_signature_desc.NumStaticSamplers = tests[i].sampler_count;
+            hr = create_root_signature(device, &root_signature_desc, &context.root_signature);
+            ok(SUCCEEDED(hr), "Failed to create root signature, hr %#x.\n", hr);
+        }
 
         context.pipeline_state = create_compute_pipeline_state(device, context.root_signature,
                 shader_bytecode(cs_producer_code, sizeof(cs_producer_code)));
@@ -23763,12 +23804,12 @@ static void test_uav_counters(void)
         uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
         ID3D12Device_CreateUnorderedAccessView(device, out_buffer, NULL, &uav_desc,
                 get_cpu_descriptor_handle(&context, descriptor_heap, 1));
-        uav_desc.Buffer.CounterOffsetInBytes = counter_offsets[i];
+        uav_desc.Buffer.CounterOffsetInBytes = tests[i].counter_offset;
         ID3D12Device_CreateUnorderedAccessView(device, buffer, counter_buffer, &uav_desc,
                 get_cpu_descriptor_handle(&context, descriptor_heap, 0));
 
         counter = 0;
-        upload_buffer_data(counter_buffer, counter_offsets[i], sizeof(counter), &counter, queue, command_list);
+        upload_buffer_data(counter_buffer, tests[i].counter_offset, sizeof(counter), &counter, queue, command_list);
         reset_command_list(command_list, context.allocator);
         transition_sub_resource_state(command_list, counter_buffer, 0,
                 D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -23841,7 +23882,7 @@ static void test_uav_counters(void)
             id[j] = 0xdeadbeef;
         upload_buffer_data(buffer, 0, counter * sizeof(*id), id, queue, command_list);
         reset_command_list(command_list, context.allocator);
-        upload_buffer_data(counter_buffer, counter_offsets[i], sizeof(counter), &counter, queue, command_list);
+        upload_buffer_data(counter_buffer, tests[i].counter_offset, sizeof(counter), &counter, queue, command_list);
         reset_command_list(command_list, context.allocator);
 
         transition_sub_resource_state(command_list, counter_buffer, 0,
