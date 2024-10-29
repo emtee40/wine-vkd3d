@@ -10941,6 +10941,13 @@ static enum vkd3d_result spirv_parser_read_header(struct spirv_parser *parser)
         return VKD3D_ERROR_NOT_IMPLEMENTED;
     }
 
+    if (!spirv_parser_read_word(parser, &word))
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Unexpected end when reading the generator magic number.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
     return VKD3D_OK;
 }
 
