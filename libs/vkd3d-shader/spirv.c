@@ -10898,6 +10898,7 @@ struct spirv_parser
     const uint32_t *code;
     size_t pos;
     size_t size;
+    uint32_t bound;
 };
 
 static bool spirv_parser_read_word(struct spirv_parser *parser, uint32_t *word)
@@ -10945,6 +10946,20 @@ static enum vkd3d_result spirv_parser_read_header(struct spirv_parser *parser)
     {
         vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
                 "Unexpected end when reading the generator magic number.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    if (!spirv_parser_read_word(parser, &parser->bound))
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Unexpected end when reading the id bound.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    if (parser->bound == 0)
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Invalid zero id bound.");
         return VKD3D_ERROR_INVALID_SHADER;
     }
 
