@@ -196,7 +196,7 @@ static enum vkd3d_result vkd3d_spirv_binary_to_text(const struct vkd3d_shader_co
     struct vkd3d_shader_code text;
     enum vkd3d_result ret;
 
-    ret = spirv_parse(compile_info, 0, message_context, NULL, &text);
+    ret = spirv_parse(spirv, compile_info, 0, message_context, NULL, &text);
 
     if (ret >= 0)
     {
@@ -10895,9 +10895,43 @@ struct spirv_parser
 {
     struct vkd3d_shader_parser p;
     bool generate_text;
+    const uint32_t *code;
+    size_t pos;
+    size_t size;
 };
 
-static enum vkd3d_result spirv_parser_init(struct spirv_parser *parser, struct vsir_program *program,
+static bool spirv_parser_read_word(struct spirv_parser *parser, uint32_t *word)
+{
+    if (parser->pos >= parser->size)
+        return false;
+
+    *word = parser->code[parser->pos++];
+    return true;
+}
+
+static enum vkd3d_result spirv_parser_read_header(struct spirv_parser *parser)
+{
+    uint32_t word;
+
+    if (!spirv_parser_read_word(parser, &word))
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Unexpected end when reading the magic number.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    if (word != SpvMagicNumber)
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Invalid magic number %#08x.", word);
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    return VKD3D_OK;
+}
+
+static enum vkd3d_result spirv_parser_init(struct spirv_parser *parser,
+        const struct vkd3d_shader_code *source, struct vsir_program *program,
         const struct vkd3d_shader_compile_info *compile_info,
         struct vkd3d_shader_message_context *message_context, struct vkd3d_shader_code *text)
 {
@@ -10906,17 +10940,33 @@ static enum vkd3d_result spirv_parser_init(struct spirv_parser *parser, struct v
     vkd3d_shader_parser_init(&parser->p, program, message_context,
             compile_info ? compile_info->source_name : NULL);
 
+    if (source->size % 4 != 0)
+    {
+        vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_SPV_INVALID_SHADER,
+                "Shader size %zu is not a multiple of four.", source->size);
+        ret = VKD3D_ERROR_INVALID_SHADER;
+        goto fail;
+    }
+
     parser->generate_text = !!text;
+    parser->code = (const uint32_t *)source->code;
+    parser->pos = 0;
+    parser->size = source->size / 4;
+
+    if ((ret = spirv_parser_read_header(parser)) < 0)
+        goto fail;
 
     ret = VKD3D_ERROR_NOT_IMPLEMENTED;
 
+fail:
     return ret;
 }
 
 /* The SPIR-V parser can simultaneously generate a vsir_program and disassemble
  * the SPIR-V. Parameters `program' and `text' can be set to NULL if only one of
  * the outputs is needed. */
-enum vkd3d_result spirv_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t config_flags,
+enum vkd3d_result spirv_parse(const struct vkd3d_shader_code *spirv,
+        const struct vkd3d_shader_compile_info *compile_info, uint64_t config_flags,
         struct vkd3d_shader_message_context *message_context, struct vsir_program *program,
         struct vkd3d_shader_code *text)
 {
@@ -10925,7 +10975,7 @@ enum vkd3d_result spirv_parse(const struct vkd3d_shader_compile_info *compile_in
 
     MESSAGE("Creating a SPIR-V parser. This is unsupported; you get to keep all the pieces if it breaks.\n");
 
-    ret = spirv_parser_init(&parser, program, compile_info, message_context, text);
+    ret = spirv_parser_init(&parser, spirv, program, compile_info, message_context, text);
 
     return ret;
 }

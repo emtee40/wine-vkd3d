@@ -1635,7 +1635,8 @@ int tpf_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t con
         struct vkd3d_shader_message_context *message_context, struct vsir_program *program);
 int fx_parse(const struct vkd3d_shader_compile_info *compile_info,
         struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context);
-enum vkd3d_result spirv_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t config_flags,
+enum vkd3d_result spirv_parse(const struct vkd3d_shader_code *spirv,
+        const struct vkd3d_shader_compile_info *compile_info, uint64_t config_flags,
         struct vkd3d_shader_message_context *message_context, struct vsir_program *program,
         struct vkd3d_shader_code *text);
 
