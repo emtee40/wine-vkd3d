@@ -276,7 +276,39 @@ static bool metal_runner_dispatch(struct shader_runner *r, unsigned int x, unsig
 
 static void metal_runner_clear(struct shader_runner *r, struct resource *res, const struct vec4 *clear_value)
 {
-    return;
+    struct metal_resource *resource = metal_resource(res);
+    struct metal_runner *runner = metal_runner(r);
+
+    @autoreleasepool
+    {
+        MTLRenderPassDescriptor *descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        id<MTLCommandBuffer> cmdbuf = [runner->queue commandBuffer];
+        id<MTLRenderCommandEncoder> encoder;
+
+        switch (resource->r.desc.type)
+        {
+            case RESOURCE_TYPE_RENDER_TARGET:
+                descriptor.colorAttachments[0].texture = resource->texture;
+                descriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+                descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+                descriptor.colorAttachments[0].clearColor =
+                        MTLClearColorMake(clear_value->x, clear_value->y, clear_value->z, clear_value->w);
+                break;
+            case RESOURCE_TYPE_DEPTH_STENCIL:
+                descriptor.depthAttachment.texture = resource->texture;
+                descriptor.depthAttachment.loadAction = MTLLoadActionClear;
+                descriptor.depthAttachment.storeAction = MTLStoreActionStore;
+                descriptor.depthAttachment.clearDepth = clear_value->x;
+                break;
+            default:
+                fatal_error("Clears are not implemented for resource type %u.\n", resource->r.desc.type);
+        }
+        encoder = [cmdbuf renderCommandEncoderWithDescriptor:descriptor];
+        [encoder endEncoding];
+
+        [cmdbuf commit];
+        [cmdbuf waitUntilCompleted];
+    }
 };
 
 static bool metal_runner_draw(struct shader_runner *r, D3D_PRIMITIVE_TOPOLOGY primitive_topology,
