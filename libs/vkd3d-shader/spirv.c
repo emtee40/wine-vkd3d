@@ -3920,70 +3920,6 @@ static uint32_t spirv_compiler_emit_bool_to_double(struct spirv_compiler *compil
     return vkd3d_spirv_build_op_select(builder, type_id, val_id, true_id, false_id);
 }
 
-/* Based on the implementation in the OpenGL Mathematics library. */
-static uint32_t half_to_float(uint16_t value)
-{
-    uint32_t s = (value & 0x8000u) << 16;
-    uint32_t e = (value >> 10) & 0x1fu;
-    uint32_t m = value & 0x3ffu;
-
-    if (!e)
-    {
-        if (!m)
-        {
-            /* Plus or minus zero */
-            return s;
-        }
-        else
-        {
-            /* Denormalized number -- renormalize it */
-
-            while (!(m & 0x400u))
-            {
-                m <<= 1;
-                --e;
-            }
-
-            ++e;
-            m &= ~0x400u;
-        }
-    }
-    else if (e == 31u)
-    {
-        /* Positive or negative infinity for zero 'm'.
-         * Nan for non-zero 'm' -- preserve sign and significand bits */
-        return s | 0x7f800000u | (m << 13);
-    }
-
-    /* Normalized number */
-    e += 127u - 15u;
-    m <<= 13;
-
-    /* Assemble s, e and m. */
-    return s | (e << 23) | m;
-}
-
-static uint32_t convert_raw_constant32(enum vkd3d_data_type data_type, unsigned int uint_value)
-{
-    int16_t i;
-
-    /* TODO: native 16-bit support. */
-    if (data_type != VKD3D_DATA_UINT16 && data_type != VKD3D_DATA_HALF)
-        return uint_value;
-
-    if (data_type == VKD3D_DATA_HALF)
-        return half_to_float(uint_value);
-
-    /* Values in DXIL have no signedness, so it is ambiguous whether 16-bit constants should or
-     * should not be sign-extended when 16-bit execution is not supported. The AMD RX 580 Windows
-     * driver has no 16-bit support, and sign-extends all 16-bit constant ints to 32 bits. These
-     * results differ from SM 5. The RX 6750 XT supports 16-bit execution, so constants are not
-     * extended, and results match SM 5. It seems best to replicate the sign-extension, and if
-     * execution is 16-bit, the values will be truncated. */
-    i = uint_value;
-    return (int32_t)i;
-}
-
 static uint32_t spirv_compiler_emit_load_constant(struct spirv_compiler *compiler,
         const struct vkd3d_shader_register *reg, uint32_t swizzle, uint32_t write_mask)
 {
@@ -3996,15 +3932,14 @@ static uint32_t spirv_compiler_emit_load_constant(struct spirv_compiler *compile
     if (reg->dimension == VSIR_DIMENSION_SCALAR)
     {
         for (i = 0; i < component_count; ++i)
-            values[i] = convert_raw_constant32(reg->data_type, reg->u.immconst_u32[0]);
+            values[i] = reg->u.immconst_u32[0];
     }
     else
     {
         for (i = 0, j = 0; i < VKD3D_VEC4_SIZE; ++i)
         {
             if (write_mask & (VKD3DSP_WRITEMASK_0 << i))
-                values[j++] = convert_raw_constant32(reg->data_type,
-                        reg->u.immconst_u32[vsir_swizzle_get_component(swizzle, i)]);
+                values[j++] = reg->u.immconst_u32[vsir_swizzle_get_component(swizzle, i)];
         }
     }
 
@@ -4152,8 +4087,7 @@ static uint32_t spirv_compiler_emit_constant_array(struct spirv_compiler *compil
         case VKD3D_DATA_UINT16:
             /* Scalar only. */
             for (i = 0; i < element_count; ++i)
-                elements[i] = vkd3d_spirv_get_op_constant(builder, elem_type_id,
-                        convert_raw_constant32(icb->data_type, icb->data[i]));
+                elements[i] = vkd3d_spirv_get_op_constant(builder, elem_type_id, icb->data[i]);
             break;
         case VKD3D_DATA_FLOAT:
         case VKD3D_DATA_INT:

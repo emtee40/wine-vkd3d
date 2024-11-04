@@ -223,6 +223,7 @@ enum vkd3d_shader_error
     VKD3D_SHADER_WARNING_DXIL_INVALID_OPERATION         = 8308,
     VKD3D_SHADER_WARNING_DXIL_IGNORING_ATTACHMENT       = 8309,
     VKD3D_SHADER_WARNING_DXIL_UNDEFINED_OPERAND         = 8310,
+    VKD3D_SHADER_WARNING_DXIL_IGNORING_FORCE_16_BIT     = 8311,
 
     VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED             = 9000,
     VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER             = 9001,
@@ -910,6 +911,7 @@ struct vkd3d_shader_immediate_constant_buffer
 {
     unsigned int register_idx;
     enum vkd3d_data_type data_type;
+    enum vkd3d_shader_register_precision precision;
     /* total count is element_count * component_count */
     unsigned int element_count;
     unsigned int component_count;
@@ -923,6 +925,7 @@ struct vkd3d_shader_indexable_temp
     unsigned int register_size;
     unsigned int alignment;
     enum vkd3d_data_type data_type;
+    enum vkd3d_shader_register_precision precision;
     unsigned int component_count;
     bool has_function_scope;
     const struct vkd3d_shader_immediate_constant_buffer *initialiser;
@@ -1424,6 +1427,7 @@ struct vsir_program
     bool use_vocp;
     bool has_point_size;
     bool has_point_coord;
+    bool use_native_16_bit;
     enum vsir_control_flow_type cf_type;
     enum vsir_normalisation_level normalisation_level;
 
