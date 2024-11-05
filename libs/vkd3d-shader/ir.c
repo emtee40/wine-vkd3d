@@ -142,7 +142,7 @@ static struct signature_element *vsir_signature_find_element_by_name(
     return NULL;
 }
 
-static bool vsir_signature_find_sysval(const struct shader_signature *signature,
+bool vsir_signature_find_sysval(const struct shader_signature *signature,
         enum vkd3d_shader_sysval_semantic sysval, unsigned int semantic_index, unsigned int *element_index)
 {
     const struct signature_element *e;

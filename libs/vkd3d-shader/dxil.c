@@ -430,6 +430,9 @@ enum dx_intrinsic_opcode
     DX_DERIV_COARSEY                =  84,
     DX_DERIV_FINEX                  =  85,
     DX_DERIV_FINEY                  =  86,
+    DX_EVAL_SAMPLE_INDEX            =  88,
+    DX_EVAL_CENTROID                =  89,
+    DX_SAMPLE_INDEX                 =  90,
     DX_COVERAGE                     =  91,
     DX_THREAD_ID                    =  93,
     DX_GROUP_ID                     =  94,
@@ -3827,6 +3830,11 @@ static enum vkd3d_shader_register_type register_type_from_dxil_semantic_kind(
 {
     switch (sysval_semantic)
     {
+        /* VSIR does not use an I/O register for SV_SampleIndex, but its
+         * signature element has a register index of UINT_MAX and it is
+         * convenient to return a valid register type here to handle it. */
+        case VKD3D_SHADER_SV_SAMPLE_INDEX:
+            return VKD3DSPR_NULL;
         case VKD3D_SHADER_SV_COVERAGE:
             return VKD3DSPR_COVERAGE;
         case VKD3D_SHADER_SV_DEPTH:
@@ -3844,6 +3852,7 @@ static void sm6_parser_init_signature(struct sm6_parser *sm6, const struct shade
         bool is_input, enum vkd3d_shader_register_type reg_type, struct vkd3d_shader_dst_param *params)
 {
     enum vkd3d_shader_type shader_type = sm6->p.program->shader_version.type;
+    enum vkd3d_shader_register_type io_reg_type;
     bool is_patch_constant, is_control_point;
     struct vkd3d_shader_dst_param *param;
     const struct signature_element *e;
@@ -3876,9 +3885,10 @@ static void sm6_parser_init_signature(struct sm6_parser *sm6, const struct shade
 
         param = &params[i];
 
-        if (e->register_index == UINT_MAX)
+        if (e->register_index == UINT_MAX
+                && (io_reg_type = register_type_from_dxil_semantic_kind(e->sysval_semantic)) != VKD3DSPR_NULL)
         {
-            dst_param_io_init(param, e, register_type_from_dxil_semantic_kind(e->sysval_semantic));
+            dst_param_io_init(param, e, io_reg_type);
             continue;
         }
 
@@ -5090,6 +5100,54 @@ static void sm6_parser_emit_dx_dot(struct sm6_parser *sm6, enum dx_intrinsic_opc
     instruction_dst_param_init_ssa_scalar(ins, sm6);
 }
 
+static void sm6_parser_emit_dx_eval_attrib(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+        const struct sm6_value **operands, struct function_emission_state *state)
+{
+    struct vkd3d_shader_instruction *ins = state->ins;
+    struct vkd3d_shader_src_param *src_params;
+    const struct shader_signature *signature;
+    unsigned int row_index, column_index;
+    const struct signature_element *e;
+
+    row_index = sm6_value_get_constant_uint(operands[0]);
+    column_index = sm6_value_get_constant_uint(operands[2]);
+
+    signature = &sm6->p.program->input_signature;
+    if (row_index >= signature->element_count)
+    {
+        WARN("Invalid row index %u.\n", row_index);
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                "Invalid input row index %u for an attribute evaluation.", row_index);
+        return;
+    }
+
+    e = &signature->elements[row_index];
+
+    if (column_index >= VKD3D_VEC4_SIZE || !(e->mask & (1 << column_index)))
+    {
+        WARN("Invalid column index %u.\n", column_index);
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                "Invalid input column index %u for an attribute evaluation.", column_index);
+        return;
+    }
+
+    vsir_instruction_init(ins, &sm6->p.location, (op == DX_EVAL_CENTROID)
+            ? VKD3DSIH_EVAL_CENTROID : VKD3DSIH_EVAL_SAMPLE_INDEX);
+
+    if (!(src_params = instruction_src_params_alloc(ins, 1 + (op == DX_EVAL_SAMPLE_INDEX), sm6)))
+        return;
+    src_params[0].reg = sm6->input_params[row_index].reg;
+    src_param_init_scalar(&src_params[0], column_index);
+
+    if (e->register_count > 1)
+        register_index_address_init(&src_params[0].reg.idx[0], operands[1], sm6);
+
+    if (op == DX_EVAL_SAMPLE_INDEX)
+        src_param_init_from_value(&src_params[1], operands[3]);
+
+    instruction_dst_param_init_ssa_scalar(ins, sm6);
+}
+
 static void sm6_parser_emit_dx_fabs(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
         const struct sm6_value **operands, struct function_emission_state *state)
 {
@@ -5795,6 +5853,34 @@ static void sm6_parser_emit_dx_sample(struct sm6_parser *sm6, enum dx_intrinsic_
     instruction_dst_param_init_ssa_vector(ins, component_count, sm6);
 }
 
+static void sm6_parser_emit_dx_sample_index(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+        const struct sm6_value **operands, struct function_emission_state *state)
+{
+    const struct shader_signature *signature = &sm6->p.program->input_signature;
+    struct vkd3d_shader_instruction *ins = state->ins;
+    struct vkd3d_shader_src_param *src_param;
+    unsigned int element_idx;
+
+    vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_MOV);
+
+    /* SV_SampleIndex is identified in VSIR by its signature element index,
+     * but the index is not supplied as a parameter to the DXIL intrinsic. */
+    if ((!vsir_signature_find_sysval(signature, VKD3D_SHADER_SV_SAMPLE_INDEX, 0, &element_idx)))
+    {
+        WARN("Sample index is not in the signature.\n");
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_SIGNATURE,
+                "Sample index signature element for a sample index operation is missing.");
+        return;
+    }
+
+    if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
+        return;
+    src_param->reg = sm6->input_params[element_idx].reg;
+    src_param_init(src_param);
+
+    instruction_dst_param_init_ssa_scalar(ins, sm6);
+}
+
 static void sm6_parser_emit_dx_saturate(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
         const struct sm6_value **operands, struct function_emission_state *state)
 {
@@ -6252,6 +6338,8 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
     [DX_DOT4                          ] = {"g", "RRRRRRRR", sm6_parser_emit_dx_dot},
     [DX_EMIT_STREAM                   ] = {"v", "c",    sm6_parser_emit_dx_stream},
     [DX_EMIT_THEN_CUT_STREAM          ] = {"v", "c",    sm6_parser_emit_dx_stream},
+    [DX_EVAL_CENTROID                 ] = {"o", "cic",  sm6_parser_emit_dx_eval_attrib},
+    [DX_EVAL_SAMPLE_INDEX             ] = {"o", "cici", sm6_parser_emit_dx_eval_attrib},
     [DX_EXP                           ] = {"g", "R",    sm6_parser_emit_dx_unary},
     [DX_FABS                          ] = {"g", "R",    sm6_parser_emit_dx_fabs},
     [DX_FIRST_BIT_HI                  ] = {"i", "m",    sm6_parser_emit_dx_unary},
@@ -6300,6 +6388,7 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
     [DX_SAMPLE_C                      ] = {"o", "HHffffiiiff", sm6_parser_emit_dx_sample},
     [DX_SAMPLE_C_LZ                   ] = {"o", "HHffffiiif", sm6_parser_emit_dx_sample},
     [DX_SAMPLE_GRAD                   ] = {"o", "HHffffiiifffffff", sm6_parser_emit_dx_sample},
+    [DX_SAMPLE_INDEX                  ] = {"i", "",     sm6_parser_emit_dx_sample_index},
     [DX_SAMPLE_LOD                    ] = {"o", "HHffffiiif", sm6_parser_emit_dx_sample},
     [DX_SATURATE                      ] = {"g", "R",    sm6_parser_emit_dx_saturate},
     [DX_SIN                           ] = {"g", "R",    sm6_parser_emit_dx_sincos},
@@ -8513,6 +8602,7 @@ static const enum vkd3d_shader_sysval_semantic sysval_semantic_table[] =
     [SEMANTIC_KIND_CLIPDISTANCE]         = VKD3D_SHADER_SV_CLIP_DISTANCE,
     [SEMANTIC_KIND_CULLDISTANCE]         = VKD3D_SHADER_SV_CULL_DISTANCE,
     [SEMANTIC_KIND_PRIMITIVEID]          = VKD3D_SHADER_SV_PRIMITIVE_ID,
+    [SEMANTIC_KIND_SAMPLEINDEX]          = VKD3D_SHADER_SV_SAMPLE_INDEX,
     [SEMANTIC_KIND_ISFRONTFACE]          = VKD3D_SHADER_SV_IS_FRONT_FACE,
     [SEMANTIC_KIND_COVERAGE]             = VKD3D_SHADER_SV_COVERAGE,
     [SEMANTIC_KIND_TARGET]               = VKD3D_SHADER_SV_TARGET,
