@@ -9070,6 +9070,79 @@ static bool sm4_generate_vsir_instr_sample(struct hlsl_ctx *ctx,
     return true;
 }
 
+static bool sm4_generate_vsir_instr_gather(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load,
+        uint32_t swizzle)
+{
+    const struct vkd3d_shader_version *version = &program->shader_version;
+    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
+    const struct hlsl_ir_node *coords = load->coords.node;
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_deref *sampler = &load->sampler;
+    const struct hlsl_ir_node *instr = &load->node;
+    struct vkd3d_shader_instruction *ins;
+    enum vkd3d_shader_opcode opcode;
+
+    opcode = VKD3DSIH_GATHER4;
+    if (texel_offset)
+    {
+        if (!sm4_generate_vsir_validate_texel_offset_aoffimmi(texel_offset))
+        {
+            if (!vkd3d_shader_ver_ge(version, 5, 0))
+            {
+                hlsl_error(ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
+                    "Offset must resolve to integer literal in the range -8 to 7 for profiles < 5.");
+                return false;
+            }
+            opcode = VKD3DSIH_GATHER4_PO;
+        }
+    }
+
+    if (opcode == VKD3DSIH_GATHER4)
+    {
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, 3)))
+            return false;
+
+        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+        vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+        sm4_generate_vsir_encode_texel_offset_as_aoffimmi(ins, texel_offset);
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[1], resource, ins->dst[0].write_mask, &instr->loc))
+            return false;
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[2], sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+            return false;
+        ins->src[2].reg.dimension = VSIR_DIMENSION_VEC4;
+        ins->src[2].swizzle = swizzle;
+    }
+    else if (opcode == VKD3DSIH_GATHER4_PO)
+    {
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, 4)))
+            return false;
+
+        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+        vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+        vsir_src_from_hlsl_node(&ins->src[1], ctx, texel_offset, VKD3DSP_WRITEMASK_ALL);
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[2], resource, ins->dst[0].write_mask, &instr->loc))
+            return false;
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[3], sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+            return false;
+        ins->src[3].reg.dimension = VSIR_DIMENSION_VEC4;
+        ins->src[3].swizzle = swizzle;
+    }
+    else
+    {
+        vkd3d_unreachable();
+    }
+    return true;
+}
+
 static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
         struct vsir_program *program, const struct hlsl_ir_resource_load *load)
 {
@@ -9099,6 +9172,18 @@ static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
             /* Combined sample expressions were lowered. */
             VKD3D_ASSERT(load->sampler.var);
             return sm4_generate_vsir_instr_sample(ctx, program, load);
+
+        case HLSL_RESOURCE_GATHER_RED:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(X, X, X, X));
+
+        case HLSL_RESOURCE_GATHER_GREEN:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(Y, Y, Y, Y));
+
+        case HLSL_RESOURCE_GATHER_BLUE:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(Z, Z, Z, Z));
+
+        case HLSL_RESOURCE_GATHER_ALPHA:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(W, W, W, W));
 
         case HLSL_RESOURCE_SAMPLE_PROJ:
             vkd3d_unreachable();

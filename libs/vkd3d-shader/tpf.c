@@ -4652,33 +4652,6 @@ static void write_sm4_instruction(const struct tpf_compiler *tpf, const struct s
     sm4_update_stat_counters(tpf, instr);
 }
 
-static bool encode_texel_offset_as_aoffimmi(struct sm4_instruction *instr,
-        const struct hlsl_ir_node *texel_offset)
-{
-    struct sm4_instruction_modifier modif;
-    struct hlsl_ir_constant *offset;
-
-    if (!texel_offset || texel_offset->type != HLSL_IR_CONSTANT)
-        return false;
-    offset = hlsl_ir_constant(texel_offset);
-
-    modif.type = VKD3D_SM4_MODIFIER_AOFFIMMI;
-    modif.u.aoffimmi.u = offset->value.u[0].i;
-    modif.u.aoffimmi.v = 0;
-    modif.u.aoffimmi.w = 0;
-    if (offset->node.data_type->dimx > 1)
-        modif.u.aoffimmi.v = offset->value.u[1].i;
-    if (offset->node.data_type->dimx > 2)
-        modif.u.aoffimmi.w = offset->value.u[2].i;
-    if (modif.u.aoffimmi.u < -8 || modif.u.aoffimmi.u > 7
-            || modif.u.aoffimmi.v < -8 || modif.u.aoffimmi.v > 7
-            || modif.u.aoffimmi.w < -8 || modif.u.aoffimmi.w > 7)
-        return false;
-
-    instr->modifiers[instr->modifier_count++] = modif;
-    return true;
-}
-
 static void write_sm4_dcl_constant_buffer(const struct tpf_compiler *tpf, const struct hlsl_buffer *cbuffer)
 {
     size_t size = (cbuffer->used_size + 3) / 4;
@@ -5167,53 +5140,8 @@ static void write_sm4_loop(struct tpf_compiler *tpf, const struct hlsl_ir_loop *
     write_sm4_instruction(tpf, &instr);
 }
 
-static void write_sm4_gather(const struct tpf_compiler *tpf, const struct hlsl_ir_node *dst,
-        const struct hlsl_deref *resource, const struct hlsl_deref *sampler,
-        const struct hlsl_ir_node *coords, uint32_t swizzle, const struct hlsl_ir_node *texel_offset)
-{
-    const struct vkd3d_shader_version *version = &tpf->program->shader_version;
-    struct vkd3d_shader_src_param *src;
-    struct sm4_instruction instr;
-
-    memset(&instr, 0, sizeof(instr));
-
-    instr.opcode = VKD3D_SM4_OP_GATHER4;
-
-    sm4_dst_from_node(&instr.dsts[0], dst);
-    instr.dst_count = 1;
-
-    sm4_src_from_node(tpf, &instr.srcs[instr.src_count++], coords, VKD3DSP_WRITEMASK_ALL);
-
-    if (texel_offset)
-    {
-        if (!encode_texel_offset_as_aoffimmi(&instr, texel_offset))
-        {
-            if (!vkd3d_shader_ver_ge(version, 5, 0))
-            {
-                hlsl_error(tpf->ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
-                    "Offset must resolve to integer literal in the range -8 to 7 for profiles < 5.");
-                return;
-            }
-            instr.opcode = VKD3D_SM5_OP_GATHER4_PO;
-            sm4_src_from_node(tpf, &instr.srcs[instr.src_count++], texel_offset, VKD3DSP_WRITEMASK_ALL);
-        }
-    }
-
-    sm4_src_from_deref(tpf, &instr.srcs[instr.src_count++], resource, instr.dsts[0].write_mask, &instr);
-
-    src = &instr.srcs[instr.src_count++];
-    sm4_src_from_deref(tpf, src, sampler, VKD3DSP_WRITEMASK_ALL, &instr);
-    src->reg.dimension = VSIR_DIMENSION_VEC4;
-    src->swizzle = swizzle;
-
-    write_sm4_instruction(tpf, &instr);
-}
-
 static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
 {
-    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
-    const struct hlsl_ir_node *coords = load->coords.node;
-
     if (load->sampler.var && !load->sampler.var->is_uniform)
     {
         hlsl_fixme(tpf->ctx, &load->node.loc, "Sample using non-uniform sampler variable.");
@@ -5228,26 +5156,6 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
 
     switch (load->load_type)
     {
-        case HLSL_RESOURCE_GATHER_RED:
-            write_sm4_gather(tpf, &load->node, &load->resource, &load->sampler, coords,
-                    VKD3D_SHADER_SWIZZLE(X, X, X, X), texel_offset);
-            break;
-
-        case HLSL_RESOURCE_GATHER_GREEN:
-            write_sm4_gather(tpf, &load->node, &load->resource, &load->sampler, coords,
-                    VKD3D_SHADER_SWIZZLE(Y, Y, Y, Y), texel_offset);
-            break;
-
-        case HLSL_RESOURCE_GATHER_BLUE:
-            write_sm4_gather(tpf, &load->node, &load->resource, &load->sampler, coords,
-                    VKD3D_SHADER_SWIZZLE(Z, Z, Z, Z), texel_offset);
-            break;
-
-        case HLSL_RESOURCE_GATHER_ALPHA:
-            write_sm4_gather(tpf, &load->node, &load->resource, &load->sampler, coords,
-                    VKD3D_SHADER_SWIZZLE(W, W, W, W), texel_offset);
-            break;
-
         case HLSL_RESOURCE_SAMPLE_INFO:
             write_sm4_sampleinfo(tpf, load);
             break;
@@ -5256,6 +5164,10 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
             write_sm4_resinfo(tpf, load);
             break;
 
+        case HLSL_RESOURCE_GATHER_RED:
+        case HLSL_RESOURCE_GATHER_GREEN:
+        case HLSL_RESOURCE_GATHER_BLUE:
+        case HLSL_RESOURCE_GATHER_ALPHA:
         case HLSL_RESOURCE_SAMPLE:
         case HLSL_RESOURCE_SAMPLE_CMP:
         case HLSL_RESOURCE_SAMPLE_CMP_LZ:
@@ -5432,6 +5344,8 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vkd3d_
         case VKD3DSIH_FRC:
         case VKD3DSIH_FTOI:
         case VKD3DSIH_FTOU:
+        case VKD3DSIH_GATHER4:
+        case VKD3DSIH_GATHER4_PO:
         case VKD3DSIH_GEO:
         case VKD3DSIH_IADD:
         case VKD3DSIH_IEQ:
