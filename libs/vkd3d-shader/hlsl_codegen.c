@@ -9166,6 +9166,40 @@ static bool sm4_generate_vsir_instr_sample_info(struct hlsl_ctx *ctx,
     return true;
 }
 
+static bool sm4_generate_vsir_instr_resinfo(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_ir_node *instr = &load->node;
+    struct hlsl_type *type = instr->data_type;
+    struct vkd3d_shader_instruction *ins;
+
+    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
+            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+    {
+        hlsl_fixme(ctx, &load->node.loc, "resinfo for buffers.");
+        return false;
+    }
+
+    VKD3D_ASSERT(type->e.numeric.type == HLSL_TYPE_UINT || type->e.numeric.type == HLSL_TYPE_FLOAT);
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VKD3DSIH_RESINFO, 1, 2)))
+        return false;
+
+    if (type->e.numeric.type == HLSL_TYPE_UINT)
+        ins->flags = VKD3DSI_RESINFO_UINT;
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    vsir_src_from_hlsl_node(&ins->src[0], ctx, load->lod.node, VKD3DSP_WRITEMASK_ALL);
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[1],
+            resource, ins->dst[0].write_mask, &instr->loc))
+        return false;
+
+    return true;
+}
+
 static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
         struct vsir_program *program, const struct hlsl_ir_resource_load *load)
 {
@@ -9210,6 +9244,9 @@ static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
 
         case HLSL_RESOURCE_SAMPLE_INFO:
             return sm4_generate_vsir_instr_sample_info(ctx, program, load);
+
+        case HLSL_RESOURCE_RESINFO:
+            return sm4_generate_vsir_instr_resinfo(ctx, program, load);
 
         case HLSL_RESOURCE_SAMPLE_PROJ:
             vkd3d_unreachable();

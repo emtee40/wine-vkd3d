@@ -4109,239 +4109,6 @@ static void sm4_register_from_node(struct vkd3d_shader_register *reg, uint32_t *
     *writemask = instr->reg.writemask;
 }
 
-static void sm4_numeric_register_from_deref(struct hlsl_ctx *ctx, struct vkd3d_shader_register *reg,
-        enum vkd3d_shader_register_type type, uint32_t *writemask, const struct hlsl_deref *deref,
-        struct sm4_instruction *sm4_instr)
-{
-    const struct hlsl_ir_var *var = deref->var;
-    unsigned int offset_const_deref;
-
-    reg->type = type;
-    reg->idx[0].offset = var->regs[HLSL_REGSET_NUMERIC].id;
-    reg->dimension = VSIR_DIMENSION_VEC4;
-
-    VKD3D_ASSERT(var->regs[HLSL_REGSET_NUMERIC].allocated);
-
-    if (!var->indexable)
-    {
-        offset_const_deref = hlsl_offset_from_deref_safe(ctx, deref);
-        reg->idx[0].offset += offset_const_deref / 4;
-        reg->idx_count = 1;
-    }
-    else
-    {
-        offset_const_deref = deref->const_offset;
-        reg->idx[1].offset = offset_const_deref / 4;
-        reg->idx_count = 2;
-
-        if (deref->rel_offset.node)
-        {
-            struct vkd3d_shader_src_param *idx_src;
-            unsigned int idx_writemask;
-
-            VKD3D_ASSERT(sm4_instr->idx_src_count < ARRAY_SIZE(sm4_instr->idx_srcs));
-            idx_src = &sm4_instr->idx_srcs[sm4_instr->idx_src_count++];
-            memset(idx_src, 0, sizeof(*idx_src));
-
-            reg->idx[1].rel_addr = idx_src;
-            sm4_register_from_node(&idx_src->reg, &idx_writemask, deref->rel_offset.node);
-            VKD3D_ASSERT(idx_writemask != 0);
-            idx_src->swizzle = swizzle_from_sm4(hlsl_swizzle_from_writemask(idx_writemask));
-        }
-    }
-
-    *writemask = 0xf & (0xf << (offset_const_deref % 4));
-    if (var->regs[HLSL_REGSET_NUMERIC].writemask)
-        *writemask = hlsl_combine_writemasks(var->regs[HLSL_REGSET_NUMERIC].writemask, *writemask);
-}
-
-static void sm4_register_from_deref(const struct tpf_compiler *tpf, struct vkd3d_shader_register *reg,
-        uint32_t *writemask, const struct hlsl_deref *deref, struct sm4_instruction *sm4_instr)
-{
-    const struct vkd3d_shader_version *version = &tpf->program->shader_version;
-    const struct hlsl_type *data_type = hlsl_deref_get_type(tpf->ctx, deref);
-    const struct hlsl_ir_var *var = deref->var;
-    struct hlsl_ctx *ctx = tpf->ctx;
-
-    if (var->is_uniform)
-    {
-        enum hlsl_regset regset = hlsl_deref_get_regset(ctx, deref);
-
-        if (regset == HLSL_REGSET_TEXTURES)
-        {
-            reg->type = VKD3DSPR_RESOURCE;
-            reg->dimension = VSIR_DIMENSION_VEC4;
-            if (vkd3d_shader_ver_ge(version, 5, 1))
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_TEXTURES].id;
-                reg->idx[1].offset = var->regs[HLSL_REGSET_TEXTURES].index; /* FIXME: array index */
-                reg->idx_count = 2;
-            }
-            else
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_TEXTURES].index;
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
-                reg->idx_count = 1;
-            }
-            VKD3D_ASSERT(regset == HLSL_REGSET_TEXTURES);
-            *writemask = VKD3DSP_WRITEMASK_ALL;
-        }
-        else if (regset == HLSL_REGSET_UAVS)
-        {
-            reg->type = VKD3DSPR_UAV;
-            reg->dimension = VSIR_DIMENSION_VEC4;
-            if (vkd3d_shader_ver_ge(version, 5, 1))
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_UAVS].id;
-                reg->idx[1].offset = var->regs[HLSL_REGSET_UAVS].index; /* FIXME: array index */
-                reg->idx_count = 2;
-            }
-            else
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_UAVS].index;
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
-                reg->idx_count = 1;
-            }
-            VKD3D_ASSERT(regset == HLSL_REGSET_UAVS);
-            *writemask = VKD3DSP_WRITEMASK_ALL;
-        }
-        else if (regset == HLSL_REGSET_SAMPLERS)
-        {
-            reg->type = VKD3DSPR_SAMPLER;
-            reg->dimension = VSIR_DIMENSION_NONE;
-            if (vkd3d_shader_ver_ge(version, 5, 1))
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_SAMPLERS].id;
-                reg->idx[1].offset = var->regs[HLSL_REGSET_SAMPLERS].index; /* FIXME: array index */
-                reg->idx_count = 2;
-            }
-            else
-            {
-                reg->idx[0].offset = var->regs[HLSL_REGSET_SAMPLERS].index;
-                reg->idx[0].offset += hlsl_offset_from_deref_safe(ctx, deref);
-                reg->idx_count = 1;
-            }
-            VKD3D_ASSERT(regset == HLSL_REGSET_SAMPLERS);
-            *writemask = VKD3DSP_WRITEMASK_ALL;
-        }
-        else
-        {
-            unsigned int offset = hlsl_offset_from_deref_safe(ctx, deref) + var->buffer_offset;
-
-            VKD3D_ASSERT(data_type->class <= HLSL_CLASS_VECTOR);
-            reg->type = VKD3DSPR_CONSTBUFFER;
-            reg->dimension = VSIR_DIMENSION_VEC4;
-            if (vkd3d_shader_ver_ge(version, 5, 1))
-            {
-                reg->idx[0].offset = var->buffer->reg.id;
-                reg->idx[1].offset = var->buffer->reg.index; /* FIXME: array index */
-                reg->idx[2].offset = offset / 4;
-                reg->idx_count = 3;
-            }
-            else
-            {
-                reg->idx[0].offset = var->buffer->reg.index;
-                reg->idx[1].offset = offset / 4;
-                reg->idx_count = 2;
-            }
-            *writemask = ((1u << data_type->dimx) - 1) << (offset & 3);
-        }
-    }
-    else if (var->is_input_semantic)
-    {
-        bool has_idx;
-
-        if (sm4_register_from_semantic_name(version, var->semantic.name, false, &reg->type, &has_idx))
-        {
-            unsigned int offset = hlsl_offset_from_deref_safe(ctx, deref);
-
-            if (has_idx)
-            {
-                reg->idx[0].offset = var->semantic.index + offset / 4;
-                reg->idx_count = 1;
-            }
-
-            if (shader_sm4_is_scalar_register(reg))
-                reg->dimension = VSIR_DIMENSION_SCALAR;
-            else
-                reg->dimension = VSIR_DIMENSION_VEC4;
-            *writemask = ((1u << data_type->dimx) - 1) << (offset % 4);
-        }
-        else
-        {
-            struct hlsl_reg hlsl_reg = hlsl_reg_from_deref(ctx, deref);
-
-            VKD3D_ASSERT(hlsl_reg.allocated);
-
-            if (version->type == VKD3D_SHADER_TYPE_DOMAIN)
-                reg->type = VKD3DSPR_PATCHCONST;
-            else
-                reg->type = VKD3DSPR_INPUT;
-            reg->dimension = VSIR_DIMENSION_VEC4;
-            reg->idx[0].offset = hlsl_reg.id;
-            reg->idx_count = 1;
-            *writemask = hlsl_reg.writemask;
-        }
-    }
-    else if (var->is_output_semantic)
-    {
-        bool has_idx;
-
-        if (sm4_register_from_semantic_name(version, var->semantic.name, true, &reg->type, &has_idx))
-        {
-            unsigned int offset = hlsl_offset_from_deref_safe(ctx, deref);
-
-            if (has_idx)
-            {
-                reg->idx[0].offset = var->semantic.index + offset / 4;
-                reg->idx_count = 1;
-            }
-
-            if (shader_sm4_is_scalar_register(reg))
-                reg->dimension = VSIR_DIMENSION_SCALAR;
-            else
-                reg->dimension = VSIR_DIMENSION_VEC4;
-            *writemask = ((1u << data_type->dimx) - 1) << (offset % 4);
-        }
-        else
-        {
-            struct hlsl_reg hlsl_reg = hlsl_reg_from_deref(ctx, deref);
-
-            VKD3D_ASSERT(hlsl_reg.allocated);
-            reg->type = VKD3DSPR_OUTPUT;
-            reg->dimension = VSIR_DIMENSION_VEC4;
-            reg->idx[0].offset = hlsl_reg.id;
-            reg->idx_count = 1;
-            *writemask = hlsl_reg.writemask;
-        }
-    }
-    else
-    {
-        enum vkd3d_shader_register_type type = deref->var->indexable ? VKD3DSPR_IDXTEMP : VKD3DSPR_TEMP;
-
-        sm4_numeric_register_from_deref(ctx, reg, type, writemask, deref, sm4_instr);
-    }
-}
-
-static void sm4_src_from_deref(const struct tpf_compiler *tpf, struct vkd3d_shader_src_param *src,
-        const struct hlsl_deref *deref, unsigned int map_writemask, struct sm4_instruction *sm4_instr)
-{
-    unsigned int hlsl_swizzle;
-    uint32_t writemask;
-
-    sm4_register_from_deref(tpf, &src->reg, &writemask, deref, sm4_instr);
-    if (vkd3d_sm4_get_default_swizzle_type(&tpf->lookup, src->reg.type) == VKD3D_SM4_SWIZZLE_VEC4)
-    {
-        hlsl_swizzle = hlsl_map_swizzle(hlsl_swizzle_from_writemask(writemask), map_writemask);
-        src->swizzle = swizzle_from_sm4(hlsl_swizzle);
-    }
-}
-
-static void sm4_dst_from_node(struct vkd3d_shader_dst_param *dst, const struct hlsl_ir_node *instr)
-{
-    sm4_register_from_node(&dst->reg, &dst->write_mask, instr);
-}
-
 static void sm4_src_from_constant_value(struct vkd3d_shader_src_param *src,
         const struct hlsl_constant_value *value, unsigned int width, unsigned int map_writemask)
 {
@@ -5007,36 +4774,6 @@ static void write_sm4_ret(const struct tpf_compiler *tpf)
     write_sm4_instruction(tpf, &instr);
 }
 
-static void write_sm4_resinfo(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
-{
-    const struct hlsl_deref *resource = &load->resource;
-    const struct hlsl_ir_node *dst = &load->node;
-    struct sm4_instruction instr;
-
-    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
-            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
-    {
-        hlsl_fixme(tpf->ctx, &load->node.loc, "resinfo for buffers.");
-        return;
-    }
-
-    VKD3D_ASSERT(dst->data_type->e.numeric.type == HLSL_TYPE_UINT || dst->data_type->e.numeric.type == HLSL_TYPE_FLOAT);
-
-    memset(&instr, 0, sizeof(instr));
-    instr.opcode = VKD3D_SM4_OP_RESINFO;
-    if (dst->data_type->e.numeric.type == HLSL_TYPE_UINT)
-        instr.extra_bits |= VKD3DSI_RESINFO_UINT << VKD3D_SM4_INSTRUCTION_FLAGS_SHIFT;
-
-    sm4_dst_from_node(&instr.dsts[0], dst);
-    instr.dst_count = 1;
-
-    sm4_src_from_node(tpf, &instr.srcs[0], load->lod.node, VKD3DSP_WRITEMASK_ALL);
-    sm4_src_from_deref(tpf, &instr.srcs[1], resource, instr.dsts[0].write_mask, &instr);
-    instr.src_count = 2;
-
-    write_sm4_instruction(tpf, &instr);
-}
-
 static void write_sm4_if(struct tpf_compiler *tpf, const struct hlsl_ir_if *iff)
 {
     struct sm4_instruction instr =
@@ -5116,43 +4853,6 @@ static void write_sm4_loop(struct tpf_compiler *tpf, const struct hlsl_ir_loop *
 
     instr.opcode = VKD3D_SM4_OP_ENDLOOP;
     write_sm4_instruction(tpf, &instr);
-}
-
-static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
-{
-    if (load->sampler.var && !load->sampler.var->is_uniform)
-    {
-        hlsl_fixme(tpf->ctx, &load->node.loc, "Sample using non-uniform sampler variable.");
-        return;
-    }
-
-    if (!load->resource.var->is_uniform)
-    {
-        hlsl_fixme(tpf->ctx, &load->node.loc, "Load from non-uniform resource variable.");
-        return;
-    }
-
-    switch (load->load_type)
-    {
-        case HLSL_RESOURCE_RESINFO:
-            write_sm4_resinfo(tpf, load);
-            break;
-
-        case HLSL_RESOURCE_GATHER_RED:
-        case HLSL_RESOURCE_GATHER_GREEN:
-        case HLSL_RESOURCE_GATHER_BLUE:
-        case HLSL_RESOURCE_GATHER_ALPHA:
-        case HLSL_RESOURCE_SAMPLE:
-        case HLSL_RESOURCE_SAMPLE_CMP:
-        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
-        case HLSL_RESOURCE_SAMPLE_LOD:
-        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
-        case HLSL_RESOURCE_SAMPLE_GRAD:
-        case HLSL_RESOURCE_LOAD:
-        case HLSL_RESOURCE_SAMPLE_PROJ:
-        case HLSL_RESOURCE_SAMPLE_INFO:
-            vkd3d_unreachable();
-    }
 }
 
 static void write_sm4_switch(struct tpf_compiler *tpf, const struct hlsl_ir_switch *s)
@@ -5351,6 +5051,7 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vkd3d_
         case VKD3DSIH_NOT:
         case VKD3DSIH_OR:
         case VKD3DSIH_RCP:
+        case VKD3DSIH_RESINFO:
         case VKD3DSIH_ROUND_NE:
         case VKD3DSIH_ROUND_NI:
         case VKD3DSIH_ROUND_PI:
@@ -5411,6 +5112,7 @@ static void write_sm4_block(struct tpf_compiler *tpf, const struct hlsl_block *b
         {
             case HLSL_IR_CALL:
             case HLSL_IR_CONSTANT:
+            case HLSL_IR_RESOURCE_LOAD:
                 vkd3d_unreachable();
 
             case HLSL_IR_IF:
@@ -5419,10 +5121,6 @@ static void write_sm4_block(struct tpf_compiler *tpf, const struct hlsl_block *b
 
             case HLSL_IR_JUMP:
                 write_sm4_jump(tpf, hlsl_ir_jump(instr));
-                break;
-
-            case HLSL_IR_RESOURCE_LOAD:
-                write_sm4_resource_load(tpf, hlsl_ir_resource_load(instr));
                 break;
 
             case HLSL_IR_LOOP:
