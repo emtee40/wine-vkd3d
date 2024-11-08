@@ -5007,28 +5007,6 @@ static void write_sm4_ret(const struct tpf_compiler *tpf)
     write_sm4_instruction(tpf, &instr);
 }
 
-static void write_sm4_sampleinfo(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
-{
-    const struct hlsl_deref *resource = &load->resource;
-    const struct hlsl_ir_node *dst = &load->node;
-    struct sm4_instruction instr;
-
-    VKD3D_ASSERT(dst->data_type->e.numeric.type == HLSL_TYPE_UINT || dst->data_type->e.numeric.type == HLSL_TYPE_FLOAT);
-
-    memset(&instr, 0, sizeof(instr));
-    instr.opcode = VKD3D_SM4_OP_SAMPLE_INFO;
-    if (dst->data_type->e.numeric.type == HLSL_TYPE_UINT)
-        instr.extra_bits |= VKD3DSI_SAMPLE_INFO_UINT << VKD3D_SM4_INSTRUCTION_FLAGS_SHIFT;
-
-    sm4_dst_from_node(&instr.dsts[0], dst);
-    instr.dst_count = 1;
-
-    sm4_src_from_deref(tpf, &instr.srcs[0], resource, instr.dsts[0].write_mask, &instr);
-    instr.src_count = 1;
-
-    write_sm4_instruction(tpf, &instr);
-}
-
 static void write_sm4_resinfo(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
 {
     const struct hlsl_deref *resource = &load->resource;
@@ -5156,10 +5134,6 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
 
     switch (load->load_type)
     {
-        case HLSL_RESOURCE_SAMPLE_INFO:
-            write_sm4_sampleinfo(tpf, load);
-            break;
-
         case HLSL_RESOURCE_RESINFO:
             write_sm4_resinfo(tpf, load);
             break;
@@ -5176,6 +5150,7 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
         case HLSL_RESOURCE_SAMPLE_GRAD:
         case HLSL_RESOURCE_LOAD:
         case HLSL_RESOURCE_SAMPLE_PROJ:
+        case HLSL_RESOURCE_SAMPLE_INFO:
             vkd3d_unreachable();
     }
 }
