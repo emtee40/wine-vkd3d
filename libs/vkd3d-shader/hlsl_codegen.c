@@ -8983,6 +8983,93 @@ static bool sm4_generate_vsir_instr_ld(struct hlsl_ctx *ctx,
     return true;
 }
 
+static bool sm4_generate_vsir_instr_sample(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_ir_node *instr = &load->node;
+    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
+    const struct hlsl_ir_node *coords = load->coords.node;
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_deref *sampler = &load->sampler;
+    struct vkd3d_shader_instruction *ins;
+    enum vkd3d_shader_opcode opcode;
+    unsigned int src_count;
+
+    switch (load->load_type)
+    {
+        case HLSL_RESOURCE_SAMPLE:
+            opcode = VKD3DSIH_SAMPLE;
+            src_count = 3;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_CMP:
+            opcode = VKD3DSIH_SAMPLE_C;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
+            opcode = VKD3DSIH_SAMPLE_C_LZ;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_LOD:
+            opcode = VKD3DSIH_SAMPLE_LOD;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
+            opcode = VKD3DSIH_SAMPLE_B;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_GRAD:
+            opcode = VKD3DSIH_SAMPLE_GRAD;
+            src_count = 5;
+            break;
+
+        default:
+            vkd3d_unreachable();
+    }
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, src_count)))
+        return false;
+
+    if (texel_offset && !sm4_generate_vsir_validate_texel_offset_aoffimmi(texel_offset))
+    {
+        hlsl_error(ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
+                "Offset must resolve to integer literal in the range -8 to 7.");
+        return false;
+    }
+    sm4_generate_vsir_encode_texel_offset_as_aoffimmi(ins, texel_offset);
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[1],
+            resource, ins->dst[0].write_mask, &instr->loc))
+        return false;
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[2],
+            sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+        return false;
+
+    if (opcode == VKD3DSIH_SAMPLE_LOD || opcode == VKD3DSIH_SAMPLE_B)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->lod.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    else if (opcode == VKD3DSIH_SAMPLE_C || opcode == VKD3DSIH_SAMPLE_C_LZ)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->cmp.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    else if (opcode == VKD3DSIH_SAMPLE_GRAD)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->ddx.node, VKD3DSP_WRITEMASK_ALL);
+        vsir_src_from_hlsl_node(&ins->src[4], ctx, load->ddy.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    return true;
+}
+
 static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
         struct vsir_program *program, const struct hlsl_ir_resource_load *load)
 {
@@ -9002,6 +9089,16 @@ static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
     {
         case HLSL_RESOURCE_LOAD:
             return sm4_generate_vsir_instr_ld(ctx, program, load);
+
+        case HLSL_RESOURCE_SAMPLE:
+        case HLSL_RESOURCE_SAMPLE_CMP:
+        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
+        case HLSL_RESOURCE_SAMPLE_LOD:
+        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
+        case HLSL_RESOURCE_SAMPLE_GRAD:
+            /* Combined sample expressions were lowered. */
+            VKD3D_ASSERT(load->sampler.var);
+            return sm4_generate_vsir_instr_sample(ctx, program, load);
 
         case HLSL_RESOURCE_SAMPLE_PROJ:
             vkd3d_unreachable();

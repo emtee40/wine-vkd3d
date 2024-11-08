@@ -5034,86 +5034,6 @@ static void write_sm4_ret(const struct tpf_compiler *tpf)
     write_sm4_instruction(tpf, &instr);
 }
 
-static void write_sm4_sample(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
-{
-    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
-    const struct hlsl_ir_node *coords = load->coords.node;
-    const struct hlsl_deref *resource = &load->resource;
-    const struct hlsl_deref *sampler = &load->sampler;
-    const struct hlsl_ir_node *dst = &load->node;
-    struct sm4_instruction instr;
-
-    memset(&instr, 0, sizeof(instr));
-    switch (load->load_type)
-    {
-        case HLSL_RESOURCE_SAMPLE:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE;
-            break;
-
-        case HLSL_RESOURCE_SAMPLE_CMP:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE_C;
-            break;
-
-        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE_C_LZ;
-            break;
-
-        case HLSL_RESOURCE_SAMPLE_LOD:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE_LOD;
-            break;
-
-        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE_B;
-            break;
-
-        case HLSL_RESOURCE_SAMPLE_GRAD:
-            instr.opcode = VKD3D_SM4_OP_SAMPLE_GRAD;
-            break;
-
-        default:
-            vkd3d_unreachable();
-    }
-
-    if (texel_offset)
-    {
-        if (!encode_texel_offset_as_aoffimmi(&instr, texel_offset))
-        {
-            hlsl_error(tpf->ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
-                    "Offset must resolve to integer literal in the range -8 to 7.");
-            return;
-        }
-    }
-
-    sm4_dst_from_node(&instr.dsts[0], dst);
-    instr.dst_count = 1;
-
-    sm4_src_from_node(tpf, &instr.srcs[0], coords, VKD3DSP_WRITEMASK_ALL);
-    sm4_src_from_deref(tpf, &instr.srcs[1], resource, instr.dsts[0].write_mask, &instr);
-    sm4_src_from_deref(tpf, &instr.srcs[2], sampler, VKD3DSP_WRITEMASK_ALL, &instr);
-    instr.src_count = 3;
-
-    if (load->load_type == HLSL_RESOURCE_SAMPLE_LOD
-           || load->load_type == HLSL_RESOURCE_SAMPLE_LOD_BIAS)
-    {
-        sm4_src_from_node(tpf, &instr.srcs[3], load->lod.node, VKD3DSP_WRITEMASK_ALL);
-        ++instr.src_count;
-    }
-    else if (load->load_type == HLSL_RESOURCE_SAMPLE_GRAD)
-    {
-        sm4_src_from_node(tpf, &instr.srcs[3], load->ddx.node, VKD3DSP_WRITEMASK_ALL);
-        sm4_src_from_node(tpf, &instr.srcs[4], load->ddy.node, VKD3DSP_WRITEMASK_ALL);
-        instr.src_count += 2;
-    }
-    else if (load->load_type == HLSL_RESOURCE_SAMPLE_CMP
-            || load->load_type == HLSL_RESOURCE_SAMPLE_CMP_LZ)
-    {
-        sm4_src_from_node(tpf, &instr.srcs[3], load->cmp.node, VKD3DSP_WRITEMASK_ALL);
-        ++instr.src_count;
-    }
-
-    write_sm4_instruction(tpf, &instr);
-}
-
 static void write_sm4_sampleinfo(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
 {
     const struct hlsl_deref *resource = &load->resource;
@@ -5308,17 +5228,6 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
 
     switch (load->load_type)
     {
-        case HLSL_RESOURCE_SAMPLE:
-        case HLSL_RESOURCE_SAMPLE_CMP:
-        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
-        case HLSL_RESOURCE_SAMPLE_LOD:
-        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
-        case HLSL_RESOURCE_SAMPLE_GRAD:
-            /* Combined sample expressions were lowered. */
-            VKD3D_ASSERT(load->sampler.var);
-            write_sm4_sample(tpf, load);
-            break;
-
         case HLSL_RESOURCE_GATHER_RED:
             write_sm4_gather(tpf, &load->node, &load->resource, &load->sampler, coords,
                     VKD3D_SHADER_SWIZZLE(X, X, X, X), texel_offset);
@@ -5347,6 +5256,12 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
             write_sm4_resinfo(tpf, load);
             break;
 
+        case HLSL_RESOURCE_SAMPLE:
+        case HLSL_RESOURCE_SAMPLE_CMP:
+        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
+        case HLSL_RESOURCE_SAMPLE_LOD:
+        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
+        case HLSL_RESOURCE_SAMPLE_GRAD:
         case HLSL_RESOURCE_LOAD:
         case HLSL_RESOURCE_SAMPLE_PROJ:
             vkd3d_unreachable();
@@ -5552,7 +5467,13 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vkd3d_
         case VKD3DSIH_ROUND_PI:
         case VKD3DSIH_ROUND_Z:
         case VKD3DSIH_RSQ:
+        case VKD3DSIH_SAMPLE:
+        case VKD3DSIH_SAMPLE_B:
+        case VKD3DSIH_SAMPLE_C:
+        case VKD3DSIH_SAMPLE_C_LZ:
+        case VKD3DSIH_SAMPLE_GRAD:
         case VKD3DSIH_SAMPLE_INFO:
+        case VKD3DSIH_SAMPLE_LOD:
         case VKD3DSIH_SINCOS:
         case VKD3DSIH_SQRT:
         case VKD3DSIH_STORE_RAW:
