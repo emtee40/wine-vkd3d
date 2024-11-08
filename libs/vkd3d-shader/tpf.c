@@ -5034,88 +5034,6 @@ static void write_sm4_ret(const struct tpf_compiler *tpf)
     write_sm4_instruction(tpf, &instr);
 }
 
-static void write_sm4_ld(const struct tpf_compiler *tpf, const struct hlsl_ir_node *dst,
-        const struct hlsl_deref *resource, const struct hlsl_ir_node *coords,
-        const struct hlsl_ir_node *sample_index, const struct hlsl_ir_node *texel_offset,
-        enum hlsl_sampler_dim dim)
-{
-    const struct hlsl_type *resource_type = hlsl_deref_get_type(tpf->ctx, resource);
-    bool multisampled = resource_type->class == HLSL_CLASS_TEXTURE
-            && (resource_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS || resource_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY);
-    bool uav = (hlsl_deref_get_regset(tpf->ctx, resource) == HLSL_REGSET_UAVS);
-    const struct vkd3d_shader_version *version = &tpf->program->shader_version;
-    bool raw = resource_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER;
-    unsigned int coords_writemask = VKD3DSP_WRITEMASK_ALL;
-    struct sm4_instruction instr;
-
-    memset(&instr, 0, sizeof(instr));
-    if (uav)
-        instr.opcode = VKD3D_SM5_OP_LD_UAV_TYPED;
-    else if (raw)
-        instr.opcode = VKD3D_SM5_OP_LD_RAW;
-    else
-        instr.opcode = multisampled ? VKD3D_SM4_OP_LD2DMS : VKD3D_SM4_OP_LD;
-
-    if (texel_offset)
-    {
-        if (!encode_texel_offset_as_aoffimmi(&instr, texel_offset))
-        {
-            hlsl_error(tpf->ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
-                    "Offset must resolve to integer literal in the range -8 to 7.");
-            return;
-        }
-    }
-
-    sm4_dst_from_node(&instr.dsts[0], dst);
-    instr.dst_count = 1;
-
-    if (!uav)
-    {
-        /* Mipmap level is in the last component in the IR, but needs to be in the W
-         * component in the instruction. */
-        unsigned int dim_count = hlsl_sampler_dim_count(dim);
-
-        if (dim_count == 1)
-            coords_writemask = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_3;
-        if (dim_count == 2)
-            coords_writemask = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_1 | VKD3DSP_WRITEMASK_3;
-    }
-
-    sm4_src_from_node(tpf, &instr.srcs[0], coords, coords_writemask);
-
-    sm4_src_from_deref(tpf, &instr.srcs[1], resource, instr.dsts[0].write_mask, &instr);
-
-    instr.src_count = 2;
-
-    if (multisampled)
-    {
-        if (sample_index->type == HLSL_IR_CONSTANT)
-        {
-            struct vkd3d_shader_register *reg = &instr.srcs[2].reg;
-            struct hlsl_ir_constant *index;
-
-            index = hlsl_ir_constant(sample_index);
-
-            memset(&instr.srcs[2], 0, sizeof(instr.srcs[2]));
-            reg->type = VKD3DSPR_IMMCONST;
-            reg->dimension = VSIR_DIMENSION_SCALAR;
-            reg->u.immconst_u32[0] = index->value.u[0].u;
-        }
-        else if (version->major == 4 && version->minor == 0)
-        {
-            hlsl_error(tpf->ctx, &sample_index->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "Expected literal sample index.");
-        }
-        else
-        {
-            sm4_src_from_node(tpf, &instr.srcs[2], sample_index, 0);
-        }
-
-        ++instr.src_count;
-    }
-
-    write_sm4_instruction(tpf, &instr);
-}
-
 static void write_sm4_sample(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
 {
     const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
@@ -5374,7 +5292,6 @@ static void write_sm4_gather(const struct tpf_compiler *tpf, const struct hlsl_i
 static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct hlsl_ir_resource_load *load)
 {
     const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
-    const struct hlsl_ir_node *sample_index = load->sample_index.node;
     const struct hlsl_ir_node *coords = load->coords.node;
 
     if (load->sampler.var && !load->sampler.var->is_uniform)
@@ -5391,11 +5308,6 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
 
     switch (load->load_type)
     {
-        case HLSL_RESOURCE_LOAD:
-            write_sm4_ld(tpf, &load->node, &load->resource,
-                    coords, sample_index, texel_offset, load->sampling_dim);
-            break;
-
         case HLSL_RESOURCE_SAMPLE:
         case HLSL_RESOURCE_SAMPLE_CMP:
         case HLSL_RESOURCE_SAMPLE_CMP_LZ:
@@ -5435,6 +5347,7 @@ static void write_sm4_resource_load(const struct tpf_compiler *tpf, const struct
             write_sm4_resinfo(tpf, load);
             break;
 
+        case HLSL_RESOURCE_LOAD:
         case HLSL_RESOURCE_SAMPLE_PROJ:
             vkd3d_unreachable();
     }
@@ -5482,6 +5395,7 @@ static void write_sm4_switch(struct tpf_compiler *tpf, const struct hlsl_ir_swit
 
 static void tpf_simple_instruction(struct tpf_compiler *tpf, const struct vkd3d_shader_instruction *ins)
 {
+    struct sm4_instruction_modifier *modifier;
     const struct vkd3d_sm4_opcode_info *info;
     struct sm4_instruction instr = {0};
     unsigned int dst_count, src_count;
@@ -5526,6 +5440,16 @@ static void tpf_simple_instruction(struct tpf_compiler *tpf, const struct vkd3d_
     }
     for (unsigned int i = 0; i < ins->src_count; ++i)
         instr.srcs[i] = ins->src[i];
+
+    if (ins->texel_offset.u || ins->texel_offset.v || ins->texel_offset.w)
+    {
+        VKD3D_ASSERT(instr.modifier_count < ARRAY_SIZE(instr.modifiers));
+        modifier = &instr.modifiers[instr.modifier_count++];
+        modifier->type = VKD3D_SM4_MODIFIER_AOFFIMMI;
+        modifier->u.aoffimmi.u = ins->texel_offset.u;
+        modifier->u.aoffimmi.v = ins->texel_offset.v;
+        modifier->u.aoffimmi.w = ins->texel_offset.w;
+    }
 
     write_sm4_instruction(tpf, &instr);
 }
@@ -5607,6 +5531,10 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vkd3d_
         case VKD3DSIH_ISHL:
         case VKD3DSIH_ISHR:
         case VKD3DSIH_ITOF:
+        case VKD3DSIH_LD:
+        case VKD3DSIH_LD2DMS:
+        case VKD3DSIH_LD_RAW:
+        case VKD3DSIH_LD_UAV_TYPED:
         case VKD3DSIH_LOG:
         case VKD3DSIH_LTO:
         case VKD3DSIH_MAD:
