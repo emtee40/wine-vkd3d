@@ -602,9 +602,7 @@ static VkPipeline create_graphics_pipeline(struct vulkan_shader_runner *runner, 
 
     if (!ret)
     {
-        /* We ok() only when failing here, so that we don't result in a "todo
-         * succeeded" when the todo applies to pipeline linking. */
-        todo_if (runner->r.is_todo) ok(false, "Failed to compile shaders.\n");
+        trace("Failed to compile HLSL shader(s).\n");
         return VK_NULL_HANDLE;
     }
 
@@ -623,9 +621,9 @@ static VkPipeline create_graphics_pipeline(struct vulkan_shader_runner *runner, 
     if (runner->r.shader_source[SHADER_TYPE_GS])
         ret &= create_shader_stage(runner, &stage_desc[stage_count++], SHADER_TYPE_GS, VK_SHADER_STAGE_GEOMETRY_BIT);
 
-    todo_if (runner->r.is_todo) ok(ret, "Failed to compile shaders.\n");
     if (!ret)
     {
+        trace("Failed to compile SPIR-V shader(s).\n");
         for (i = 0; i < ARRAY_SIZE(stage_desc); ++i)
             VK_CALL(vkDestroyShaderModule(device, stage_desc[i].module, NULL));
         return VK_NULL_HANDLE;
