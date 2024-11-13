@@ -2389,26 +2389,21 @@ out:
 
 START_TEST(shader_runner)
 {
-    IDxcCompiler3 *dxc_compiler;
+    IDxcCompiler3 *dxc;
 
     parse_args(argc, argv);
+
+    dxc = dxcompiler_create();
 
 #if defined(VKD3D_CROSSTEST)
     trace("Running tests from a Windows cross build\n");
 
     run_shader_tests_d3d9();
-
     run_shader_tests_d3d11();
+    run_shader_tests_d3d12(dxc);
 
-    dxc_compiler = dxcompiler_create();
-    run_shader_tests_d3d12(dxc_compiler);
-
-    if (dxc_compiler)
-    {
-        IDxcCompiler3_Release(dxc_compiler);
+    if (dxc)
         print_dll_version("dxcompiler.dll");
-    }
-
     print_dll_version("d3dcompiler_47.dll");
     print_dll_version("dxgi.dll");
     print_dll_version("d3d9.dll");
@@ -2423,17 +2418,11 @@ START_TEST(shader_runner)
     trace("Running tests from a Windows non-cross build\n");
 
     run_shader_tests_d3d9();
-
     run_shader_tests_d3d11();
+    run_shader_tests_d3d12(dxc);
 
-    dxc_compiler = dxcompiler_create();
-    run_shader_tests_d3d12(dxc_compiler);
-
-    if (dxc_compiler)
-    {
-        IDxcCompiler3_Release(dxc_compiler);
+    if (dxc)
         print_dll_version(SONAME_LIBDXCOMPILER);
-    }
     print_dll_version("d3d9.dll");
     print_dll_version("d3d11.dll");
 
@@ -2447,12 +2436,9 @@ START_TEST(shader_runner)
     run_shader_tests_metal();
 # endif
     run_shader_tests_vulkan();
-
-    dxc_compiler = dxcompiler_create();
-    run_shader_tests_d3d12(dxc_compiler);
-
-    if (dxc_compiler)
-        IDxcCompiler3_Release(dxc_compiler);
-
+    run_shader_tests_d3d12(dxc);
 #endif
+
+    if (dxc)
+        IDxcCompiler3_Release(dxc);
 }
