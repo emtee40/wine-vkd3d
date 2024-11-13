@@ -2478,6 +2478,91 @@ static void test_signature_reflection(void)
         {"sv_position",    0, 4, D3D_NAME_POSITION,      D3D_REGISTER_COMPONENT_FLOAT32, 0xf, 0x0},
     };
 
+    static const char vs6_source[] =
+        "struct output\n"
+        "{\n"
+        "    uint a : ALPHA; // Uses o0.x\n"
+        "    uint b : SV_RenderTargetArrayIndex; // Uses o0.y, but is special: it also reserves o0.zw\n"
+        "    uint c : CHARLIE; // Ends up in o1.x\n"
+        "    uint d : DELTA; // Ends up in o1.y\n"
+        "};\n"
+        "\n"
+        "void main(out struct output s, inout float4 p : sv_position)\n"
+        "{\n"
+        "    s.a = 0;\n"
+        "    s.b = 0;\n"
+        "    s.c = 0;\n"
+        "    s.d = 0;\n"
+        "};\n";
+
+    static const D3D12_SIGNATURE_PARAMETER_DESC vs6_inputs[] =
+    {
+        {"sv_position",    0, 0, D3D_NAME_UNDEFINED,     D3D_REGISTER_COMPONENT_FLOAT32, 0xf, 0xf},
+    };
+
+    static const D3D12_SIGNATURE_PARAMETER_DESC vs6_outputs[] =
+    {
+        {"ALPHA",                     0, 0, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x1, 0xe},
+        {"SV_RenderTargetArrayIndex", 0, 0, D3D_NAME_RENDER_TARGET_ARRAY_INDEX, D3D_REGISTER_COMPONENT_UINT32,  0x2, 0xd},
+        {"CHARLIE",                   0, 1, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x1, 0xe},
+        {"DELTA",                     0, 1, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x2, 0xd},
+        {"sv_position",               0, 2, D3D_NAME_POSITION,                  D3D_REGISTER_COMPONENT_FLOAT32, 0xf, 0x0},
+    };
+
+    static const char ps13_source[] =
+        "struct input\n"
+        "{\n"
+        "    uint a : ALPHA;\n"
+        "    uint b : SV_ViewPortArrayIndex; // Uses v0.y but also reserves v0.zw\n"
+        "    uint c : CHARLIE;\n"
+        "    uint d : DELTA;\n"
+        "};\n"
+        "\n"
+        "float4 main(struct input s) : sv_target\n"
+        "{\n"
+        "    return s.a + s.b + s.c + s.d;\n"
+        "};\n";
+
+    static const D3D12_SIGNATURE_PARAMETER_DESC ps13_inputs[] =
+    {
+        {"ALPHA",                 0, 0, D3D_NAME_UNDEFINED,            D3D_REGISTER_COMPONENT_UINT32, 0x1, 0x1},
+        {"SV_ViewPortArrayIndex", 0, 0, D3D_NAME_VIEWPORT_ARRAY_INDEX, D3D_REGISTER_COMPONENT_UINT32, 0x2, 0x2},
+        {"CHARLIE",               0, 1, D3D_NAME_UNDEFINED,            D3D_REGISTER_COMPONENT_UINT32, 0x1, 0x1},
+        {"DELTA",                 0, 1, D3D_NAME_UNDEFINED,            D3D_REGISTER_COMPONENT_UINT32, 0x2, 0x2},
+    };
+
+    static const char ps14_source[] =
+        "struct input\n"
+        "{\n"
+        "    uint a : ALPHA;\n"
+        "    float b : BRAVO;\n"
+        "    uint c : SV_RenderTargetArrayIndex; // Locks 'd', 'e', 'f', and 'h' away from the register.\n"
+        "    uint d : DELTA;\n"
+        "    uint e : ECHO;\n"
+        "    uint f : FOXTROT;\n"
+        "    uint g : SV_ViewPortArrayIndex; // Shares register with 'c'.\n"
+        "    uint h : HOTEL;\n"
+        "    uint i : SV_PrimitiveID; // Shares register with 'c' and 'g'.\n"
+        "};\n"
+        "\n"
+        "float4 main(struct input s) : sv_target\n"
+        "{\n"
+        "    return s.a + s.b + s.c + s.d + s.e + s.f + s.g + s.h + s.i;\n"
+        "};\n";
+
+    static const D3D12_SIGNATURE_PARAMETER_DESC ps14_inputs[] =
+    {
+        {"ALPHA",                     0, 0, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x1, 0x1},
+        {"SV_RenderTargetArrayIndex", 0, 0, D3D_NAME_RENDER_TARGET_ARRAY_INDEX, D3D_REGISTER_COMPONENT_UINT32,  0x2, 0x2},
+        {"SV_ViewPortArrayIndex",     0, 0, D3D_NAME_VIEWPORT_ARRAY_INDEX,      D3D_REGISTER_COMPONENT_UINT32,  0x4, 0x4},
+        {"SV_PrimitiveID",            0, 0, D3D_NAME_PRIMITIVE_ID,              D3D_REGISTER_COMPONENT_UINT32,  0x8, 0x8},
+        {"BRAVO",                     0, 1, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_FLOAT32, 0x1, 0x1},
+        {"DELTA",                     0, 2, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x1, 0x1},
+        {"ECHO",                      0, 2, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x2, 0x2},
+        {"FOXTROT",                   0, 2, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x4, 0x4},
+        {"HOTEL",                     0, 2, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x8, 0x8},
+    };
+
     static const char hs1_source[] =
         "struct hs_data\n"
         "{\n"
@@ -2733,6 +2818,9 @@ static void test_signature_reflection(void)
         {ps12_source, "ps_4_0", false, ps12_inputs, ARRAY_SIZE(ps12_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple)},
         {vs4_source,  "vs_4_0", false, vs4_inputs, ARRAY_SIZE(vs4_inputs), vs4_outputs, ARRAY_SIZE(vs4_outputs)},
         {vs5_source,  "vs_4_0", false, vs5_inputs, ARRAY_SIZE(vs5_inputs), vs5_outputs, ARRAY_SIZE(vs5_outputs)},
+        {vs6_source,  "vs_4_0", false, vs6_inputs, ARRAY_SIZE(vs6_inputs), vs6_outputs, ARRAY_SIZE(vs6_outputs), NULL, 0, true},
+        {ps13_source, "ps_4_0", false, ps13_inputs, ARRAY_SIZE(ps13_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple), NULL, 0, true},
+        {ps14_source, "ps_4_0", false, ps14_inputs, ARRAY_SIZE(ps14_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple), NULL, 0, true},
         {hs1_source,  "hs_5_0", false, NULL, 0, hs1_outputs, ARRAY_SIZE(hs1_outputs), hs1_patch_constants, ARRAY_SIZE(hs1_patch_constants)},
         {hs2_source,  "hs_5_0", false, NULL, 0, hs2_outputs, ARRAY_SIZE(hs2_outputs), hs2_patch_constants, ARRAY_SIZE(hs2_patch_constants)},
         {hs3_source,  "hs_5_0", false, NULL, 0, hs3_outputs, ARRAY_SIZE(hs3_outputs), hs3_patch_constants, ARRAY_SIZE(hs3_patch_constants)},
