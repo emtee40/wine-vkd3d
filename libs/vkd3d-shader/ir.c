@@ -1727,8 +1727,34 @@ static void shader_signature_map_patch_constant_index_ranges(struct shader_signa
 static int signature_element_register_compare(const void *a, const void *b)
 {
     const struct signature_element *e = a, *f = b;
+    int ret;
 
-    return vkd3d_u32_compare(e->register_index, f->register_index);
+    if ((ret = vkd3d_u32_compare(e->register_index, f->register_index)))
+        return ret;
+
+    /* System values like SV_RenderTargetArrayIndex and SV_ViewPortArrayIndex
+     * can get packed into the same I/O register as non-system values, but
+     * only at the end. E.g.:
+     *
+     *     vs_4_0
+     *     ...
+     *     .output
+     *     ...
+     *     .param B.x, o1.x, uint
+     *     .param C.y, o1.y, uint
+     *     .param SV_RenderTargetArrayIndex.z, o1.z, uint, RTINDEX
+     *     .text
+     *     ...
+     *     mov o1.xy, v1.xyxx
+     *     mov o1.z, v1.z
+     *     ret
+     *
+     * Because I/O normalisation doesn't split writes like the mov to o1.xy
+     * above, we want to make sure that o1.x and o1.y continue to be packed
+     * into a single register after I/O normalisation, so we order system
+     * values after non-system values here, allowing the non-system values to
+     * get merged into a single register. */
+    return vkd3d_u32_compare(f->sysval_semantic, e->sysval_semantic);
 }
 
 static int signature_element_index_compare(const void *a, const void *b)
