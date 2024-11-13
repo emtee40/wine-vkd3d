@@ -8,6 +8,12 @@ WORKDIR /tmp
 # we also have to drop the executables, but we don't care about those
 # anyway.
 
+# Mesa requires Meson >= 1.1.0, which is not available on Debian bookworm.
+# Fortunately that can be worked around by removing some features from
+# meson.build, which are not needed for llvmpipe. Notice that we use
+# "git show | patch -R" instead of "git revert" so we don't have to configure
+# a valid email and user name for git.
+
 RUN export DEBIAN_FRONTEND=noninteractive; \
     echo 'path-exclude=/usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/99-exclude-cruft && \
     echo 'path-exclude=/usr/share/locale/*' >> /etc/dpkg/dpkg.cfg.d/99-exclude-cruft && \
@@ -71,8 +77,10 @@ RUN export DEBIAN_FRONTEND=noninteractive; \
     dpkg -i spirv-tools_*.deb && \
     rm -fr * && \
 
-    git clone --depth 1 --branch mesa-24.0.3 https://gitlab.freedesktop.org/mesa/mesa.git && \
+    git clone --branch mesa-24.2.4 https://gitlab.freedesktop.org/mesa/mesa.git && \
     cd mesa && \
+    git show 876db9135048 | patch -p1 -R && \
+    sed -i -e '981,991d' meson.build && \
     mkdir build && \
     cd build && \
     meson setup --buildtype release -Dprefix=/opt/mesa24 -Dplatforms= -Dvideo-codecs= -Dvulkan-drivers=swrast -Dgallium-drivers=swrast -Dopengl=true -Degl=enabled -Dglvnd=true -Dshared-glapi=enabled -Dglx=disabled -Dgles1=disabled -Dgles2=disabled .. && \
