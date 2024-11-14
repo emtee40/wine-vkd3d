@@ -4271,7 +4271,19 @@ static uint32_t spirv_compiler_emit_load_reg(struct spirv_compiler *compiler,
     component_type = vkd3d_component_type_from_data_type(reg->data_type);
 
     if (reg->type == VKD3DSPR_SSA)
-        return spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle);
+    {
+        val_id = spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle);
+        if (reg->dimension == VSIR_DIMENSION_SCALAR && component_count > 1)
+        {
+            uint32_t components[VKD3D_VEC4_SIZE];
+
+            type_id = vkd3d_spirv_get_type_id(builder, component_type, component_count);
+            for (unsigned int i = 0; i < VKD3D_VEC4_SIZE; ++i)
+                components[i] = val_id;
+            val_id = vkd3d_spirv_build_op_composite_construct(builder, type_id, components, component_count);
+        }
+        return val_id;
+    }
 
     if (!spirv_compiler_get_register_info(compiler, reg, &reg_info))
     {
@@ -7504,7 +7516,9 @@ static void spirv_compiler_emit_mov(struct spirv_compiler *compiler,
 
 general_implementation:
     write_mask = dst->write_mask;
-    if (src->reg.type == VKD3DSPR_IMMCONST64 && !data_type_is_64_bit(dst->reg.data_type))
+    if ((src->reg.type == VKD3DSPR_IMMCONST64
+            || (data_type_is_64_bit(src->reg.data_type) && src->reg.dimension == VSIR_DIMENSION_SCALAR))
+            && !data_type_is_64_bit(dst->reg.data_type))
         write_mask = vsir_write_mask_64_from_32(write_mask);
     else if (!data_type_is_64_bit(src->reg.data_type) && data_type_is_64_bit(dst->reg.data_type))
         write_mask = vsir_write_mask_32_from_64(write_mask);
