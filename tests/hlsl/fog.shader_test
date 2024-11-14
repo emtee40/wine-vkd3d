@@ -78,6 +78,20 @@ probe (480, 360) rgba (0.0, 0.4, 1.0, 1.0) 64
 probe (160, 120) rgba (0.0, 0.2, 1.0, 1.0) 64
 probe (480, 360) rgba (0.0, 0.4, 1.0, 1.0) 64
 
+fog exp ortho 2.0
+draw triangle strip 4
+probe (160, 120) rgba (0.0, 0.45118836, 1.0, 1.0) 64
+probe (480, 360) rgba (0.0, 0.63212056, 1.0, 1.0) 64
+probe (160, 120) rgba (0.0, 0.45118836, 1.0, 1.0) 64
+probe (480, 360) rgba (0.0, 0.63212056, 1.0, 1.0) 64
+
+fog exp2 ortho 2.0
+draw triangle strip 4
+probe (160, 120) rgba (0.0, 0.30232367, 1.0, 1.0) 64
+probe (480, 360) rgba (0.0, 0.63212056, 1.0, 1.0) 64
+probe (160, 120) rgba (0.0, 0.30232367, 1.0, 1.0) 64
+probe (480, 360) rgba (0.0, 0.63212056, 1.0, 1.0) 64
+
 
 % Test a VS that doesn't write fog, but does write specular.
 

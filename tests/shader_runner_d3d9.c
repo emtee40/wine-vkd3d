@@ -522,6 +522,8 @@ static bool d3d9_runner_draw(struct shader_runner *r,
     ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
     hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGEND, float_to_int(runner->r.fog_end));
     ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGDENSITY, float_to_int(runner->r.fog_density));
+    ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
 
     hr = IDirect3DDevice9_CreateVertexDeclaration(device, decl_elements, &vertex_declaration);
     ok(hr == D3D_OK, "Failed to create vertex declaration, hr %#lx.\n", hr);

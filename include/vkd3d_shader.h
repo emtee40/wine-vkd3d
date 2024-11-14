@@ -483,6 +483,7 @@ enum vkd3d_shader_binding_flag
  *     It may be modified by VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE.
  * e = The value of VKD3D_SHADER_PARAMETER_NAME_FOG_END.
  * k = The value of VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE.
+ * d = The value of VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY.
  *
  * \since 1.15
  */
@@ -494,6 +495,16 @@ enum vkd3d_shader_fog_fragment_mode
      * Equivalently, the fog interpolation factor is 1.
      */
     VKD3D_SHADER_FOG_FRAGMENT_NONE = 0x0,
+    /**
+     * The fog interpolation factor is exp(-d * c),
+     * where exp() denotes the natural exponential function.
+     */
+    VKD3D_SHADER_FOG_FRAGMENT_EXP = 0x1,
+    /**
+     * The fog interpolation factor is exp(-(d * c)²),
+     * where exp() denotes the natural exponential function.
+     */
+    VKD3D_SHADER_FOG_FRAGMENT_EXP2 = 0x2,
     /**
      * The fog interpolation factor is (e - c) * k.
      */
@@ -894,6 +905,19 @@ enum vkd3d_shader_parameter_name
      * \since 1.15
      */
     VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE,
+    /**
+     * Density value for exponential fog.
+     * See VKD3D_SHADER_PARAMETER_NAME_FOG_FRAGMENT_MODE for documentation of
+     * fog.
+     *
+     * The data type for this parameter must be
+     * VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32.
+     *
+     * The default value is 1.0.
+     *
+     * \since 1.15
+     */
+    VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY,
 
     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_PARAMETER_NAME),
 };

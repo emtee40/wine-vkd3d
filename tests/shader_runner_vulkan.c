@@ -274,6 +274,8 @@ static enum vkd3d_shader_fog_fragment_mode get_fog_fragment_mode(enum fog_mode m
         case FOG_MODE_DISABLE: return VKD3D_SHADER_FOG_FRAGMENT_NONE;
         case FOG_MODE_NONE: return VKD3D_SHADER_FOG_FRAGMENT_LINEAR;
         case FOG_MODE_LINEAR: return VKD3D_SHADER_FOG_FRAGMENT_LINEAR;
+        case FOG_MODE_EXP: return VKD3D_SHADER_FOG_FRAGMENT_EXP;
+        case FOG_MODE_EXP2: return VKD3D_SHADER_FOG_FRAGMENT_EXP2;
         default: fatal_error("Unhandled fog mode %#x.\n", mode);
     }
 }
@@ -338,7 +340,7 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
     struct vkd3d_shader_varying_map varying_map[12];
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_compile_option options[2];
-    struct vkd3d_shader_parameter1 parameters[22];
+    struct vkd3d_shader_parameter1 parameters[23];
     unsigned int i;
     char *messages;
     int ret;
@@ -525,6 +527,11 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
     parameters[21].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
     parameters[21].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32;
     parameters[21].u.immediate_constant.u.u32 = get_fog_source(&runner->r);
+
+    parameters[22].name = VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY;
+    parameters[22].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[22].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32;
+    parameters[22].u.immediate_constant.u.f32 = runner->r.fog_density;
 
     parameter_info.parameter_count = ARRAY_SIZE(parameters);
     parameter_info.parameters = parameters;

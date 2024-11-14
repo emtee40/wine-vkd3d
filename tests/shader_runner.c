@@ -1450,6 +1450,11 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
             if (sscanf(line, "%f %f", &runner->fog_start, &runner->fog_end) < 2)
                 fatal_error("Malformed fog constants '%s'.\n", line);
         }
+        else if (runner->fog_mode == FOG_MODE_EXP || runner->fog_mode == FOG_MODE_EXP2)
+        {
+            if (sscanf(line, "%f", &runner->fog_density) < 1)
+                fatal_error("Malformed fog constants '%s'.\n", line);
+        }
     }
     else if (match_string(line, "fog-colour", &line))
     {
@@ -1909,6 +1914,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     runner->fog_mode = FOG_MODE_DISABLE;
     runner->fog_start = 0.0f;
     runner->fog_end = 1.0f;
+    runner->fog_density = 1.0f;
 
     runner->sample_mask = ~0u;
     runner->depth_bounds = false;

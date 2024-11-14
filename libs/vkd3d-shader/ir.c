@@ -6721,7 +6721,7 @@ static enum vkd3d_result insert_fragment_fog_before_ret(struct vsir_program *pro
     uint32_t ssa_factor = program->ssa_count++;
     size_t pos = ret - instructions->elements;
     struct vkd3d_shader_instruction *ins;
-    uint32_t ssa_temp;
+    uint32_t ssa_temp, ssa_temp2;
 
     switch (mode)
     {
@@ -6753,6 +6753,71 @@ static enum vkd3d_result insert_fragment_fog_before_ret(struct vsir_program *pro
             ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
             src_param_init_ssa_float(&ins->src[0], ssa_temp);
             src_param_init_parameter(&ins->src[1], VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE, VKD3D_DATA_FLOAT);
+            break;
+
+        case VKD3D_SHADER_FOG_FRAGMENT_EXP:
+            /* We generate the following code:
+             *
+             * mul sr0, FOG_DENSITY, vFOG.x
+             * exp_sat srFACTOR, -sr0
+             */
+            if (!shader_instruction_array_insert_at(&program->instructions, pos, 4))
+                return VKD3D_ERROR_OUT_OF_MEMORY;
+            *ret_pos = pos + 4;
+
+            ssa_temp = program->ssa_count++;
+
+            ins = &program->instructions.elements[pos];
+
+            vsir_instruction_init_with_params(program, ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp);
+            src_param_init_parameter(&ins->src[0], VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, VKD3D_DATA_FLOAT);
+            vsir_src_param_init(&ins->src[1], VKD3DSPR_INPUT, VKD3D_DATA_FLOAT, 1);
+            ins->src[1].reg.idx[0].offset = fog_signature_idx;
+            ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+            ins->src[1].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_EXP_NATURAL, 1, 1);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_factor);
+            ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
+            src_param_init_ssa_float(&ins->src[0], ssa_temp);
+            ins->src[0].modifiers = VKD3DSPSM_NEG;
+            break;
+
+        case VKD3D_SHADER_FOG_FRAGMENT_EXP2:
+            /* We generate the following code:
+             *
+             * mul sr0, FOG_DENSITY, vFOG.x
+             * mul sr1, sr0, sr0
+             * exp_sat srFACTOR, -sr1
+             */
+            if (!shader_instruction_array_insert_at(&program->instructions, pos, 5))
+                return VKD3D_ERROR_OUT_OF_MEMORY;
+            *ret_pos = pos + 5;
+
+            ssa_temp = program->ssa_count++;
+            ssa_temp2 = program->ssa_count++;
+
+            ins = &program->instructions.elements[pos];
+
+            vsir_instruction_init_with_params(program, ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp);
+            src_param_init_parameter(&ins->src[0], VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, VKD3D_DATA_FLOAT);
+            vsir_src_param_init(&ins->src[1], VKD3DSPR_INPUT, VKD3D_DATA_FLOAT, 1);
+            ins->src[1].reg.idx[0].offset = fog_signature_idx;
+            ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+            ins->src[1].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp2);
+            src_param_init_ssa_float(&ins->src[0], ssa_temp);
+            src_param_init_ssa_float(&ins->src[1], ssa_temp);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_EXP_NATURAL, 1, 1);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_factor);
+            ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
+            src_param_init_ssa_float(&ins->src[0], ssa_temp2);
+            ins->src[0].modifiers = VKD3DSPSM_NEG;
             break;
 
         default:

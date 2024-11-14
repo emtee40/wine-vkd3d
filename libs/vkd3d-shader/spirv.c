@@ -3329,6 +3329,7 @@ vkd3d_shader_parameters[] =
     {VKD3D_SHADER_PARAMETER_NAME_ALPHA_TEST_REF, {.f = 0.0}, "alpha_test_ref"},
     {VKD3D_SHADER_PARAMETER_NAME_FOG_END, {.f = 1.0}, "fog_end"},
     {VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE, {.f = 1.0}, "fog_scale"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, {.f = 1.0}, "fog_density"},
 };
 
 static const struct vkd3d_spec_constant_info *get_spec_constant_info(enum vkd3d_shader_parameter_name name)
@@ -10335,6 +10336,7 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
         case VKD3DSIH_DMAX:
         case VKD3DSIH_DMIN:
         case VKD3DSIH_EXP:
+        case VKD3DSIH_EXP_NATURAL:
         case VKD3DSIH_FIRSTBIT_HI:
         case VKD3DSIH_FIRSTBIT_LO:
         case VKD3DSIH_FIRSTBIT_SHI:
