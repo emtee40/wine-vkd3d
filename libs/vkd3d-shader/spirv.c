@@ -4216,7 +4216,6 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         VKD3D_ASSERT(compiler->failed);
         return 0;
     }
-    VKD3D_ASSERT(vkd3d_swizzle_is_scalar(swizzle, reg));
 
     reg_component_type = vkd3d_component_type_from_data_type(ssa->data_type);
 
@@ -4239,6 +4238,10 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         val_id = vkd3d_spirv_build_op_bitcast(builder, type_id, val_id);
     }
 
+    if (swizzle == VKD3D_SHADER_NO_SWIZZLE)
+        return val_id;
+
+    VKD3D_ASSERT(vkd3d_swizzle_is_scalar(swizzle, reg));
     type_id = vkd3d_spirv_get_type_id(builder, component_type, 1);
     component_idx = vsir_swizzle_get_component(swizzle, 0);
     return vkd3d_spirv_build_op_composite_extract1(builder, type_id, val_id, component_idx);
