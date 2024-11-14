@@ -5985,9 +5985,9 @@ static enum vkd3d_result vsir_program_insert_alpha_test(struct vsir_program *pro
 {
     struct vkd3d_shader_message_context *message_context = ctx->message_context;
     const struct vkd3d_shader_parameter1 *func = NULL, *ref = NULL;
+    uint32_t colour_signature_idx, colour_temp = ~0u;
     static const struct vkd3d_shader_location no_loc;
     enum vkd3d_shader_comparison_func compare_func;
-    uint32_t colour_signature_idx, colour_temp;
     struct vkd3d_shader_instruction *ins;
     size_t new_pos;
     int ret;

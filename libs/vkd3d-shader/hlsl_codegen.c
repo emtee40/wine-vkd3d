@@ -7704,8 +7704,8 @@ static void sm4_generate_vsir_instr_dcl_semantic(struct hlsl_ctx *ctx, struct vs
     struct vkd3d_shader_instruction *ins;
     enum vkd3d_shader_register_type type;
     enum vkd3d_shader_opcode opcode;
+    unsigned int idx = 0;
     uint32_t write_mask;
-    unsigned int idx;
     bool has_idx;
 
     sm4_sysval_semantic_from_semantic_name(&semantic, version, ctx->semantic_compat_mapping,
