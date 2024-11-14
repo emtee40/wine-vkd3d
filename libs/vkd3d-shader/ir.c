@@ -1059,6 +1059,9 @@ static enum vkd3d_result vsir_program_remap_output_signature(struct vsir_program
 
             e->target_location = map->input_register_index;
 
+            TRACE("Mapping signature index %u (mask %#x) to target location %u (mask %#x).\n",
+                    i, e->mask, map->input_register_index, map->input_mask);
+
             if ((input_mask & e->mask) == input_mask)
             {
                 ++subset_varying_count;
@@ -1079,6 +1082,8 @@ static enum vkd3d_result vsir_program_remap_output_signature(struct vsir_program
         }
         else
         {
+            TRACE("Marking signature index %u (mask %#x) as unused.\n", i, e->mask);
+
             e->target_location = SIGNATURE_TARGET_LOCATION_UNUSED;
         }
 
