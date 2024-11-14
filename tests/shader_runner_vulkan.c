@@ -273,8 +273,19 @@ static enum vkd3d_shader_fog_fragment_mode get_fog_fragment_mode(enum fog_mode m
     {
         case FOG_MODE_DISABLE: return VKD3D_SHADER_FOG_FRAGMENT_NONE;
         case FOG_MODE_NONE: return VKD3D_SHADER_FOG_FRAGMENT_LINEAR;
+        case FOG_MODE_LINEAR: return VKD3D_SHADER_FOG_FRAGMENT_LINEAR;
         default: fatal_error("Unhandled fog mode %#x.\n", mode);
     }
+}
+
+static enum vkd3d_shader_fog_source get_fog_source(const struct shader_runner *runner)
+{
+    if (runner->fog_mode == FOG_MODE_DISABLE)
+        return VKD3D_SHADER_FOG_SOURCE_FOG;
+    else if (runner->fog_mode == FOG_MODE_NONE)
+        return VKD3D_SHADER_FOG_SOURCE_FOG_OR_SPECULAR_W;
+
+    return runner->ortho_fog ? VKD3D_SHADER_FOG_SOURCE_Z : VKD3D_SHADER_FOG_SOURCE_W;
 }
 
 static bool compile_hlsl_and_scan(struct vulkan_shader_runner *runner, enum shader_type type)
@@ -327,7 +338,7 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
     struct vkd3d_shader_varying_map varying_map[12];
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_compile_option options[2];
-    struct vkd3d_shader_parameter1 parameters[21];
+    struct vkd3d_shader_parameter1 parameters[22];
     unsigned int i;
     char *messages;
     int ret;
@@ -504,6 +515,16 @@ static bool compile_d3d_code(struct vulkan_shader_runner *runner,
         parameters[19].u.immediate_constant.u.f32 = 0.0f;
         parameters[20].u.immediate_constant.u.f32 = -1.0f;
     }
+    else
+    {
+        parameters[19].u.immediate_constant.u.f32 = runner->r.fog_end;
+        parameters[20].u.immediate_constant.u.f32 = 1.0 / (runner->r.fog_end - runner->r.fog_start);
+    }
+
+    parameters[21].name = VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE;
+    parameters[21].type = VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT;
+    parameters[21].data_type = VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32;
+    parameters[21].u.immediate_constant.u.u32 = get_fog_source(&runner->r);
 
     parameter_info.parameter_count = ARRAY_SIZE(parameters);
     parameter_info.parameters = parameters;

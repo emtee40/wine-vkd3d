@@ -234,6 +234,8 @@ struct shader_runner
     bool point_sprite;
     struct vec4 fog_colour;
     enum fog_mode fog_mode;
+    float fog_start, fog_end;
+    bool ortho_fog;
 };
 
 struct shader_runner_ops

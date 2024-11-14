@@ -480,6 +480,7 @@ enum vkd3d_shader_binding_flag
  *
  * c = The fog coordinate value output from the vertex shader. This is an
  *     inter-stage varying with the semantic name "FOG" and semantic index 0.
+ *     It may be modified by VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE.
  * e = The value of VKD3D_SHADER_PARAMETER_NAME_FOG_END.
  * k = The value of VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE.
  *
@@ -497,6 +498,43 @@ enum vkd3d_shader_fog_fragment_mode
      * The fog interpolation factor is (e - c) * k.
      */
     VKD3D_SHADER_FOG_FRAGMENT_LINEAR = 0x3,
+};
+
+/**
+ * The source of the fog varying output by a pre-rasterization shader.
+ * The fog varying is defined as the output varying with the semantic name "FOG"
+ * and semantic index 0.
+ *
+ * See VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE for further documentation of this
+ * parameter.
+ *
+ * \since 1.15
+ */
+enum vkd3d_shader_fog_source
+{
+    /**
+     * The source shader is not modified. That is, the fog varying in the target
+     * shader is the original fog varying if and only if present.
+     */
+    VKD3D_SHADER_FOG_SOURCE_FOG = 0x0,
+    /**
+     * If the source shader has a fog varying, it is not modified.
+     * Otherwise, if the source shader outputs a varying with semantic name
+     * "COLOR" and semantic index 1 whose index includes a W component,
+     * said W component is output as fog varying.
+     * Otherwise, no fog varying is output.
+     */
+    VKD3D_SHADER_FOG_SOURCE_FOG_OR_SPECULAR_W = 0x1,
+    /**
+     * The fog source is the Z component of the position output by the vertex
+     * shader.
+     */
+    VKD3D_SHADER_FOG_SOURCE_Z = 0x2,
+    /**
+     * The fog source is the W component of the position output by the vertex
+     * shader.
+     */
+    VKD3D_SHADER_FOG_SOURCE_W = 0x3,
 };
 
 /**
@@ -832,6 +870,30 @@ enum vkd3d_shader_parameter_name
      * \since 1.15
      */
     VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE,
+    /**
+     * Fog source. The value specified by this parameter must be a member of
+     * enum vkd3d_shader_fog_source.
+     *
+     * This parameter replaces or suppletes the fog varying output by a
+     * pre-rasterization shader. The fog varying is defined as the output
+     * varying with the semantic name "FOG" and semantic index 0.
+     *
+     * Together with other fog parameters, this parameter can be used to
+     * implement fixed function fog, as present in Direct3D versions up to 9,
+     * if the target environment does not support shade mode as part of its own
+     * fixed-function API (as Vulkan and core OpenGL).
+     *
+     * The default value is VKD3D_SHADER_FOG_SOURCE_FOG.
+     *
+     * The data type for this parameter must be
+     * VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32.
+     *
+     * Only VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT is supported in this
+     * version of vkd3d-shader.
+     *
+     * \since 1.15
+     */
+    VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE,
 
     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_PARAMETER_NAME),
 };

@@ -354,6 +354,7 @@ static bool d3d9_runner_draw(struct shader_runner *r,
     ID3D10Blob *vs_code, *ps_code;
     IDirect3DVertexShader9 *vs;
     IDirect3DPixelShader9 *ps;
+    D3DMATRIX proj_matrix;
     HRESULT hr;
 
     if (instance_count > 1)
@@ -509,7 +510,17 @@ static bool d3d9_runner_draw(struct shader_runner *r,
         hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGTABLEMODE, runner->r.fog_mode);
         ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
     }
+    memset(&proj_matrix, 0, sizeof(proj_matrix));
+    proj_matrix._11 = proj_matrix._22 = proj_matrix._33 = proj_matrix._44 = 1.0f;
+    if (!runner->r.ortho_fog)
+        proj_matrix._44 = 1.01f;
+    hr = IDirect3DDevice9_SetTransform(device, D3DTS_PROJECTION, &proj_matrix);
+    ok(hr == D3D_OK, "Failed to set projection matrix, hr %#lx.\n", hr);
     hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGCOLOR, d3d_color_from_vec4(&runner->r.fog_colour));
+    ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGSTART, float_to_int(runner->r.fog_start));
+    ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
+    hr = IDirect3DDevice9_SetRenderState(device, D3DRS_FOGEND, float_to_int(runner->r.fog_end));
     ok(hr == D3D_OK, "Failed to set render state, hr %#lx.\n", hr);
 
     hr = IDirect3DDevice9_CreateVertexDeclaration(device, decl_elements, &vertex_declaration);

@@ -1428,6 +1428,7 @@ struct vsir_program
     bool use_vocp;
     bool has_point_size;
     bool has_point_coord;
+    bool has_fog;
     uint8_t diffuse_written_mask;
     enum vsir_control_flow_type cf_type;
     enum vsir_normalisation_level normalisation_level;
