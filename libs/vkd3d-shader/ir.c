@@ -7709,6 +7709,7 @@ static void vsir_validate_signature(struct validation_context *ctx,
 
     if (signature_type == SIGNATURE_TYPE_PATCH_CONSTANT)
     {
+        const struct signature_element *first_element, *element;
         unsigned int expected_outer_count = 0;
         unsigned int expected_inner_count = 0;
 
@@ -7740,18 +7741,72 @@ static void vsir_validate_signature(struct validation_context *ctx,
             expected_inner_count = min(1, expected_inner_count);
         }
 
+        first_element = NULL;
         for (i = 0; i < expected_outer_count; ++i)
         {
             if (ctx->outer_tess_idxs[i] == ~0u)
+            {
                 validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
                         "Missing outer system value semantic %u.", i);
+            }
+            else
+            {
+                element = &signature->elements[ctx->outer_tess_idxs[i]];
+
+                if (!first_element)
+                {
+                    first_element = element;
+                    continue;
+                }
+
+                if (element->register_index != first_element->register_index + i)
+                {
+                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX,
+                            "Invalid register index %u for outer system value semantic %u, expected %u.",
+                            element->register_index, i, first_element->register_index + i);
+                }
+
+                if (element->mask != first_element->mask)
+                {
+                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK,
+                            "Invalid mask %#x for outer system value semantic %u, expected %#x.",
+                            element->mask, i, first_element->mask);
+                }
+            }
         }
 
+        first_element = NULL;
         for (i = 0; i < expected_inner_count; ++i)
         {
             if (ctx->inner_tess_idxs[i] == ~0u)
+            {
                 validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
                         "Missing inner system value semantic %u.", i);
+            }
+            else
+            {
+                element = &signature->elements[ctx->inner_tess_idxs[i]];
+
+                if (!first_element)
+                {
+                    first_element = element;
+                    continue;
+                }
+
+                if (element->register_index != first_element->register_index + i)
+                {
+                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX,
+                            "Invalid register index %u for inner system value semantic %u, expected %u.",
+                            element->register_index, i, first_element->register_index + i);
+                }
+
+                if (element->mask != first_element->mask)
+                {
+                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK,
+                            "Invalid mask %#x for inner system value semantic %u, expected %#x.",
+                            element->mask, i, first_element->mask);
+                }
+            }
         }
     }
 }
