@@ -2563,6 +2563,30 @@ static void test_signature_reflection(void)
         {"HOTEL",                     0, 2, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x8, 0x8},
     };
 
+    static const char ps15_source[] =
+        "struct input\n"
+        "{\n"
+        "    uint a : ALPHA;\n"
+        "    uint b : SV_PrimitiveID;\n"
+        "    uint c : SV_SampleIndex; // different interpolation mode.\n"
+        "    uint d : SV_IsFrontFace; // different interpolation mode.\n"
+        "    uint e : SV_RenderTargetArrayIndex;\n"
+        "};\n"
+        "\n"
+        "float4 main(struct input s) : sv_target\n"
+        "{\n"
+        "    return 0;\n"
+        "};\n";
+
+    static const D3D12_SIGNATURE_PARAMETER_DESC ps15_inputs[] =
+    {
+        {"ALPHA",                     0, 0, D3D_NAME_UNDEFINED,                 D3D_REGISTER_COMPONENT_UINT32,  0x1},
+        {"SV_PrimitiveID",            0, 0, D3D_NAME_PRIMITIVE_ID,              D3D_REGISTER_COMPONENT_UINT32,  0x2},
+        {"SV_RenderTargetArrayIndex", 0, 0, D3D_NAME_RENDER_TARGET_ARRAY_INDEX, D3D_REGISTER_COMPONENT_UINT32,  0x4},
+        {"SV_SampleIndex",            0, 1, D3D_NAME_SAMPLE_INDEX,              D3D_REGISTER_COMPONENT_UINT32,  0x1},
+        {"SV_IsFrontFace",            0, 1, D3D_NAME_IS_FRONT_FACE,             D3D_REGISTER_COMPONENT_UINT32,  0x2},
+    };
+
     static const char hs1_source[] =
         "struct hs_data\n"
         "{\n"
@@ -2821,6 +2845,7 @@ static void test_signature_reflection(void)
         {vs6_source,  "vs_4_0", false, vs6_inputs, ARRAY_SIZE(vs6_inputs), vs6_outputs, ARRAY_SIZE(vs6_outputs)},
         {ps13_source, "ps_4_0", false, ps13_inputs, ARRAY_SIZE(ps13_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple)},
         {ps14_source, "ps_4_0", false, ps14_inputs, ARRAY_SIZE(ps14_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple)},
+        {ps15_source, "ps_4_1", false, ps15_inputs, ARRAY_SIZE(ps15_inputs), ps_outputs_simple, ARRAY_SIZE(ps_outputs_simple), NULL, 0, true},
         {hs1_source,  "hs_5_0", false, NULL, 0, hs1_outputs, ARRAY_SIZE(hs1_outputs), hs1_patch_constants, ARRAY_SIZE(hs1_patch_constants)},
         {hs2_source,  "hs_5_0", false, NULL, 0, hs2_outputs, ARRAY_SIZE(hs2_outputs), hs2_patch_constants, ARRAY_SIZE(hs2_patch_constants)},
         {hs3_source,  "hs_5_0", false, NULL, 0, hs3_outputs, ARRAY_SIZE(hs3_outputs), hs3_patch_constants, ARRAY_SIZE(hs3_patch_constants)},
