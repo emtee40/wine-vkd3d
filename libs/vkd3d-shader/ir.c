@@ -7706,6 +7706,54 @@ static void vsir_validate_signature(struct validation_context *ctx,
 
     for (i = 0; i < signature->element_count; ++i)
         vsir_validate_signature_element(ctx, signature, signature_type, i);
+
+    if (signature_type == SIGNATURE_TYPE_PATCH_CONSTANT)
+    {
+        unsigned int expected_outer_count = 0;
+        unsigned int expected_inner_count = 0;
+
+        switch (ctx->program->tess_domain)
+        {
+            case VKD3D_TESSELLATOR_DOMAIN_QUAD:
+                expected_outer_count = 4;
+                expected_inner_count = 2;
+                break;
+
+            case VKD3D_TESSELLATOR_DOMAIN_TRIANGLE:
+                expected_outer_count = 3;
+                expected_inner_count = 1;
+                break;
+
+            case VKD3D_TESSELLATOR_DOMAIN_LINE:
+                expected_outer_count = 2;
+                expected_inner_count = 0;
+                break;
+
+            default:
+                break;
+        }
+
+        /* After I/O normalisation tessellation factors are merged in a single array. */
+        if (ctx->program->normalisation_level >= VSIR_FULLY_NORMALISED_IO)
+        {
+            expected_outer_count = min(1, expected_outer_count);
+            expected_inner_count = min(1, expected_inner_count);
+        }
+
+        for (i = 0; i < expected_outer_count; ++i)
+        {
+            if (ctx->outer_tess_idxs[i] == ~0u)
+                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                        "Missing outer system value semantic %u.", i);
+        }
+
+        for (i = 0; i < expected_inner_count; ++i)
+        {
+            if (ctx->inner_tess_idxs[i] == ~0u)
+                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                        "Missing inner system value semantic %u.", i);
+        }
+    }
 }
 
 static const char *name_from_cf_type(enum vsir_control_flow_type type)
