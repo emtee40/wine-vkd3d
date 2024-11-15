@@ -5333,6 +5333,7 @@ static void allocate_semantic_register(struct hlsl_ctx *ctx, struct hlsl_ir_var 
 
     enum vkd3d_shader_register_type type;
     struct vkd3d_shader_version version;
+    bool special_interpolation = false;
     bool vip_allocation = false;
     uint32_t reg;
     bool builtin;
@@ -5392,6 +5393,8 @@ static void allocate_semantic_register(struct hlsl_ctx *ctx, struct hlsl_ir_var 
         {
             vip_allocation = true;
         }
+        if (semantic == VKD3D_SHADER_SV_IS_FRONT_FACE || semantic == VKD3D_SHADER_SV_SAMPLE_INDEX)
+            special_interpolation = true;
     }
 
     if (builtin)
@@ -5404,6 +5407,9 @@ static void allocate_semantic_register(struct hlsl_ctx *ctx, struct hlsl_ir_var 
         int mode = (ctx->profile->major_version < 4)
                 ? 0 : sm4_get_interpolation_mode(var->data_type, var->storage_modifiers);
         unsigned int reg_size = optimize ? var->data_type->dimx : 4;
+
+        if (special_interpolation)
+            mode = VKD3DSIM_NONE;
 
         var->regs[HLSL_REGSET_NUMERIC] = allocate_register(ctx, allocator, 1,
                 UINT_MAX, reg_size, var->data_type->dimx, mode, var->force_align, vip_allocation);
