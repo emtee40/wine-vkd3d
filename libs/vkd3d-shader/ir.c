@@ -2222,35 +2222,9 @@ static void shader_instruction_normalise_io_params(struct vkd3d_shader_instructi
     }
 }
 
-static bool use_flat_interpolation(const struct vsir_program *program,
-        struct vkd3d_shader_message_context *message_context)
-{
-    static const struct vkd3d_shader_location no_loc;
-    const struct vkd3d_shader_parameter1 *parameter;
-
-    if (!(parameter = vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FLAT_INTERPOLATION)))
-        return false;
-
-    if (parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
-    {
-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
-                "Unsupported flat interpolation parameter type %#x.", parameter->type);
-        return false;
-    }
-    if (parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
-    {
-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
-                "Invalid flat interpolation parameter data type %#x.", parameter->data_type);
-        return false;
-    }
-
-    return parameter->u.immediate_constant.u.u32;
-}
-
 static enum vkd3d_result vsir_program_normalise_io_registers(struct vsir_program *program,
         struct vsir_transformation_context *ctx)
 {
-    struct vkd3d_shader_message_context *message_context = ctx->message_context;
     struct io_normaliser normaliser = {program->instructions};
     struct vkd3d_shader_instruction *ins;
     unsigned int i;
@@ -2293,18 +2267,6 @@ static enum vkd3d_result vsir_program_normalise_io_registers(struct vsir_program
     {
         program->instructions = normaliser.instructions;
         return VKD3D_ERROR_OUT_OF_MEMORY;
-    }
-
-    if (program->shader_version.type == VKD3D_SHADER_TYPE_PIXEL
-            && program->shader_version.major < 4 && use_flat_interpolation(program, message_context))
-    {
-        for (i = 0; i < program->input_signature.element_count; ++i)
-        {
-            struct signature_element *element = &program->input_signature.elements[i];
-
-            if (!ascii_strcasecmp(element->semantic_name, "COLOR"))
-                element->interpolation_mode = VKD3DSIM_CONSTANT;
-        }
     }
 
     normaliser.phase = VKD3DSIH_INVALID;
@@ -5884,6 +5846,60 @@ static enum vkd3d_result vsir_program_materialize_undominated_ssas_to_temps(stru
     return VKD3D_OK;
 }
 
+static bool use_flat_interpolation(const struct vsir_program *program,
+        struct vkd3d_shader_message_context *message_context, bool *flat)
+{
+    static const struct vkd3d_shader_location no_loc;
+    const struct vkd3d_shader_parameter1 *parameter;
+
+    *flat = false;
+
+    if (!(parameter = vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FLAT_INTERPOLATION)))
+        return true;
+
+    if (parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                "Unsupported flat interpolation parameter type %#x.", parameter->type);
+        return false;
+    }
+    if (parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                "Invalid flat interpolation parameter data type %#x.", parameter->data_type);
+        return false;
+    }
+
+    *flat = parameter->u.immediate_constant.u.u32;
+    return true;
+}
+
+static enum vkd3d_result vsir_program_apply_flat_interpolation(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    unsigned int i;
+    bool flat;
+
+    if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL || program->shader_version.major >= 4)
+        return VKD3D_OK;
+
+    if (!use_flat_interpolation(program, ctx->message_context, &flat))
+        return VKD3D_ERROR_INVALID_ARGUMENT;
+
+    if (!flat)
+        return VKD3D_OK;
+
+    for (i = 0; i < program->input_signature.element_count; ++i)
+    {
+        struct signature_element *element = &program->input_signature.elements[i];
+
+        if (!ascii_strcasecmp(element->semantic_name, "COLOR"))
+            element->interpolation_mode = VKD3DSIM_CONSTANT;
+    }
+
+    return VKD3D_OK;
+}
+
 static enum vkd3d_result insert_alpha_test_before_ret(struct vsir_program *program,
         const struct vkd3d_shader_instruction *ret, enum vkd3d_shader_comparison_func compare_func,
         const struct vkd3d_shader_parameter1 *ref, uint32_t colour_signature_idx,
@@ -8350,6 +8366,7 @@ enum vkd3d_result vsir_program_transform(struct vsir_program *program, uint64_t 
             vsir_transform(&ctx, vsir_program_flatten_control_flow_constructs);
     }
 
+    vsir_transform(&ctx, vsir_program_apply_flat_interpolation);
     vsir_transform(&ctx, vsir_program_insert_alpha_test);
     vsir_transform(&ctx, vsir_program_insert_clip_planes);
     vsir_transform(&ctx, vsir_program_insert_point_size);
