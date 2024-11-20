@@ -13,7 +13,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (1.0, 2.0, 3.0, 4.0)
 
 [pixel shader fail(sm>=6)]
@@ -61,7 +61,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (1.0, 2.0, 3.0, 4.0)
 
 [pixel shader fail(sm>=6)]
@@ -83,7 +83,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (1.0, 2.0, 3.0, 4.0)
 
 [pixel shader]
@@ -97,7 +97,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (1.0, 2.0, 3.0, 4.0)
 
 [pixel shader fail]
@@ -150,7 +150,7 @@ uniform 0 float4 0.0 1.0 2.0 3.0
 uniform 4 float4 4.0 5.0 6.0 7.0
 uniform 8 float4 8.0 9.0 10.0 11.0
 uniform 12 float4 12.0 13.0 14.0 15.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (0.0, 2.0, 4.0, 8.0)
 
 
@@ -171,7 +171,7 @@ float4 main() : sv_target
 uniform 0 float4 0.0 1.0 2.0 3.0
 uniform 4 float4 4.0 5.0 6.0 7.0
 uniform 8 float4 8.0 9.0 10.0 11.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (0.0, 4.0, 8.0, 9.0)
 
 
@@ -197,7 +197,7 @@ uniform 0 float4 0.0 1.0 2.0 3.0
 uniform 4 float4 4.0 5.0 6.0 7.0
 uniform 8 float4 8.0 9.0 10.0 11.0
 uniform 12 float4 12.0 13.0 14.0 15.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (0.0, 4.0, 5.0, 6.0)
 
 
@@ -291,7 +291,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (2.0, 3.0, 2.0, 3.0)
 
 
@@ -427,7 +427,7 @@ float4 main() : sv_target
 
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (3.0, 4.0, 3.0, 4.0)
 
 
@@ -767,7 +767,7 @@ float4 main() : sv_target
 [test]
 uniform 0 float4 1.0 2.0 3.0 4.0
 uniform 4 float4 0.0 0.0 0.0 0.0
-todo(msl) draw quad
+draw quad
 probe (0, 0) rgba (1.0, 2.0, 3.0, 4.0)
 
 [pixel shader fail(sm<6)]

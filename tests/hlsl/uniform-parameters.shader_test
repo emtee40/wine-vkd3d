@@ -18,7 +18,7 @@ float4 main(uniform float f, uniform int i, uniform uint u, uniform half h) : sv
 
 [test]
 uniform 0 float4 123.0 -2.0 456 0.01
-todo(msl) draw quad
+draw quad
 probe (320,240) rgba (123.0, -2.0, 456.0, 0.01)
 
 [pixel shader]
