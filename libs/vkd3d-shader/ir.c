@@ -7205,6 +7205,10 @@ static void vsir_validate_register(struct validation_context *ctx,
             vsir_validate_uav_register(ctx, reg);
             break;
 
+        case VKD3DSPR_OUTPOINTID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
         case VKD3DSPR_INCONTROLPOINT:
             vsir_validate_io_register(ctx, reg);
             break;
