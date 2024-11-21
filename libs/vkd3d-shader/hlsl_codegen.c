@@ -7297,12 +7297,9 @@ static bool sm1_generate_vsir_instr_expr_cast(struct hlsl_ctx *ctx,
 
                 case HLSL_TYPE_INT:
                 case HLSL_TYPE_UINT:
+                case HLSL_TYPE_BOOL:
                     generate_vsir_instr_expr_single_instr_op(ctx, program, expr, VKD3DSIH_MOV, 0, 0, true);
                     return true;
-
-                case HLSL_TYPE_BOOL:
-                    hlsl_fixme(ctx, &instr->loc, "SM1 cast from bool to integer.");
-                    break;
 
                 case HLSL_TYPE_DOUBLE:
                     hlsl_fixme(ctx, &instr->loc, "SM1 cast from double to integer.");

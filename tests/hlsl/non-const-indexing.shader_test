@@ -65,7 +65,7 @@ todo(msl) draw quad
 probe (0, 0) rgba (3, 3, 3, 3)
 
 
-[pixel shader todo(sm<4)]
+[pixel shader]
 uniform float i;
 
 float4 main() : SV_TARGET
@@ -77,16 +77,16 @@ float4 main() : SV_TARGET
 
 [test]
 uniform 0 float 0
-todo(sm<4 | msl) draw quad
+todo(msl) draw quad
 probe (0, 0) rgba (21.0, 1.0, 24.0, 0.0)
 uniform 0 float 1
-todo(sm<4 | msl) draw quad
+todo(msl) draw quad
 probe (0, 0) rgba (22.0, 0.0, 23.0, 1.0)
 uniform 0 float 2
-todo(sm<4 | msl) draw quad
+todo(msl) draw quad
 probe (0, 0) rgba (23.0, 1.0, 22.0, 0.0)
 uniform 0 float 3
-todo(sm<4 | msl) draw quad
+todo(msl) draw quad
 probe (0, 0) rgba (24.0, 0.0, 21.0, 1.0)
 
 
