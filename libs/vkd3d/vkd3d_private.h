@@ -60,10 +60,13 @@
 #define VKD3D_MAX_DESCRIPTOR_SETS        64u
 /* D3D12 binding tier 3 has a limit of 2048 samplers. */
 #define VKD3D_MAX_DESCRIPTOR_SET_SAMPLERS 2048u
-/* The main limitation here is the simple descriptor pool recycling scheme
- * requiring each pool to contain all descriptor types used by vkd3d. Limit
- * this number to prevent excessive pool memory use. */
+/* Unbounded ranges can be excessively large, so this number is used to
+ * limit the maximum size. It also limits the maximum pool size due to
+ * geometric growth. */
 #define VKD3D_MAX_VIRTUAL_HEAP_DESCRIPTORS_PER_TYPE (16 * 1024u)
+/* Determines the starting count for each allocator,
+ * which doubles each time the allocator creates a pool. */
+#define VKD3D_BASE_VIRTUAL_HEAP_DESCRIPTORS_PER_TYPE 1024u
 
 extern uint64_t object_global_serial_id;
 
@@ -770,6 +773,25 @@ static inline struct d3d12_dsv_desc *d3d12_dsv_desc_from_cpu_handle(D3D12_CPU_DE
 void d3d12_dsv_desc_create_dsv(struct d3d12_dsv_desc *dsv_desc, struct d3d12_device *device,
         struct d3d12_resource *resource, const D3D12_DEPTH_STENCIL_VIEW_DESC *desc);
 
+static inline VkDescriptorType vk_descriptor_type_from_vkd3d_descriptor_type(enum vkd3d_shader_descriptor_type type,
+        bool is_buffer)
+{
+    switch (type)
+    {
+        case VKD3D_SHADER_DESCRIPTOR_TYPE_SRV:
+            return is_buffer ? VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        case VKD3D_SHADER_DESCRIPTOR_TYPE_UAV:
+            return is_buffer ? VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case VKD3D_SHADER_DESCRIPTOR_TYPE_CBV:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case VKD3D_SHADER_DESCRIPTOR_TYPE_SAMPLER:
+            return VK_DESCRIPTOR_TYPE_SAMPLER;
+        default:
+            FIXME("Unhandled descriptor range type type %#x.\n", type);
+            return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    }
+}
+
 enum vkd3d_vk_descriptor_set_index
 {
     VKD3D_SET_INDEX_SAMPLER,
@@ -899,6 +921,8 @@ struct d3d12_root_descriptor_table_range
     unsigned int vk_binding_count;
     uint32_t set;
     uint32_t binding;
+    uint32_t image_set;
+    uint32_t image_binding;
 
     enum vkd3d_shader_descriptor_type type;
     uint32_t descriptor_magic;
@@ -920,6 +944,7 @@ struct d3d12_root_constant
 
 struct d3d12_root_descriptor
 {
+    uint32_t set;
     uint32_t binding;
 };
 
@@ -936,10 +961,14 @@ struct d3d12_root_parameter
 
 struct d3d12_descriptor_set_layout
 {
+    enum vkd3d_shader_descriptor_type descriptor_type;
     VkDescriptorSetLayout vk_layout;
+    unsigned int descriptor_count;
     unsigned int unbounded_offset;
     unsigned int table_index;
 };
+
+#define VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT (VKD3D_SHADER_DESCRIPTOR_TYPE_SAMPLER + 1)
 
 /* ID3D12RootSignature */
 struct d3d12_root_signature
@@ -955,6 +984,7 @@ struct d3d12_root_signature
     struct d3d12_root_parameter *parameters;
     unsigned int parameter_count;
     uint32_t main_set;
+    uint32_t set_table[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
     uint64_t descriptor_table_mask;
     uint32_t push_descriptor_mask;
@@ -1135,6 +1165,19 @@ struct vkd3d_buffer
     VkDeviceMemory vk_memory;
 };
 
+struct vkd3d_vk_descriptor_pool
+{
+    unsigned int descriptor_count;
+    VkDescriptorPool vk_pool;
+};
+
+struct vkd3d_vk_descriptor_pool_array
+{
+    struct vkd3d_vk_descriptor_pool *pools;
+    size_t pools_capacity;
+    size_t pool_count;
+};
+
 /* ID3D12CommandAllocator */
 struct d3d12_command_allocator
 {
@@ -1146,11 +1189,10 @@ struct d3d12_command_allocator
 
     VkCommandPool vk_command_pool;
 
-    VkDescriptorPool vk_descriptor_pool;
+    unsigned int vk_pool_sizes[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
+    VkDescriptorPool vk_descriptor_pools[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
-    VkDescriptorPool *free_descriptor_pools;
-    size_t free_descriptor_pools_size;
-    size_t free_descriptor_pool_count;
+    struct vkd3d_vk_descriptor_pool_array free_descriptor_pools[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
     VkRenderPass *passes;
     size_t passes_size;
@@ -1160,9 +1202,7 @@ struct d3d12_command_allocator
     size_t framebuffers_size;
     size_t framebuffer_count;
 
-    VkDescriptorPool *descriptor_pools;
-    size_t descriptor_pools_size;
-    size_t descriptor_pool_count;
+    struct vkd3d_vk_descriptor_pool_array descriptor_pools[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
 
     struct vkd3d_view **views;
     size_t views_size;
@@ -1536,8 +1576,8 @@ struct d3d12_device
     struct vkd3d_desc_object_cache view_desc_cache;
     struct vkd3d_desc_object_cache cbuffer_desc_cache;
 
-    VkDescriptorPoolSize vk_pool_sizes[VKD3D_DESCRIPTOR_POOL_COUNT];
-    unsigned int vk_pool_count;
+    unsigned int vk_pool_base_sizes[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
+    unsigned int vk_pool_limits[VKD3D_SHADER_DESCRIPTOR_TYPE_COUNT];
     struct vkd3d_vk_descriptor_heap_layout vk_descriptor_heap_layouts[VKD3D_SET_INDEX_COUNT];
     bool use_vk_heaps;
 
