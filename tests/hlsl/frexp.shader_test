@@ -1,0 +1,116 @@
+[pixel shader todo(sm<4)]
+uniform float4 f;
+
+float4 main() : sv_target
+{
+    float exp;
+    float mantissa = frexp(f.x, exp);
+    return float4(exp, mantissa, 0.0, 0.0);
+}
+
+[test]
+uniform 0 float4 3.1415927 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (2.0, 0.785398185, 0.0, 0.0)
+
+uniform 0 float4 -3.1415927 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+if(sm<4) probe (0, 0) rgba (2.0, -0.785398185, 0.0, 0.0)
+% Starting in shader model 4, negative inputs give positive mantissa
+if(sm>=4) probe (0, 0) rgba (2.0, 0.785398185, 0.0, 0.0)
+
+uniform 0 float4 7604.123 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (13.0, 0.92823765, 0.0, 0.0)
+
+uniform 0 float4 0.00001234 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (-16.0, 0.8087142, 0.0, 0.0)
+
+uniform 0 float4 0.0 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (0.0, 0.0, 0.0, 0.0)
+
+uniform 0 float4 -0.0 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (0.0, 0.0, 0.0, 0.0)
+
+uniform 0 float4 1e39 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+if(sm<4)  probe (0, 0) rgba (NAN, NAN, 0, 0)
+if(sm>=4) probe (0, 0) rgba (129, 0.5, 0, 0)
+
+uniform 0 float4 -1e39 0.0 0.0 0.0
+todo(sm<4 | glsl) draw quad
+if(sm<4)  probe (0, 0) rgba (NAN, NAN, 0, 0)
+if(sm>=4) probe (0, 0) rgba (129, 0.5, 0, 0)
+
+uniform 0 float4 NAN 0 0 0
+todo(sm<4 | glsl) draw quad
+if(sm<4) probe (0, 0) rgba (NAN, NAN, 0, 0)
+if(sm>=4) probe (0, 0) rgba (129, 0.75, 0, 0)
+
+% Subnormal
+uniform 0 float4 1e-38 0 0 0
+todo(sm<4 | glsl) draw quad
+probe (0, 0) rgba (0, 0, 0, 0)
+
+[pixel shader todo(sm<6)]
+float4 main() : sv_target
+{
+    int arg = 7604;
+    int exp;
+    // Ints are promoted to floats
+    int mantissa = frexp(arg, exp);
+    return float4(exp, mantissa, 0, 0);
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgba (13.0, 0.0, 0.0, 0.0)
+
+[pixel shader todo(sm<6)]
+float4 main() : sv_target
+{
+    bool arg = true;
+    bool exp;
+    // Bools are promoted to floats
+    bool mantissa = frexp(arg, exp);
+    return float4(exp, mantissa, 0, 0);
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+if(sm<4)  probe (0, 0) rgba (0.0, 1.0, 0.0, 0.0)
+if(sm>=4) probe (0, 0) rgba (1.0, 1.0, 0.0, 0.0)
+
+[pixel shader todo(sm<6)]
+float4 main() : sv_target
+{
+    half arg = 3.141;
+    half exp;
+    // Halfs are promoted to floats
+    half mantissa = frexp(arg, exp);
+    return float4(exp, mantissa, 0, 0);
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgba (2.0, 0.785250008, 0.0, 0.0)
+
+[require]
+shader model >= 5.0
+float64
+
+[pixel shader todo]
+float4 main() : sv_target
+{
+    double arg = 3.14156265358979323;
+    double exp;
+    double mantissa = frexp(arg, exp);
+    return float4(exp, mantissa, 0, 0);
+}
+
+[test]
+todo(sm<6 | glsl) draw quad
+probe (0, 0) rgba (2.0, 0.785390675, 0.0, 0.0)
