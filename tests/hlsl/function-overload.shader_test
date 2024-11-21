@@ -134,3 +134,336 @@ float4 main() : sv_target
     func(x);
     return 1.0;
 }
+
+% Narrows have the same priority, regardless of how much narrowing is done.
+[pixel shader fail todo]
+
+float4 func(float3 x)
+{
+    return 0.0;
+}
+
+float4 func(float2 x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(float4(0.0, 0.0, 0.0, 0.0));
+}
+
+% Even if one axis has less narrowing.
+[pixel shader fail todo]
+
+float4 func(float4x3 x)
+{
+    return float4(x[0][0], x[0][0], x[0][0], x[0][0]);
+}
+
+float4 func(float2x2 x)
+{
+    return float4(x[0][0], x[0][0], x[0][0], x[0][0]);
+}
+
+float4 main() : sv_target
+{
+    float4x4 mtx = 0;
+
+    return func(mtx);
+}
+
+% Let C be the common type that would be produced in an arithmetic expression
+% between the parameter and argument types. If C is the same as the parameter, the
+% overload is preferred to the case where C is the same base type as the argument but
+% narrower. E.g. in the following example, C is "float4" for the first function
+% (same as the parameter) and "int2" for the second function (same base type as
+% the argument, but narrower), so the first function is preferred.
+
+[pixel shader todo]
+
+float4 func(float4 x)
+{
+    return 0.0;
+}
+
+float4 func(int2 x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(int4(0, 0, 0, 0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(0.0, 0.0, 0.0, 0.0)
+
+% Let C be the common type that would be produced in an arithmetic expression
+% between the parameter and argument types. If C is the same as the argument,
+% the overload is preferred to the case where C is the same as the parameter
+% but different to the argument. E.g. in the following example, C is "int" for
+% the first function (same as the argument) and "float" for the second function
+% (same as the parameter), so the first function is preferred.
+
+[require]
+% No minimum precision types prior to SM4.
+shader model >= 4.0
+
+[pixel shader todo(sm<6)]
+
+float4 func(min16int x)
+{
+    return 2.0;
+}
+
+float4 func(float x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(int(0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(2.0, 2.0, 2.0, 2.0)
+
+% Let C be the common type that would be produced in an arithmetic expression
+% between the parameter and argument types. If C is "int" and the parameter is "uint", the
+% overload is preferred to the case where C is the same as the argument.
+% E.g. in the following example, C is "int" in both cases, but "int" <-> "uint"
+% casts are preferred.
+
+[pixel shader todo]
+
+float4 func(uint x)
+{
+    return 2.0;
+}
+
+float4 func(min16int x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(int(0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(2.0, 2.0, 2.0, 2.0)
+
+% Same as above.
+
+[pixel shader todo]
+
+float4 func(int x)
+{
+    return 2.0;
+}
+
+float4 func(min16uint x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(uint(0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(2.0, 2.0, 2.0, 2.0)
+
+[require]
+% Need SM5 for doubles.
+shader model >= 5.0
+
+% Let C be the common type that would be produced in an arithmetic expression
+% between the parameter and argument types. If C is a promoted type of the argument
+% (e.g: float and double for halfs; double for floats;), it is preferred over the case
+% where C is equal to the argument.
+% E.g. in the following example, C is "double" for the first function (a promoted
+% type of the "float" argument) and "float" for the second function.
+
+[pixel shader todo]
+
+float4 func(double x)
+{
+    return 2.0;
+}
+
+float4 func(int x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(float(0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(2.0, 2.0, 2.0, 2.0)
+
+% Let C be the common type that would be produced in an arithmetic expression
+% between the parameter and argument types. If C has the same base type as the argument,
+% but with more components, it is preferred over all other cases.
+% E.g in the following example, "C" is "float2" (same base type as the "float"
+% argument, but with more components) for the first function and "double" for the
+% second function.
+
+[require]
+% Reset
+
+[pixel shader todo]
+
+float4 func(float2 x)
+{
+    return 2.0;
+}
+
+float4 func(double x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(float(0));
+}
+
+[test]
+todo(sm<6) draw quad
+todo(sm<6) probe (0, 0) rgba(2.0, 2.0, 2.0, 2.0)
+
+% Some matrices are implicitly compatible with vectors and will ambiguate with them.
+
+[pixel shader fail todo]
+
+float4 func(float2x2 x)
+{
+    return 2.0;
+}
+
+float4 func(float4 x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(float4(0, 0, 0, 0));
+}
+
+[pixel shader fail todo]
+
+float4 func(float1x3 x)
+{
+    return 2.0;
+}
+
+float4 func(float3 x)
+{
+    return 1.0;
+}
+
+float4 main() : sv_target
+{
+    return func(float4(0, 0, 0, 0));
+}
+
+% Structs are evaluated on a per-component basis.
+
+[pixel shader fail todo]
+struct a
+{
+    float4 a;
+};
+
+struct b
+{
+    float a[4];
+};
+
+struct c
+{
+    float a;
+    float b;
+    float c;
+    float d;
+};
+
+float4 func(a x)
+{
+    return 1.0;
+}
+
+float4 func(b x)
+{
+    return 2.0;
+}
+
+float4 main() : sv_target
+{
+    c x = {0.0, 0.0, 0.0, 0.0};
+    return func(x);
+}
+
+% Arrays are evaluated on a per component basis.
+
+[pixel shader fail todo]
+
+float4 func(float4 x[1])
+{
+    return 1.0;
+}
+
+float4 func(float2 x[2])
+{
+    return 2.0;
+}
+
+float4 main() : sv_target
+{
+    float x[4] = {0, 0, 0, 0};
+    return func(x);
+}
+
+% Arrays do not implicitly convert from vectors, so they won't ambiguate.
+
+[pixel shader]
+
+float4 func(float4 x[1])
+{
+    return 1.0;
+}
+
+float4 func(float2 x[2])
+{
+    return 2.0;
+}
+
+float4 func(float4 x)
+{
+    return 42.0;
+}
+
+float4 main() : sv_target
+{
+    float4 x = float4(0, 0, 0, 0);
+    return func(x);
+}
+
+[test]
+draw quad
+probe (0, 0) rgba(42.0, 42.0, 42.0, 42.0)
