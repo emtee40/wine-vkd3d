@@ -9717,6 +9717,7 @@ static void sm6_parser_emit_dcl_tessellator_domain(struct sm6_parser *sm6,
 
     ins = sm6_parser_add_instruction(sm6, VKD3DSIH_DCL_TESSELLATOR_DOMAIN);
     ins->declaration.tessellator_domain = tessellator_domain;
+    sm6->p.program->tess_domain = tessellator_domain;
 }
 
 static void sm6_parser_validate_control_point_count(struct sm6_parser *sm6,

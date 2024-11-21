@@ -1268,6 +1268,7 @@ static void shader_sm5_read_dcl_tessellator_domain(struct vkd3d_shader_instructi
 {
     ins->declaration.tessellator_domain = (opcode_token & VKD3D_SM5_TESSELLATOR_MASK)
             >> VKD3D_SM5_TESSELLATOR_SHIFT;
+    priv->p.program->tess_domain = ins->declaration.tessellator_domain;
 }
 
 static void shader_sm5_read_dcl_tessellator_partitioning(struct vkd3d_shader_instruction *ins, uint32_t opcode,

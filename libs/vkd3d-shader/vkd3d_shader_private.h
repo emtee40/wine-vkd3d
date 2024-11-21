@@ -1431,6 +1431,7 @@ struct vsir_program
     uint8_t diffuse_written_mask;
     enum vsir_control_flow_type cf_type;
     enum vsir_normalisation_level normalisation_level;
+    enum vkd3d_tessellator_domain tess_domain;
 
     const char **block_names;
     size_t block_name_count;

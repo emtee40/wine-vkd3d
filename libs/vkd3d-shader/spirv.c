@@ -6822,14 +6822,10 @@ static void spirv_compiler_emit_dcl_gs_instances(struct spirv_compiler *compiler
     compiler->spirv_builder.invocation_count = instruction->declaration.count;
 }
 
-static void spirv_compiler_emit_dcl_tessellator_domain(struct spirv_compiler *compiler,
-        const struct vkd3d_shader_instruction *instruction)
+static void spirv_compiler_emit_tessellator_domain(struct spirv_compiler *compiler,
+        enum vkd3d_tessellator_domain domain)
 {
-    enum vkd3d_tessellator_domain domain = instruction->declaration.tessellator_domain;
     SpvExecutionMode mode;
-
-    if (compiler->shader_type == VKD3D_SHADER_TYPE_HULL && spirv_compiler_is_opengl_target(compiler))
-        return;
 
     switch (domain)
     {
@@ -10239,9 +10235,6 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
         case VKD3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT:
             spirv_compiler_emit_output_vertex_count(compiler, instruction);
             break;
-        case VKD3DSIH_DCL_TESSELLATOR_DOMAIN:
-            spirv_compiler_emit_dcl_tessellator_domain(compiler, instruction);
-            break;
         case VKD3DSIH_DCL_TESSELLATOR_OUTPUT_PRIMITIVE:
             spirv_compiler_emit_tessellator_output_primitive(compiler,
                     instruction->declaration.tessellator_output_primitive);
@@ -10742,6 +10735,9 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler, struct
 
     compiler->input_control_point_count = program->input_control_point_count;
     compiler->output_control_point_count = program->output_control_point_count;
+
+    if (program->shader_version.type == VKD3D_SHADER_TYPE_HULL && !spirv_compiler_is_opengl_target(compiler))
+        spirv_compiler_emit_tessellator_domain(compiler, program->tess_domain);
 
     if (compiler->shader_type != VKD3D_SHADER_TYPE_HULL)
         spirv_compiler_emit_shader_signature_outputs(compiler);

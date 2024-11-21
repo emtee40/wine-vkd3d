@@ -743,6 +743,7 @@ static enum vkd3d_result vsir_program_lower_instructions(struct vsir_program *pr
             case VKD3DSIH_DCL_GLOBAL_FLAGS:
             case VKD3DSIH_DCL_SAMPLER:
             case VKD3DSIH_DCL_TEMPS:
+            case VKD3DSIH_DCL_TESSELLATOR_DOMAIN:
             case VKD3DSIH_DCL_THREAD_GROUP:
             case VKD3DSIH_DCL_UAV_TYPED:
                 vkd3d_shader_instruction_make_nop(ins);
@@ -6665,6 +6666,9 @@ struct validation_context
     enum vkd3d_shader_opcode *blocks;
     size_t depth;
     size_t blocks_capacity;
+
+    unsigned int outer_tess_idxs[4];
+    unsigned int inner_tess_idxs[2];
 };
 
 static void VKD3D_PRINTF_FUNC(3, 4) validator_error(struct validation_context *ctx,
@@ -7469,9 +7473,11 @@ static void vsir_validate_signature_element(struct validation_context *ctx,
         const struct shader_signature *signature, enum vsir_signature_type signature_type,
         unsigned int idx)
 {
+    enum vkd3d_tessellator_domain expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_INVALID;
     const char *signature_type_name = signature_type_names[signature_type];
     const struct signature_element *element = &signature->elements[idx];
-    bool integer_type = false;
+    bool integer_type = false, is_outer = false;
+    unsigned int semantic_index_max = 0;
 
     if (element->register_count == 0)
         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
@@ -7523,12 +7529,6 @@ static void vsir_validate_signature_element(struct validation_context *ctx,
         case VKD3D_SHADER_SV_INSTANCE_ID:
         case VKD3D_SHADER_SV_IS_FRONT_FACE:
         case VKD3D_SHADER_SV_SAMPLE_INDEX:
-        case VKD3D_SHADER_SV_TESS_FACTOR_QUADEDGE:
-        case VKD3D_SHADER_SV_TESS_FACTOR_QUADINT:
-        case VKD3D_SHADER_SV_TESS_FACTOR_TRIEDGE:
-        case VKD3D_SHADER_SV_TESS_FACTOR_TRIINT:
-        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDET:
-        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDEN:
         case VKD3D_SHADER_SV_TARGET:
         case VKD3D_SHADER_SV_DEPTH:
         case VKD3D_SHADER_SV_COVERAGE:
@@ -7537,11 +7537,74 @@ static void vsir_validate_signature_element(struct validation_context *ctx,
         case VKD3D_SHADER_SV_STENCIL_REF:
             break;
 
+        case VKD3D_SHADER_SV_TESS_FACTOR_QUADEDGE:
+            expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_QUAD;
+            semantic_index_max = 4;
+            is_outer = true;
+            break;
+
+        case VKD3D_SHADER_SV_TESS_FACTOR_QUADINT:
+            expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_QUAD;
+            semantic_index_max = 2;
+            is_outer = false;
+            break;
+
+        case VKD3D_SHADER_SV_TESS_FACTOR_TRIEDGE:
+            expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_TRIANGLE;
+            semantic_index_max = 3;
+            is_outer = true;
+            break;
+
+        case VKD3D_SHADER_SV_TESS_FACTOR_TRIINT:
+            expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_TRIANGLE;
+            semantic_index_max = 1;
+            is_outer = false;
+            break;
+
+        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDET:
+        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDEN:
+            expected_tess_domain = VKD3D_TESSELLATOR_DOMAIN_LINE;
+            semantic_index_max = 2;
+            is_outer = true;
+            break;
+
         default:
             validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
                     "element %u of %s signature: Invalid system value semantic %#x.",
                     idx, signature_type_name, element->sysval_semantic);
             break;
+    }
+
+    if (expected_tess_domain != VKD3D_TESSELLATOR_DOMAIN_INVALID)
+    {
+        if (signature_type != SIGNATURE_TYPE_PATCH_CONSTANT)
+            validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                    "element %u of %s signature: System value semantic %#x is only valid "
+                    "in the patch constant signature.",
+                    idx, signature_type_name, element->sysval_semantic);
+
+        if (ctx->program->tess_domain != expected_tess_domain)
+            validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                    "element %u of %s signature: Invalid system value semantic %#x for tessellator domain %#x.",
+                    idx, signature_type_name, element->sysval_semantic, ctx->program->tess_domain);
+
+        if (element->semantic_index >= semantic_index_max)
+        {
+            validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                    "element %u of %s signature: Invalid semantic index %u for system value semantic %#x.",
+                    idx, signature_type_name, element->semantic_index, element->sysval_semantic);
+        }
+        else
+        {
+            unsigned int *idx_pos = &(is_outer ? ctx->outer_tess_idxs : ctx->inner_tess_idxs)[element->semantic_index];
+
+            if (*idx_pos != ~0u)
+                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
+                        "element %u of %s signature: Duplicate semantic index %u for system value semantic %#x.",
+                        idx, signature_type_name, element->semantic_index, element->sysval_semantic);
+            else
+                *idx_pos = idx;
+        }
     }
 
     if (element->sysval_semantic < ARRAY_SIZE(sysval_validation_data))
@@ -7801,6 +7864,11 @@ static void vsir_validate_dcl_tessellator_domain(struct validation_context *ctx,
             || instruction->declaration.tessellator_domain >= VKD3D_TESSELLATOR_DOMAIN_COUNT)
         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
                 "Tessellator domain %#x is invalid.", instruction->declaration.tessellator_domain);
+
+    if (instruction->declaration.tessellator_domain != ctx->program->tess_domain)
+        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+                "DCL_TESSELLATOR_DOMAIN argument %#x doesn't match the shader tessellator domain %#x.",
+                instruction->declaration.tessellator_domain, ctx->program->tess_domain);
 }
 
 static void vsir_validate_dcl_tessellator_output_primitive(struct validation_context *ctx,
@@ -8177,6 +8245,12 @@ enum vkd3d_result vsir_program_validate(struct vsir_program *program, uint64_t c
         .status = VKD3D_OK,
         .phase = VKD3DSIH_INVALID,
         .invalid_instruction_idx = true,
+        .outer_tess_idxs[0] = ~0u,
+        .outer_tess_idxs[1] = ~0u,
+        .outer_tess_idxs[2] = ~0u,
+        .outer_tess_idxs[3] = ~0u,
+        .inner_tess_idxs[0] = ~0u,
+        .inner_tess_idxs[1] = ~0u,
     };
     unsigned int i;
 
@@ -8187,12 +8261,20 @@ enum vkd3d_result vsir_program_validate(struct vsir_program *program, uint64_t c
     {
         case VKD3D_SHADER_TYPE_HULL:
         case VKD3D_SHADER_TYPE_DOMAIN:
+            if (program->tess_domain == VKD3D_TESSELLATOR_DOMAIN_INVALID
+                    || program->tess_domain >= VKD3D_TESSELLATOR_DOMAIN_COUNT)
+                validator_error(&ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+                        "Invalid tessellation domain %#x.", program->tess_domain);
             break;
 
         default:
             if (program->patch_constant_signature.element_count != 0)
                 validator_error(&ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SIGNATURE,
                         "Patch constant signature is only valid for hull and domain shaders.");
+
+            if (program->tess_domain != VKD3D_TESSELLATOR_DOMAIN_INVALID)
+                validator_error(&ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+                        "Invalid tessellation domain %#x.", program->tess_domain);
     }
 
     switch (program->shader_version.type)
