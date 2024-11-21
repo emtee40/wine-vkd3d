@@ -3265,6 +3265,9 @@ static bool spirv_compiler_get_register_name(char *buffer, unsigned int buffer_s
         case VKD3DSPR_POINT_COORD:
             snprintf(buffer, buffer_size, "vPointCoord");
             break;
+        case VKD3DSPR_TYPEDTEMP:
+            snprintf(buffer, buffer_size, "a%u", idx);
+            break;
         default:
             FIXME("Unhandled register %#x.\n", reg->type);
             snprintf(buffer, buffer_size, "unrecognized_%#x", reg->type);
@@ -6720,6 +6723,60 @@ static void spirv_compiler_emit_dcl_output(struct spirv_compiler *compiler,
         spirv_compiler_emit_output_register(compiler, dst);
 }
 
+/* A typed temp is a scalar global which may have an initialiser. */
+static void spirv_compiler_emit_dcl_typed_temp(struct spirv_compiler *compiler,
+          const struct vkd3d_shader_instruction *instruction)
+{
+    const struct vkd3d_shader_typed_temp *temp = &instruction->declaration.typed_temp;
+    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    enum vkd3d_shader_component_type component_type;
+    uint32_t id, type_id, ptr_type_id, init_id = 0;
+    struct vkd3d_spirv_stream *stream;
+    struct vkd3d_shader_register reg;
+    struct vkd3d_symbol reg_symbol;
+    SpvStorageClass storage_class;
+    size_t function_location;
+
+    /* Typed temps may be used by more than one function in hull shaders, so they should
+     * default to global scope unless function scope is specified, e.g. by DXIL alloca. */
+    if (temp->has_function_scope)
+    {
+        storage_class = SpvStorageClassFunction;
+        stream = &builder->function_stream;
+        function_location = spirv_compiler_get_current_function_location(compiler);
+        vkd3d_spirv_begin_function_stream_insertion(builder, function_location);
+    }
+    else
+    {
+        storage_class = SpvStorageClassPrivate;
+        stream = &builder->global_stream;
+    }
+
+    vsir_register_init(&reg, VKD3DSPR_TYPEDTEMP, temp->data_type, 1);
+    reg.idx[0].offset = temp->register_idx;
+
+    if (temp->alignment)
+        TRACE("Ignoring alignment %u.\n", temp->alignment);
+
+    component_type = vkd3d_component_type_from_data_type(temp->data_type);
+    type_id = vkd3d_spirv_get_type_id(builder, component_type, 1);
+    ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, storage_class, type_id);
+
+    if (temp->initialiser.type != VKD3DSPR_NULL)
+        init_id = spirv_compiler_emit_load_reg(compiler, &temp->initialiser, VKD3D_SHADER_SWIZZLE(X, X, X, X),
+                VKD3DSP_WRITEMASK_0);
+
+    id = vkd3d_spirv_build_op_variable(builder, stream, ptr_type_id, storage_class, init_id);
+    spirv_compiler_emit_register_debug_name(builder, id, &reg);
+
+    if (temp->has_function_scope)
+        vkd3d_spirv_end_function_stream_insertion(builder);
+
+    vkd3d_symbol_make_register(&reg_symbol, &reg);
+    vkd3d_symbol_set_register_info(&reg_symbol, id, storage_class, component_type, VKD3DSP_WRITEMASK_0);
+    spirv_compiler_put_symbol(compiler, &reg_symbol);
+}
+
 static void spirv_compiler_emit_dcl_stream(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
@@ -7233,6 +7290,27 @@ static void spirv_compiler_emit_bool_cast(struct spirv_compiler *compiler,
     spirv_compiler_emit_store_dst(compiler, dst, val_id);
 }
 
+static void spirv_compiler_emit_trunc_to_bool(struct spirv_compiler *compiler,
+        const struct vkd3d_shader_instruction *instruction)
+{
+    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+    const struct vkd3d_shader_dst_param *dst = instruction->dst;
+    const struct vkd3d_shader_src_param *src = instruction->src;
+    uint32_t type_id, src_id, one_id, val_id;
+
+    type_id = vkd3d_spirv_get_type_id_for_data_type(builder, src->reg.data_type,
+            vsir_write_mask_component_count(dst->write_mask));
+    src_id = spirv_compiler_emit_load_src(compiler, src, dst->write_mask);
+    one_id = data_type_is_64_bit(src->reg.data_type)
+            ? vkd3d_spirv_get_op_constant64(builder, type_id, 1)
+            : vkd3d_spirv_get_op_constant(builder, type_id, 1);
+    val_id = vkd3d_spirv_build_op_and(builder, type_id, src_id, one_id);
+    type_id = vkd3d_spirv_get_op_type_bool(builder);
+    val_id = vkd3d_spirv_build_op_tr2(builder, &builder->function_stream, SpvOpIEqual, type_id, val_id, one_id);
+
+    spirv_compiler_emit_store_dst(compiler, dst, val_id);
+}
+
 static enum vkd3d_result spirv_compiler_emit_alu_instruction(struct spirv_compiler *compiler,
         const struct vkd3d_shader_instruction *instruction)
 {
@@ -7268,6 +7346,13 @@ static enum vkd3d_result spirv_compiler_emit_alu_instruction(struct spirv_compil
             spirv_compiler_emit_bool_cast(compiler, instruction);
             return VKD3D_OK;
         }
+    }
+    else if (dst->reg.data_type == VKD3D_DATA_BOOL && instruction->opcode == VKD3DSIH_UTOU)
+    {
+        /* Truncate integer to bool, i.e. to a 1-bit integer, which is equivalent to a comparison
+         * with 1. DXC emits this as part of its IsFirstLane() implementation for SM < 6.6. */
+        spirv_compiler_emit_trunc_to_bool(compiler, instruction);
+        return VKD3D_OK;
     }
     else
     {
@@ -10220,6 +10305,9 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
             break;
         case VKD3DSIH_DCL_OUTPUT:
             spirv_compiler_emit_dcl_output(compiler, instruction);
+            break;
+        case VKD3DSIH_DCL_TYPED_TEMP:
+            spirv_compiler_emit_dcl_typed_temp(compiler, instruction);
             break;
         case VKD3DSIH_DCL_STREAM:
             spirv_compiler_emit_dcl_stream(compiler, instruction);
