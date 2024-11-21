@@ -7189,6 +7189,10 @@ static void vsir_validate_register(struct validation_context *ctx,
             vsir_validate_register_without_indices(ctx, reg);
             break;
 
+        case VKD3DSPR_PRIMID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
         case VKD3DSPR_NULL:
             vsir_validate_register_without_indices(ctx, reg);
             break;
@@ -7205,6 +7209,18 @@ static void vsir_validate_register(struct validation_context *ctx,
             vsir_validate_uav_register(ctx, reg);
             break;
 
+        case VKD3DSPR_OUTPOINTID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_FORKINSTID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_JOININSTID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
         case VKD3DSPR_INCONTROLPOINT:
             vsir_validate_io_register(ctx, reg);
             break;
@@ -7215,6 +7231,26 @@ static void vsir_validate_register(struct validation_context *ctx,
 
         case VKD3DSPR_PATCHCONST:
             vsir_validate_io_register(ctx, reg);
+            break;
+
+        case VKD3DSPR_TESSCOORD:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_THREADID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_THREADGROUPID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_LOCALTHREADID:
+            vsir_validate_register_without_indices(ctx, reg);
+            break;
+
+        case VKD3DSPR_LOCALTHREADINDEX:
+            vsir_validate_register_without_indices(ctx, reg);
             break;
 
         case VKD3DSPR_DEPTHOUTGE:
