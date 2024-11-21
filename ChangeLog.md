@@ -1,3 +1,130 @@
+# What's new in vkd3d 1.14 (21 November 2024)
+
+### libvkd3d
+
+  - Depth bounds can be changed dynamically using the OMSetDepthBounds() method
+    of the ID3D12GraphicsCommandList1 interface.
+
+  - The new VKD3D_CAPS_OVERRIDE environment variable can be used to override the
+    value of capabilities like the maximum feature level and resource binding
+    tier reported to applications.
+
+### libvkd3d-shader
+
+  - New features for the HLSL source type:
+    - Interstage I/O variable packing matches d3dcompiler/fxc more closely.
+    - The following intrinsic functions are supported:
+      - dst()
+      - f32tof16()
+      - mad()
+      - modf()
+      - sincos()
+    - ‘discard’ support for shader model 1-3 target profiles.
+    - The ‘SV_SampleIndex’ input semantic for fragment shaders.
+    - The ‘SV_GroupIndex’ input semantic for compute shaders.
+    - The ‘earlydepthstencil’ function attribute.
+    - Constant folding of expressions like ‘x && c’ and ‘x || c’, where ‘c’ is a
+      constant.
+    - Preprocessor support for namespaces in macro identifiers. I.e., syntax
+      like ‘#define NAME1::NAME2::NAME3 1’ works as intended now.
+    - Structure inheritance. Multiple inheritance is not supported.
+    - Register assignments for unused constant buffers are allowed to overlap
+      register assignments for used constant buffers.
+    - Instruction count reflection data for shader model 4+ target profiles.
+      This data is contained in the ‘STAT’ DXBC section, and can be queried with
+      the GetDesc() method of the ID3D11ShaderReflection and
+      ID3D12ShaderReflection interfaces. Note that the ID3D12ShaderReflection
+      implementation provided by vkd3d-utils does not currently correctly report
+      this information.
+    - ‘unorm’ and ‘snorm’ resource format modifiers. For example,
+      ‘Texture2D<unorm float4> t;’
+    - Parser support for ‘ByteAddressBuffer’ resources, as well as their
+      Load()/Load2()/Load3()/Load4() methods.
+    - Parser support for ‘RWByteAddressBuffer’ resources, as well as their
+      Store()/Store2()/Store3()/Store4() methods.
+    - Parser support for the ‘compile’ keyword, as well as the CompileShader()
+      and ConstructGSWithSO() intrinsic functions. Actual compilation of
+      embedded shaders is not implemented yet, but parser support is sufficient
+      for allowing compilation of HLSL sources containing this syntax to succeed
+      when targetting shader target profiles like ‘vs_5_0’ or ‘ps_5_0’.
+    - Initial support for tessellation shaders. Only the most trivial shaders
+      are supported in this release. Perhaps most notably, both ‘InputPatch’ and
+      ‘OutputPatch’ are not implemented yet.
+
+  - The new ‘fx’ source type can be used in combination with the ‘d3d-asm’
+    target type to disassemble binary effects.
+
+  - More complete support for fx_2_0 binary effect output, including support for
+    annotations, default values, as well as object initialiser data used for e.g.
+    string, texture, and shader objects.
+
+  - A significant number of instructions have been implemented for the
+    experimental GLSL target. The GLSL output currently targets version 4.40
+    without extensions, but the intention is to make this configurable in a
+    future release of vkd3d.
+
+  - Experimental support for Metal Shading Language (MSL) output, enabled by
+    building vkd3d with the ‘-DVKD3D_SHADER_UNSUPPORTED_MSL’ preprocessor
+    option. The current release is only able to compile the most basic shaders
+    when targetting MSL. Being an experimental feature, both the ABI and API may
+    change in future releases; the feature may even go away completely.
+    Nevertheless, we hope our users find this feature useful, and welcome
+    feedback and contributions.
+
+  - Shader code generation for various legacy fixed-function features, including
+    clip planes, point sizes, and point sprites. This is mainly relevant for
+    executing shader model 1-3 sources in modern target environments like
+    Vulkan, because those target environments do not implement equivalent
+    fixed-function features.
+
+  - The amount of shader validation done by the internal validator has been
+    greatly extended. The validator is enabled by the ‘force_validation’ option,
+    specified through the VKD3D_SHADER_CONFIG environment variable.
+
+  - New interfaces:
+    - The VKD3D_SHADER_COMPILE_OPTION_DOUBLE_AS_FLOAT_ALIAS flag specifies that
+      the ‘double’ type behaves as an alias for the ‘float’ type in HLSL sources
+      with shader model 1-3 target profiles.
+    - The VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32_VEC4 enumeration value
+      specifies that a shader parameter contains a 4-dimensional vector of
+      32-bit floating-point data.
+    - The VKD3D_SHADER_PARAMETER_NAME_CLIP_PLANE_MASK shader parameter specifies
+      which clip planes are enabled.
+    - The VKD3D_SHADER_PARAMETER_NAME_CLIP_PLANE_[0-7] shader parameters specify
+      the corresponding clip planes.
+    - The VKD3D_SHADER_PARAMETER_NAME_POINT_SIZE shader parameter specifies the
+      point size to output when the source shader does not explicitly output a
+      point size.
+    - The VKD3D_SHADER_PARAMETER_NAME_POINT_SIZE_MIN shader parameter specifies
+      the minimum point size to clamp point size outputs to.
+    - The VKD3D_SHADER_PARAMETER_NAME_POINT_SIZE_MAX shader parameter specifies
+      the maximum point size to clamp point size outputs to.
+    - The VKD3D_SHADER_PARAMETER_NAME_POINT_SPRITE shader parameter specifies
+      whether texture coordinate inputs in fragment shaders should be replaced
+      with point coordinates.
+    - The VKD3D_SHADER_SOURCE_FX source type specifies binary Direct3D effects.
+    - The VKD3D_SHADER_TARGET_MSL target type specifies Metal Shading Language
+      shaders.
+
+### libvkd3d-utils
+
+  - The GetDesc() method of the ID3D12ShaderReflection interface returned by
+    D3DReflect() returns shader version information.
+
+  - New interfaces:
+    - D3DCompile2VKD3D() is a variant of D3DCompile2() that allows targeting the
+      behaviour of a specific d3dcompiler version.
+
+### vkd3d-compiler
+
+  - The ‘--alias-double-as-float’ option specifies that the ‘double’ type
+    behaves as an alias for the ‘float’ type in HLSL sources with shader model
+    1-3 target profiles.
+
+  - The ‘fx’ source type specifies binary Direct3D effects.
+
+  - The ‘msl’ target type specifies Metal Shading Language shaders.
+
 # What's new in vkd3d 1.13 (29 August 2024)
 
 ### libvkd3d

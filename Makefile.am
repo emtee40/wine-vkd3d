@@ -392,7 +392,7 @@ libvkd3d_shader_la_SOURCES = \
 	libs/vkd3d-shader/vkd3d_shader_main.c \
 	libs/vkd3d-shader/vkd3d_shader_private.h
 libvkd3d_shader_la_CFLAGS = $(AM_CFLAGS) -DLIBVKD3D_SHADER_SOURCE -I$(srcdir)/libs/vkd3d-shader @SPIRV_TOOLS_CFLAGS@
-libvkd3d_shader_la_LDFLAGS = $(AM_LDFLAGS) -version-info 12:0:11
+libvkd3d_shader_la_LDFLAGS = $(AM_LDFLAGS) -version-info 13:0:12
 libvkd3d_shader_la_LIBADD = libvkd3d-common.la @SPIRV_TOOLS_LIBS@ -lm
 if HAVE_LD_VERSION_SCRIPT
 libvkd3d_shader_la_LDFLAGS += -Wl,--version-script=$(srcdir)/libs/vkd3d-shader/vkd3d_shader.map
@@ -427,7 +427,7 @@ libvkd3d_la_SOURCES = \
 	libs/vkd3d/vkd3d_shaders.h \
 	libs/vkd3d/vulkan_procs.h
 libvkd3d_la_CFLAGS = $(AM_CFLAGS) -DLIBVKD3D_SOURCE
-libvkd3d_la_LDFLAGS = $(AM_LDFLAGS) -version-info 14:0:13
+libvkd3d_la_LDFLAGS = $(AM_LDFLAGS) -version-info 15:0:14
 libvkd3d_la_LIBADD = libvkd3d-common.la libvkd3d-shader.la @DL_LIBS@ @PTHREAD_LIBS@
 if HAVE_LD_VERSION_SCRIPT
 libvkd3d_la_LDFLAGS += -Wl,--version-script=$(srcdir)/libs/vkd3d/vkd3d.map
@@ -440,7 +440,7 @@ libvkd3d_utils_la_SOURCES = \
 	libs/vkd3d-utils/vkd3d_utils_main.c \
 	libs/vkd3d-utils/vkd3d_utils_private.h
 libvkd3d_utils_la_CFLAGS = $(AM_CFLAGS) -DLIBVKD3D_UTILS_SOURCE
-libvkd3d_utils_la_LDFLAGS = $(AM_LDFLAGS) -version-info 6:2:5
+libvkd3d_utils_la_LDFLAGS = $(AM_LDFLAGS) -version-info 7:0:6
 libvkd3d_utils_la_LIBADD = libvkd3d-common.la libvkd3d-shader.la libvkd3d.la @PTHREAD_LIBS@
 if HAVE_LD_VERSION_SCRIPT
 libvkd3d_utils_la_LDFLAGS += -Wl,--version-script=$(srcdir)/libs/vkd3d-utils/vkd3d_utils.map

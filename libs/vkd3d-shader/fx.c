@@ -3235,7 +3235,7 @@ static void fx_4_parse_shader_initializer(struct fx_parser *parser, unsigned int
 
     static const struct vkd3d_shader_compile_option options[] =
     {
-        {VKD3D_SHADER_COMPILE_OPTION_API_VERSION, VKD3D_SHADER_API_VERSION_1_13},
+        {VKD3D_SHADER_COMPILE_OPTION_API_VERSION, VKD3D_SHADER_API_VERSION_1_14},
     };
 
     switch (object_type)
