@@ -1197,6 +1197,14 @@ static void shader_print_register(struct vkd3d_d3d_asm_compiler *compiler, const
             vkd3d_string_buffer_printf(buffer, "vPointCoord");
             break;
 
+        case VKD3DSPR_CLIPDISTANCE:
+            vkd3d_string_buffer_printf(buffer, "clipDistance");
+            break;
+
+        case VKD3DSPR_CULLDISTANCE:
+            vkd3d_string_buffer_printf(buffer, "cullDistance");
+            break;
+
         default:
             vkd3d_string_buffer_printf(buffer, "%s<unhandled register type %#x>%s",
                     compiler->colours.error, reg->type, compiler->colours.reset);
@@ -1318,6 +1326,10 @@ static void shader_print_register(struct vkd3d_d3d_asm_compiler *compiler, const
                     compiler->colours.error, reg->dimension, compiler->colours.reset);
         }
         vkd3d_string_buffer_printf(buffer, ")");
+    }
+    else if (reg->type == VKD3DSPR_CLIPDISTANCE || reg->type == VKD3DSPR_CULLDISTANCE)
+    {
+        shader_print_subscript(compiler, reg->idx[0].offset, reg->idx[0].rel_addr);
     }
     else if (compiler->flags & VSIR_ASM_FLAG_DUMP_ALL_INDICES)
     {
