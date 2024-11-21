@@ -1546,6 +1546,9 @@ static void vkd3d_glsl_handle_instruction(struct vkd3d_glsl_generator *gen,
         case VKD3DSIH_EXP:
             shader_glsl_intrinsic(gen, ins, "exp2");
             break;
+        case VKD3DSIH_EXP_NATURAL:
+            shader_glsl_intrinsic(gen, ins, "exp");
+            break;
         case VKD3DSIH_FRC:
             shader_glsl_intrinsic(gen, ins, "fract");
             break;

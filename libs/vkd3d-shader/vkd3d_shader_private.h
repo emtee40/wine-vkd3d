@@ -380,6 +380,7 @@ enum vkd3d_shader_opcode
     VKD3DSIH_EVAL_CENTROID,
     VKD3DSIH_EVAL_SAMPLE_INDEX,
     VKD3DSIH_EXP,
+    VKD3DSIH_EXP_NATURAL,
     VKD3DSIH_EXPP,
     VKD3DSIH_F16TOF32,
     VKD3DSIH_F32TOF16,
@@ -1428,6 +1429,7 @@ struct vsir_program
     bool use_vocp;
     bool has_point_size;
     bool has_point_coord;
+    bool has_fog;
     uint8_t diffuse_written_mask;
     enum vsir_control_flow_type cf_type;
     enum vsir_normalisation_level normalisation_level;

@@ -1,5 +1,6 @@
 /*
  * Copyright 2023 Conor McCarthy for CodeWeavers
+ * Copyright 2023-2024 Elizabeth Figura for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -214,6 +215,14 @@ static void src_param_init_parameter(struct vkd3d_shader_src_param *src, uint32_
     src->reg.idx[0].offset = idx;
 }
 
+static void src_param_init_parameter_vec4(struct vkd3d_shader_src_param *src, uint32_t idx, enum vkd3d_data_type type)
+{
+    vsir_src_param_init(src, VKD3DSPR_PARAMETER, type, 1);
+    src->reg.idx[0].offset = idx;
+    src->reg.dimension = VSIR_DIMENSION_VEC4;
+    src->swizzle = VKD3D_SHADER_NO_SWIZZLE;
+}
+
 static void vsir_src_param_init_resource(struct vkd3d_shader_src_param *src, unsigned int id, unsigned int idx)
 {
     vsir_src_param_init(src, VKD3DSPR_RESOURCE, VKD3D_DATA_UNUSED, 2);
@@ -241,6 +250,14 @@ static void src_param_init_ssa_float(struct vkd3d_shader_src_param *src, unsigne
 {
     vsir_src_param_init(src, VKD3DSPR_SSA, VKD3D_DATA_FLOAT, 1);
     src->reg.idx[0].offset = idx;
+}
+
+static void src_param_init_ssa_float4(struct vkd3d_shader_src_param *src, unsigned int idx)
+{
+    vsir_src_param_init(src, VKD3DSPR_SSA, VKD3D_DATA_FLOAT, 1);
+    src->reg.idx[0].offset = idx;
+    src->reg.dimension = VSIR_DIMENSION_VEC4;
+    src->swizzle = VKD3D_SHADER_NO_SWIZZLE;
 }
 
 static void src_param_init_temp_bool(struct vkd3d_shader_src_param *src, unsigned int idx)
@@ -288,6 +305,14 @@ static void dst_param_init_ssa_float(struct vkd3d_shader_dst_param *dst, unsigne
 {
     vsir_dst_param_init(dst, VKD3DSPR_SSA, VKD3D_DATA_FLOAT, 1);
     dst->reg.idx[0].offset = idx;
+}
+
+static void dst_param_init_ssa_float4(struct vkd3d_shader_dst_param *dst, unsigned int idx)
+{
+    vsir_dst_param_init(dst, VKD3DSPR_SSA, VKD3D_DATA_FLOAT, 1);
+    dst->reg.idx[0].offset = idx;
+    dst->reg.dimension = VSIR_DIMENSION_VEC4;
+    dst->write_mask = VKD3DSP_WRITEMASK_ALL;
 }
 
 static void dst_param_init_temp_bool(struct vkd3d_shader_dst_param *dst, unsigned int idx)
@@ -1035,6 +1060,9 @@ static enum vkd3d_result vsir_program_remap_output_signature(struct vsir_program
 
             e->target_location = map->input_register_index;
 
+            TRACE("Mapping signature index %u (mask %#x) to target location %u (mask %#x).\n",
+                    i, e->mask, map->input_register_index, map->input_mask);
+
             if ((input_mask & e->mask) == input_mask)
             {
                 ++subset_varying_count;
@@ -1055,6 +1083,8 @@ static enum vkd3d_result vsir_program_remap_output_signature(struct vsir_program
         }
         else
         {
+            TRACE("Marking signature index %u (mask %#x) as unused.\n", i, e->mask);
+
             e->target_location = SIGNATURE_TARGET_LOCATION_UNUSED;
         }
 
@@ -6635,6 +6665,475 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
     return VKD3D_OK;
 }
 
+static enum vkd3d_result vsir_program_add_fog_input(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    struct shader_signature *signature = &program->input_signature;
+    struct signature_element *new_elements, *e;
+    uint32_t register_idx = 0;
+
+    if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
+        return VKD3D_OK;
+
+    if (!vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FOG_FRAGMENT_MODE))
+        return VKD3D_OK;
+
+    /* We could check the value and skip this if NONE, but chances are if a
+     * user specifies the fog fragment mode as a parameter, they'll want to
+     * enable it dynamically. Always specifying it (and hence always outputting
+     * it from the VS) avoids an extra VS variant. */
+
+    for (unsigned int i = 0; i < signature->element_count; ++i)
+    {
+        e = &signature->elements[i];
+
+        if (!ascii_strcasecmp(e->semantic_name, "FOG") && !e->semantic_index)
+            return VKD3D_OK;
+        register_idx = max(register_idx, e->register_index + 1);
+    }
+
+    if (!(new_elements = vkd3d_realloc(signature->elements,
+            (signature->element_count + 1) * sizeof(*signature->elements))))
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+    signature->elements = new_elements;
+    e = &signature->elements[signature->element_count++];
+    memset(e, 0, sizeof(*e));
+    e->semantic_name = vkd3d_strdup("FOG");
+    e->sysval_semantic = VKD3D_SHADER_SV_NONE;
+    e->component_type = VKD3D_SHADER_COMPONENT_FLOAT;
+    e->register_count = 1;
+    e->mask = VKD3DSP_WRITEMASK_0;
+    e->used_mask = VKD3DSP_WRITEMASK_0;
+    e->register_index = register_idx;
+    e->target_location = register_idx;
+    e->interpolation_mode = VKD3DSIM_LINEAR;
+
+    return VKD3D_OK;
+}
+
+static bool find_signature_element(const struct shader_signature *signature,
+        const char *name, uint32_t index, uint32_t *signature_idx)
+{
+    for (unsigned int i = 0; i < signature->element_count; ++i)
+    {
+        const struct signature_element *e = &signature->elements[i];
+
+        if (!ascii_strcasecmp(e->semantic_name, name) && e->semantic_index == index)
+        {
+            *signature_idx = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static enum vkd3d_result insert_fragment_fog_before_ret(struct vsir_program *program,
+        const struct vkd3d_shader_instruction *ret, enum vkd3d_shader_fog_fragment_mode mode,
+        uint32_t fog_signature_idx, uint32_t colour_signature_idx, uint32_t colour_temp,
+        size_t *ret_pos, struct vkd3d_shader_message_context *message_context)
+{
+    struct vkd3d_shader_instruction_array *instructions = &program->instructions;
+    struct vkd3d_shader_location loc = ret->location;
+    uint32_t ssa_factor = program->ssa_count++;
+    size_t pos = ret - instructions->elements;
+    struct vkd3d_shader_instruction *ins;
+    uint32_t ssa_temp, ssa_temp2;
+
+    switch (mode)
+    {
+        case VKD3D_SHADER_FOG_FRAGMENT_LINEAR:
+            /* We generate the following code:
+             *
+             * add sr0, FOG_END, -vFOG.x
+             * mul_sat srFACTOR, sr0, FOG_SCALE
+             */
+            if (!shader_instruction_array_insert_at(&program->instructions, pos, 4))
+                return VKD3D_ERROR_OUT_OF_MEMORY;
+            *ret_pos = pos + 4;
+
+            ssa_temp = program->ssa_count++;
+
+            ins = &program->instructions.elements[pos];
+
+            vsir_instruction_init_with_params(program, ins, &loc, VKD3DSIH_ADD, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp);
+            src_param_init_parameter(&ins->src[0], VKD3D_SHADER_PARAMETER_NAME_FOG_END, VKD3D_DATA_FLOAT);
+            vsir_src_param_init(&ins->src[1], VKD3DSPR_INPUT, VKD3D_DATA_FLOAT, 1);
+            ins->src[1].reg.idx[0].offset = fog_signature_idx;
+            ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+            ins->src[1].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+            ins->src[1].modifiers = VKD3DSPSM_NEG;
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_factor);
+            ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
+            src_param_init_ssa_float(&ins->src[0], ssa_temp);
+            src_param_init_parameter(&ins->src[1], VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE, VKD3D_DATA_FLOAT);
+            break;
+
+        case VKD3D_SHADER_FOG_FRAGMENT_EXP:
+            /* We generate the following code:
+             *
+             * mul sr0, FOG_DENSITY, vFOG.x
+             * exp_sat srFACTOR, -sr0
+             */
+            if (!shader_instruction_array_insert_at(&program->instructions, pos, 4))
+                return VKD3D_ERROR_OUT_OF_MEMORY;
+            *ret_pos = pos + 4;
+
+            ssa_temp = program->ssa_count++;
+
+            ins = &program->instructions.elements[pos];
+
+            vsir_instruction_init_with_params(program, ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp);
+            src_param_init_parameter(&ins->src[0], VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, VKD3D_DATA_FLOAT);
+            vsir_src_param_init(&ins->src[1], VKD3DSPR_INPUT, VKD3D_DATA_FLOAT, 1);
+            ins->src[1].reg.idx[0].offset = fog_signature_idx;
+            ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+            ins->src[1].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_EXP_NATURAL, 1, 1);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_factor);
+            ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
+            src_param_init_ssa_float(&ins->src[0], ssa_temp);
+            ins->src[0].modifiers = VKD3DSPSM_NEG;
+            break;
+
+        case VKD3D_SHADER_FOG_FRAGMENT_EXP2:
+            /* We generate the following code:
+             *
+             * mul sr0, FOG_DENSITY, vFOG.x
+             * mul sr1, sr0, sr0
+             * exp_sat srFACTOR, -sr1
+             */
+            if (!shader_instruction_array_insert_at(&program->instructions, pos, 5))
+                return VKD3D_ERROR_OUT_OF_MEMORY;
+            *ret_pos = pos + 5;
+
+            ssa_temp = program->ssa_count++;
+            ssa_temp2 = program->ssa_count++;
+
+            ins = &program->instructions.elements[pos];
+
+            vsir_instruction_init_with_params(program, ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp);
+            src_param_init_parameter(&ins->src[0], VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, VKD3D_DATA_FLOAT);
+            vsir_src_param_init(&ins->src[1], VKD3DSPR_INPUT, VKD3D_DATA_FLOAT, 1);
+            ins->src[1].reg.idx[0].offset = fog_signature_idx;
+            ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+            ins->src[1].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_MUL, 1, 2);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_temp2);
+            src_param_init_ssa_float(&ins->src[0], ssa_temp);
+            src_param_init_ssa_float(&ins->src[1], ssa_temp);
+
+            vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_EXP_NATURAL, 1, 1);
+            dst_param_init_ssa_float(&ins->dst[0], ssa_factor);
+            ins->dst[0].modifiers = VKD3DSPDM_SATURATE;
+            src_param_init_ssa_float(&ins->src[0], ssa_temp2);
+            ins->src[0].modifiers = VKD3DSPSM_NEG;
+            break;
+
+        default:
+            vkd3d_unreachable();
+    }
+
+    /* We generate the following code:
+     *
+     * add sr0, FRAG_COLOUR, -FOG_COLOUR
+     * mad oC0, sr0, srFACTOR, FOG_COLOUR
+     */
+
+    vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_ADD, 1, 2);
+    dst_param_init_ssa_float4(&ins->dst[0], program->ssa_count++);
+    src_param_init_temp_float4(&ins->src[0], colour_temp);
+    src_param_init_parameter_vec4(&ins->src[1], VKD3D_SHADER_PARAMETER_NAME_FOG_COLOUR, VKD3D_DATA_FLOAT);
+    ins->src[1].modifiers = VKD3DSPSM_NEG;
+
+    vsir_instruction_init_with_params(program, ++ins, &loc, VKD3DSIH_MAD, 1, 3);
+    dst_param_init_output(&ins->dst[0], VKD3D_DATA_FLOAT, colour_signature_idx,
+            program->output_signature.elements[colour_signature_idx].mask);
+    src_param_init_ssa_float4(&ins->src[0], program->ssa_count - 1);
+    src_param_init_ssa_float(&ins->src[1], ssa_factor);
+    src_param_init_parameter_vec4(&ins->src[2], VKD3D_SHADER_PARAMETER_NAME_FOG_COLOUR, VKD3D_DATA_FLOAT);
+
+    return VKD3D_OK;
+}
+
+static enum vkd3d_result vsir_program_insert_fragment_fog(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    struct vkd3d_shader_message_context *message_context = ctx->message_context;
+    uint32_t colour_signature_idx, fog_signature_idx, colour_temp;
+    const struct vkd3d_shader_parameter1 *mode_parameter = NULL;
+    static const struct vkd3d_shader_location no_loc;
+    enum vkd3d_shader_fog_fragment_mode mode;
+    struct vkd3d_shader_instruction *ins;
+    size_t new_pos;
+    int ret;
+
+    if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
+        return VKD3D_OK;
+
+    if (!vsir_signature_find_sysval(&program->output_signature, VKD3D_SHADER_SV_TARGET, 0, &colour_signature_idx))
+        return VKD3D_OK;
+
+    if (!(mode_parameter = vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FOG_FRAGMENT_MODE)))
+        return VKD3D_OK;
+
+    if (mode_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                "Unsupported fog fragment mode parameter type %#x.", mode_parameter->type);
+        return VKD3D_ERROR_NOT_IMPLEMENTED;
+    }
+    if (mode_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                "Invalid fog fragment mode parameter data type %#x.", mode_parameter->data_type);
+        return VKD3D_ERROR_INVALID_ARGUMENT;
+    }
+    mode = mode_parameter->u.immediate_constant.u.u32;
+
+    if (mode == VKD3D_SHADER_FOG_FRAGMENT_NONE)
+        return VKD3D_OK;
+
+    /* Should have been added by vsir_program_add_fog_input(). */
+    if (!find_signature_element(&program->input_signature, "FOG", 0, &fog_signature_idx))
+    {
+        ERR("Fog input not found.\n");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    /* We're going to be reading from the output, so we need to go
+     * through the whole shader and convert it to a temp. */
+    colour_temp = program->temp_count++;
+
+    for (size_t i = 0; i < program->instructions.count; ++i)
+    {
+        ins = &program->instructions.elements[i];
+
+        if (vsir_instruction_is_dcl(ins))
+            continue;
+
+        if (ins->opcode == VKD3DSIH_RET)
+        {
+            if ((ret = insert_fragment_fog_before_ret(program, ins, mode, fog_signature_idx,
+                    colour_signature_idx, colour_temp, &new_pos, message_context)) < 0)
+                return ret;
+            i = new_pos;
+            continue;
+        }
+
+        for (size_t j = 0; j < ins->dst_count; ++j)
+        {
+            struct vkd3d_shader_dst_param *dst = &ins->dst[j];
+
+            /* Note we run after I/O normalization. */
+            if (dst->reg.type == VKD3DSPR_OUTPUT && dst->reg.idx[0].offset == colour_signature_idx)
+            {
+                dst->reg.type = VKD3DSPR_TEMP;
+                dst->reg.idx[0].offset = colour_temp;
+            }
+        }
+    }
+
+    return VKD3D_OK;
+}
+
+static enum vkd3d_result vsir_program_add_fog_output(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    struct shader_signature *signature = &program->output_signature;
+    const struct vkd3d_shader_parameter1 *source_parameter;
+    struct signature_element *new_elements, *e;
+    uint32_t register_idx = 0;
+
+    if (!is_pre_rasterization_shader(program->shader_version.type))
+        return VKD3D_OK;
+
+    if (!(source_parameter = vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE)))
+        return VKD3D_OK;
+
+    if (source_parameter->type == VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+    {
+        enum vkd3d_shader_fog_source source = source_parameter->u.immediate_constant.u.u32;
+        uint32_t specular_signature_idx;
+
+        if (source == VKD3D_SHADER_FOG_SOURCE_FOG)
+            return VKD3D_OK;
+
+        if (source == VKD3D_SHADER_FOG_SOURCE_FOG_OR_SPECULAR_W
+                && !find_signature_element(signature, "COLOR", 1, &specular_signature_idx))
+            return VKD3D_OK;
+    }
+
+    for (unsigned int i = 0; i < signature->element_count; ++i)
+    {
+        e = &signature->elements[i];
+
+        if (!ascii_strcasecmp(e->semantic_name, "FOG") && !e->semantic_index)
+            return VKD3D_OK;
+        register_idx = max(register_idx, e->register_index + 1);
+    }
+
+    if (!(new_elements = vkd3d_realloc(signature->elements,
+            (signature->element_count + 1) * sizeof(*signature->elements))))
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+    signature->elements = new_elements;
+    e = &signature->elements[signature->element_count++];
+    memset(e, 0, sizeof(*e));
+    e->semantic_name = vkd3d_strdup("FOG");
+    e->sysval_semantic = VKD3D_SHADER_SV_NONE;
+    e->component_type = VKD3D_SHADER_COMPONENT_FLOAT;
+    e->register_count = 1;
+    e->mask = VKD3DSP_WRITEMASK_0;
+    e->used_mask = VKD3DSP_WRITEMASK_0;
+    e->register_index = register_idx;
+    e->target_location = register_idx;
+    e->interpolation_mode = VKD3DSIM_LINEAR;
+
+    return VKD3D_OK;
+}
+
+static enum vkd3d_result insert_vertex_fog_before_ret(struct vsir_program *program,
+        const struct vkd3d_shader_instruction *ret, enum vkd3d_shader_fog_source source, uint32_t temp,
+        uint32_t fog_signature_idx, uint32_t source_signature_idx, size_t *ret_pos)
+{
+    const struct signature_element *e = &program->output_signature.elements[source_signature_idx];
+    struct vkd3d_shader_instruction_array *instructions = &program->instructions;
+    size_t pos = ret - instructions->elements;
+    struct vkd3d_shader_instruction *ins;
+
+    if (!shader_instruction_array_insert_at(&program->instructions, pos, 2))
+        return VKD3D_ERROR_OUT_OF_MEMORY;
+
+    ins = &program->instructions.elements[pos];
+
+    /* Write the fog output. */
+    vsir_instruction_init_with_params(program, ins, &ret->location, VKD3DSIH_MOV, 1, 1);
+    dst_param_init_output(&ins->dst[0], VKD3D_DATA_FLOAT, fog_signature_idx, 0x1);
+    src_param_init_temp_float4(&ins->src[0], temp);
+    if (source == VKD3D_SHADER_FOG_SOURCE_Z)
+        ins->src[0].swizzle = VKD3D_SHADER_SWIZZLE(Z, Z, Z, Z);
+    else /* Position or specular W. */
+        ins->src[0].swizzle = VKD3D_SHADER_SWIZZLE(W, W, W, W);
+    ++ins;
+
+    /* Write the position or specular output. */
+    vsir_instruction_init_with_params(program, ins, &ret->location, VKD3DSIH_MOV, 1, 1);
+    dst_param_init_output(&ins->dst[0], vkd3d_data_type_from_component_type(e->component_type),
+            source_signature_idx, e->mask);
+    src_param_init_temp_float4(&ins->src[0], temp);
+    ++ins;
+
+    *ret_pos = pos + 2;
+    return VKD3D_OK;
+}
+
+static enum vkd3d_result vsir_program_insert_vertex_fog(struct vsir_program *program,
+        struct vsir_transformation_context *ctx)
+{
+    uint32_t position_signature_idx, fog_signature_idx, specular_signature_idx, source_signature_idx, temp;
+    struct vkd3d_shader_message_context *message_context = ctx->message_context;
+    const struct vkd3d_shader_parameter1 *source_parameter = NULL;
+    static const struct vkd3d_shader_location no_loc;
+    enum vkd3d_shader_fog_source source;
+    bool has_specular;
+
+    if (!is_pre_rasterization_shader(program->shader_version.type))
+        return VKD3D_OK;
+
+    if (!(source_parameter = vsir_program_get_parameter(program, VKD3D_SHADER_PARAMETER_NAME_FOG_SOURCE)))
+        return VKD3D_OK;
+
+    if (source_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                "Unsupported fog source parameter type %#x.", source_parameter->type);
+        return VKD3D_ERROR_NOT_IMPLEMENTED;
+    }
+    if (source_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+    {
+        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                "Invalid fog source parameter data type %#x.", source_parameter->data_type);
+        return VKD3D_ERROR_INVALID_ARGUMENT;
+    }
+    source = source_parameter->u.immediate_constant.u.u32;
+
+    TRACE("Fog source %#x.\n", source);
+
+    if (source == VKD3D_SHADER_FOG_SOURCE_FOG)
+        return VKD3D_OK;
+
+    if (source == VKD3D_SHADER_FOG_SOURCE_FOG_OR_SPECULAR_W)
+        has_specular = find_signature_element(&program->output_signature, "COLOR", 1, &specular_signature_idx);
+
+    if (!vsir_signature_find_sysval(&program->output_signature, VKD3D_SHADER_SV_POSITION, 0, &position_signature_idx))
+    {
+        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_MISSING_SEMANTIC,
+                "Shader does not write position.");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+    source_signature_idx = position_signature_idx;
+
+    if (!find_signature_element(&program->output_signature, "FOG", 0, &fog_signature_idx))
+    {
+        ERR("Fog output not found.\n");
+        return VKD3D_ERROR_INVALID_SHADER;
+    }
+
+    if (source == VKD3D_SHADER_FOG_SOURCE_FOG_OR_SPECULAR_W)
+    {
+        if (program->has_fog || !has_specular)
+            return VKD3D_OK;
+        source_signature_idx = specular_signature_idx;
+    }
+
+    temp = program->temp_count++;
+
+    /* Insert a fog write before each ret, and convert either specular or
+     * position output to a temp. */
+    for (size_t i = 0; i < program->instructions.count; ++i)
+    {
+        struct vkd3d_shader_instruction *ins = &program->instructions.elements[i];
+
+        if (vsir_instruction_is_dcl(ins))
+            continue;
+
+        if (ins->opcode == VKD3DSIH_RET)
+        {
+            size_t new_pos;
+            int ret;
+
+            if ((ret = insert_vertex_fog_before_ret(program, ins, source, temp,
+                    fog_signature_idx, source_signature_idx, &new_pos)) < 0)
+                return ret;
+            i = new_pos;
+            continue;
+        }
+
+        for (size_t j = 0; j < ins->dst_count; ++j)
+        {
+            struct vkd3d_shader_dst_param *dst = &ins->dst[j];
+
+            /* Note we run after I/O normalization. */
+            if (dst->reg.type == VKD3DSPR_OUTPUT && dst->reg.idx[0].offset == source_signature_idx)
+            {
+                dst->reg.type = VKD3DSPR_TEMP;
+                dst->reg.idx[0].offset = temp;
+            }
+        }
+    }
+
+    program->has_fog = true;
+
+    return VKD3D_OK;
+}
+
 struct validation_context
 {
     struct vkd3d_shader_message_context *message_context;
@@ -8400,6 +8899,12 @@ enum vkd3d_result vsir_program_transform_early(struct vsir_program *program, uin
     if (program->shader_version.major <= 2)
         vsir_transform(&ctx, vsir_program_add_diffuse_output);
 
+    /* For vsir_program_insert_fragment_fog(). */
+    vsir_transform(&ctx, vsir_program_add_fog_input);
+
+    /* For vsir_program_insert_vertex_fog(). */
+    vsir_transform(&ctx, vsir_program_add_fog_output);
+
     return ctx.result;
 }
 
@@ -8454,6 +8959,8 @@ enum vkd3d_result vsir_program_transform(struct vsir_program *program, uint64_t 
     vsir_transform(&ctx, vsir_program_insert_point_size);
     vsir_transform(&ctx, vsir_program_insert_point_size_clamp);
     vsir_transform(&ctx, vsir_program_insert_point_coord);
+    vsir_transform(&ctx, vsir_program_insert_fragment_fog);
+    vsir_transform(&ctx, vsir_program_insert_vertex_fog);
 
     if (TRACE_ON())
         vsir_program_trace(program);

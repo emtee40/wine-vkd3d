@@ -141,6 +141,7 @@ enum shader_cap
     SHADER_CAP_CLIP_PLANES,
     SHADER_CAP_DEPTH_BOUNDS,
     SHADER_CAP_FLOAT64,
+    SHADER_CAP_FOG,
     SHADER_CAP_GEOMETRY_SHADER,
     SHADER_CAP_INT64,
     SHADER_CAP_POINT_SIZE,
@@ -172,6 +173,15 @@ static inline unsigned int shader_runner_caps_get_feature_flags(const struct sha
 
     return flags;
 }
+
+enum fog_mode
+{
+    FOG_MODE_NONE = 0,
+    FOG_MODE_EXP = 1,
+    FOG_MODE_EXP2 = 2,
+    FOG_MODE_LINEAR = 3,
+    FOG_MODE_DISABLE,
+};
 
 struct shader_runner
 {
@@ -222,6 +232,10 @@ struct shader_runner
     struct vec4 clip_planes[8];
     float point_size, point_size_min, point_size_max;
     bool point_sprite;
+    struct vec4 fog_colour;
+    enum fog_mode fog_mode;
+    float fog_start, fog_end, fog_density;
+    bool ortho_fog;
 };
 
 struct shader_runner_ops

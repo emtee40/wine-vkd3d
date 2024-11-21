@@ -3316,13 +3316,20 @@ static uint32_t spirv_compiler_emit_variable(struct spirv_compiler *compiler,
 static const struct vkd3d_spec_constant_info
 {
     enum vkd3d_shader_parameter_name name;
-    uint32_t default_value;
+    union
+    {
+        uint32_t u;
+        float f;
+    } default_value;
     const char *debug_name;
 }
 vkd3d_shader_parameters[] =
 {
-    {VKD3D_SHADER_PARAMETER_NAME_RASTERIZER_SAMPLE_COUNT, 1, "sample_count"},
-    {VKD3D_SHADER_PARAMETER_NAME_ALPHA_TEST_REF, 0, "alpha_test_ref"},
+    {VKD3D_SHADER_PARAMETER_NAME_RASTERIZER_SAMPLE_COUNT, {.u = 1}, "sample_count"},
+    {VKD3D_SHADER_PARAMETER_NAME_ALPHA_TEST_REF, {.f = 0.0}, "alpha_test_ref"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_END, {.f = 1.0}, "fog_end"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_SCALE, {.f = 1.0}, "fog_scale"},
+    {VKD3D_SHADER_PARAMETER_NAME_FOG_DENSITY, {.f = 1.0}, "fog_density"},
 };
 
 static const struct vkd3d_spec_constant_info *get_spec_constant_info(enum vkd3d_shader_parameter_name name)
@@ -3383,7 +3390,7 @@ static uint32_t spirv_compiler_emit_spec_constant(struct spirv_compiler *compile
     const struct vkd3d_spec_constant_info *info;
 
     info = get_spec_constant_info(name);
-    default_value = info ? info->default_value : 0;
+    default_value = info ? info->default_value.u : 0;
 
     scalar_type_id = vkd3d_spirv_get_type_id(builder, vkd3d_component_type_from_data_type(type), 1);
     vector_type_id = vkd3d_spirv_get_type_id(builder, vkd3d_component_type_from_data_type(type), component_count);
@@ -4216,7 +4223,6 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         VKD3D_ASSERT(compiler->failed);
         return 0;
     }
-    VKD3D_ASSERT(vkd3d_swizzle_is_scalar(swizzle, reg));
 
     reg_component_type = vkd3d_component_type_from_data_type(ssa->data_type);
 
@@ -4239,6 +4245,10 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
         val_id = vkd3d_spirv_build_op_bitcast(builder, type_id, val_id);
     }
 
+    if (swizzle == VKD3D_SHADER_NO_SWIZZLE)
+        return val_id;
+
+    VKD3D_ASSERT(vkd3d_swizzle_is_scalar(swizzle, reg));
     type_id = vkd3d_spirv_get_type_id(builder, component_type, 1);
     component_idx = vsir_swizzle_get_component(swizzle, 0);
     return vkd3d_spirv_build_op_composite_extract1(builder, type_id, val_id, component_idx);
@@ -4268,7 +4278,19 @@ static uint32_t spirv_compiler_emit_load_reg(struct spirv_compiler *compiler,
     component_type = vkd3d_component_type_from_data_type(reg->data_type);
 
     if (reg->type == VKD3DSPR_SSA)
-        return spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle);
+    {
+        val_id = spirv_compiler_emit_load_ssa_reg(compiler, reg, component_type, swizzle);
+        if (reg->dimension == VSIR_DIMENSION_SCALAR && component_count > 1)
+        {
+            uint32_t components[VKD3D_VEC4_SIZE];
+
+            type_id = vkd3d_spirv_get_type_id(builder, component_type, component_count);
+            for (unsigned int i = 0; i < VKD3D_VEC4_SIZE; ++i)
+                components[i] = val_id;
+            val_id = vkd3d_spirv_build_op_composite_construct(builder, type_id, components, component_count);
+        }
+        return val_id;
+    }
 
     if (!spirv_compiler_get_register_info(compiler, reg, &reg_info))
     {
@@ -7345,6 +7367,7 @@ static enum GLSLstd450 spirv_compiler_map_ext_glsl_instruction(
         {VKD3DSIH_DMAX,            GLSLstd450NMax},
         {VKD3DSIH_DMIN,            GLSLstd450NMin},
         {VKD3DSIH_EXP,             GLSLstd450Exp2},
+        {VKD3DSIH_EXP_NATURAL,     GLSLstd450Exp},
         {VKD3DSIH_FIRSTBIT_HI,     GLSLstd450FindUMsb},
         {VKD3DSIH_FIRSTBIT_LO,     GLSLstd450FindILsb},
         {VKD3DSIH_FIRSTBIT_SHI,    GLSLstd450FindSMsb},
@@ -7497,7 +7520,9 @@ static void spirv_compiler_emit_mov(struct spirv_compiler *compiler,
 
 general_implementation:
     write_mask = dst->write_mask;
-    if (src->reg.type == VKD3DSPR_IMMCONST64 && !data_type_is_64_bit(dst->reg.data_type))
+    if ((src->reg.type == VKD3DSPR_IMMCONST64
+            || (data_type_is_64_bit(src->reg.data_type) && src->reg.dimension == VSIR_DIMENSION_SCALAR))
+            && !data_type_is_64_bit(dst->reg.data_type))
         write_mask = vsir_write_mask_64_from_32(write_mask);
     else if (!data_type_is_64_bit(src->reg.data_type) && data_type_is_64_bit(dst->reg.data_type))
         write_mask = vsir_write_mask_32_from_64(write_mask);
@@ -10304,6 +10329,7 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
         case VKD3DSIH_DMAX:
         case VKD3DSIH_DMIN:
         case VKD3DSIH_EXP:
+        case VKD3DSIH_EXP_NATURAL:
         case VKD3DSIH_FIRSTBIT_HI:
         case VKD3DSIH_FIRSTBIT_LO:
         case VKD3DSIH_FIRSTBIT_SHI:
