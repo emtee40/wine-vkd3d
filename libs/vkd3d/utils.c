@@ -244,7 +244,7 @@ vkd3d_format_compatibility_info[] =
     {DXGI_FORMAT_B8G8R8X8_UNORM,           DXGI_FORMAT_B8G8R8X8_TYPELESS},
 };
 
-static bool dxgi_format_is_depth_stencil(DXGI_FORMAT dxgi_format)
+bool dxgi_format_is_depth_stencil(DXGI_FORMAT dxgi_format)
 {
     unsigned int i;
 
