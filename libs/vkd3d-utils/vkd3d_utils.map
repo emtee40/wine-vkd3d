@@ -21,6 +21,8 @@ global:
     D3DPreprocess;
     D3DReflect;
     D3DStripShader;
+    D3DXGetShaderConstantTable;
+    D3DXGetShaderConstantTableEx;
     vkd3d_create_event;
     vkd3d_destroy_event;
     vkd3d_signal_event;

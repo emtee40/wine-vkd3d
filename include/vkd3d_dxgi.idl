@@ -18,8 +18,7 @@
  */
 
 import "vkd3d_dxgitype.idl";
-
-#include "vkd3d_unknown.idl"
+import "vkd3d_unknown.idl";
 
 typedef enum DXGI_SWAP_EFFECT
 {

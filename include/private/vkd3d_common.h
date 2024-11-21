@@ -65,6 +65,7 @@
 #define vkd3d_clamp(value, lower, upper) max(min(value, upper), lower)
 
 #define TAG_AON9 VKD3D_MAKE_TAG('A', 'o', 'n', '9')
+#define TAG_CTAB VKD3D_MAKE_TAG('C', 'T', 'A', 'B')
 #define TAG_DXBC VKD3D_MAKE_TAG('D', 'X', 'B', 'C')
 #define TAG_DXIL VKD3D_MAKE_TAG('D', 'X', 'I', 'L')
 #define TAG_FX10 VKD3D_MAKE_TAG('F', 'X', '1', '0')

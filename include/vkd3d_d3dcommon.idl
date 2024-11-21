@@ -17,9 +17,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-import "vkd3d_windows.h";
-
-#include "vkd3d_unknown.idl"
+import "vkd3d_unknown.idl";
 
 typedef enum D3D_PRIMITIVE
 {

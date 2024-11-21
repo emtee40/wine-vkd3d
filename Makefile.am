@@ -8,7 +8,6 @@ widl_headers = \
 	include/vkd3d_d3d12sdklayers.h \
 	include/vkd3d_d3d12shader.h \
 	include/vkd3d_d3dcommon.h \
-	include/vkd3d_d3dx9shader.h \
 	include/vkd3d_dxgi.h \
 	include/vkd3d_dxgi1_2.h \
 	include/vkd3d_dxgi1_3.h \
@@ -16,6 +15,7 @@ widl_headers = \
 	include/vkd3d_dxgibase.h \
 	include/vkd3d_dxgiformat.h \
 	include/vkd3d_dxgitype.h \
+	include/vkd3d_unknown.h \
 	tests/dxcompiler.h
 
 vkd3d_public_headers = \
@@ -23,10 +23,15 @@ vkd3d_public_headers = \
 	include/vkd3d_d3d12.h \
 	include/vkd3d_d3d12sdklayers.h \
 	include/vkd3d_d3d12shader.h \
+	include/vkd3d_d3d9.h \
+	include/vkd3d_d3d9caps.h \
 	include/vkd3d_d3d9types.h \
 	include/vkd3d_d3dcommon.h \
 	include/vkd3d_d3dcompiler.h \
 	include/vkd3d_d3dcompiler_types.h \
+	include/vkd3d_d3dx9.h \
+	include/vkd3d_d3dx9core.h \
+	include/vkd3d_d3dx9math.h \
 	include/vkd3d_d3dx9shader.h \
 	include/vkd3d_dxgibase.h \
 	include/vkd3d_dxgiformat.h \
@@ -435,6 +440,7 @@ EXTRA_libvkd3d_la_DEPENDENCIES = $(srcdir)/libs/vkd3d/vkd3d.map
 endif
 
 libvkd3d_utils_la_SOURCES = \
+	libs/vkd3d-utils/constant_table.c \
 	libs/vkd3d-utils/reflection.c \
 	libs/vkd3d-utils/vkd3d_utils.map \
 	libs/vkd3d-utils/vkd3d_utils_main.c \

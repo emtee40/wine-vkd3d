@@ -26,6 +26,7 @@
 #include "vkd3d_blob.h"
 #include "vkd3d_memory.h"
 #include "vkd3d_d3d12shader.h"
+#include "vkd3d_d3dx9shader.h"
 
 struct vkd3d_blob
 {
