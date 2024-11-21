@@ -76,6 +76,9 @@ struct gl_runner
     uint32_t attribute_map;
     GLuint fbo_id;
 
+    enum vkd3d_shader_tessellator_output_primitive output_primitive;
+    enum vkd3d_shader_tessellator_partitioning partitioning;
+
     struct vkd3d_shader_combined_resource_sampler *combined_samplers;
     unsigned int combined_sampler_count;
     enum shading_language language;
@@ -114,10 +117,11 @@ static bool check_gl_extensions(struct gl_runner *runner)
         "GL_ARB_clip_control",
         "GL_ARB_compute_shader",
         "GL_ARB_copy_image",
+        "GL_ARB_internalformat_query",
         "GL_ARB_sampler_objects",
         "GL_ARB_shader_image_load_store",
+        "GL_ARB_tessellation_shader",
         "GL_ARB_texture_storage",
-        "GL_ARB_internalformat_query",
     };
 
     glGetIntegerv(GL_NUM_EXTENSIONS, &count);
@@ -534,13 +538,16 @@ static void gl_runner_destroy_resource(struct shader_runner *r, struct resource 
     free(resource);
 }
 
-static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3d_shader_code *out)
+static bool compile_shader(struct gl_runner *runner, enum shader_type shader_type,
+        ID3DBlob *blob, struct vkd3d_shader_code *out)
 {
     struct vkd3d_shader_spirv_target_info spirv_info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_SPIRV_TARGET_INFO};
     struct vkd3d_shader_interface_info interface_info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_INTERFACE_INFO};
     struct vkd3d_shader_compile_info info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO};
     struct vkd3d_shader_resource_binding bindings[MAX_RESOURCES + 1 /* CBV */];
     struct vkd3d_shader_scan_combined_resource_sampler_info combined_sampler_info;
+    struct vkd3d_shader_scan_hull_shader_tessellation_info tessellation_info;
+    struct vkd3d_shader_spirv_domain_shader_target_info domain_info;
     struct vkd3d_shader_combined_resource_sampler *sampler;
     struct vkd3d_shader_resource_binding *binding;
     struct vkd3d_shader_parameter parameters[1];
@@ -566,7 +573,10 @@ static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3
     info.log_level = VKD3D_SHADER_LOG_WARNING;
 
     combined_sampler_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_COMBINED_RESOURCE_SAMPLER_INFO;
-    combined_sampler_info.next = NULL;
+    combined_sampler_info.next = &tessellation_info;
+
+    tessellation_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_HULL_SHADER_TESSELLATION_INFO;
+    tessellation_info.next = NULL;
 
     ret = vkd3d_shader_scan(&info, &messages);
     if (messages && vkd3d_test_state.debug_level)
@@ -574,6 +584,12 @@ static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3
     vkd3d_shader_free_messages(messages);
     if (ret)
         return false;
+
+    if (shader_type == SHADER_TYPE_HS)
+    {
+        runner->output_primitive = tessellation_info.output_primitive;
+        runner->partitioning = tessellation_info.partitioning;
+    }
 
     count = runner->combined_sampler_count + combined_sampler_info.combined_sampler_count;
     if (count && !(runner->combined_samplers = realloc(runner->combined_samplers,
@@ -608,6 +624,16 @@ static bool compile_shader(struct gl_runner *runner, ID3DBlob *blob, struct vkd3
     else
     {
         info.next = &interface_info;
+    }
+
+    if (shader_type == SHADER_TYPE_DS)
+    {
+        interface_info.next = &domain_info;
+
+        domain_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SPIRV_DOMAIN_SHADER_TARGET_INFO;
+        domain_info.next = NULL;
+        domain_info.output_primitive = runner->output_primitive;
+        domain_info.partitioning = runner->partitioning;
     }
 
     if (runner->r.uniform_count)
@@ -708,41 +734,85 @@ static void trace_info_log(GLuint id, bool program)
     free(log);
 }
 
-static GLuint compile_compute_shader_program(struct gl_runner *runner)
+static GLuint create_shader(struct gl_runner *runner, enum shader_type shader_type, ID3D10Blob *source)
 {
-    struct vkd3d_shader_code cs_code;
-    GLuint program_id, cs_id;
-    const GLchar *source;
-    ID3D10Blob *cs_blob;
+    struct vkd3d_shader_code target;
+    const GLchar *glsl_source;
+    GLenum gl_shader_type;
     GLint status, size;
-    bool ret;
+    const char *name;
+    GLuint id;
 
-    reset_combined_samplers(runner);
-    if (!(cs_blob = compile_hlsl(&runner->r, SHADER_TYPE_CS)))
-        return false;
-    ret = compile_shader(runner, cs_blob, &cs_code);
-    ID3D10Blob_Release(cs_blob);
-    if (!ret)
-        return false;
+    switch (shader_type)
+    {
+        case SHADER_TYPE_VS:
+            gl_shader_type = GL_VERTEX_SHADER;
+            name = "vertex";
+            break;
 
-    cs_id = glCreateShader(GL_COMPUTE_SHADER);
+        case SHADER_TYPE_PS:
+            gl_shader_type = GL_FRAGMENT_SHADER;
+            name = "fragment";
+            break;
+
+        case SHADER_TYPE_HS:
+            gl_shader_type = GL_TESS_CONTROL_SHADER;
+            name = "tessellation control";
+            break;
+
+        case SHADER_TYPE_DS:
+            gl_shader_type = GL_TESS_EVALUATION_SHADER;
+            name = "tessellation evaluation";
+            break;
+
+        case SHADER_TYPE_CS:
+            gl_shader_type = GL_COMPUTE_SHADER;
+            name = "compute";
+            break;
+
+        default:
+            fatal_error("Unhandled shader type %#x.\n", shader_type);
+    }
+
+    if (!compile_shader(runner, shader_type, source, &target))
+        return 0;
+
+    id = glCreateShader(gl_shader_type);
     if (runner->language == SPIR_V)
     {
-        glShaderBinary(1, &cs_id, GL_SHADER_BINARY_FORMAT_SPIR_V, cs_code.code, cs_code.size);
+        glShaderBinary(1, &id, GL_SHADER_BINARY_FORMAT_SPIR_V, target.code, target.size);
+        p_glSpecializeShader(id, "main", 0, NULL, NULL);
     }
     else
     {
-        source = cs_code.code;
-        size = cs_code.size;
-        glShaderSource(cs_id, 1, &source, &size);
-        glCompileShader(cs_id);
+        glsl_source = target.code;
+        size = target.size;
+        glShaderSource(id, 1, &glsl_source, &size);
+        glCompileShader(id);
     }
-    vkd3d_shader_free_shader_code(&cs_code);
-    if (runner->language == SPIR_V)
-        p_glSpecializeShader(cs_id, "main", 0, NULL, NULL);
-    glGetShaderiv(cs_id, GL_COMPILE_STATUS, &status);
-    ok(status, "Failed to compile compute shader.\n");
-    trace_info_log(cs_id, false);
+    vkd3d_shader_free_shader_code(&target);
+
+    glGetShaderiv(id, GL_COMPILE_STATUS, &status);
+    ok(status, "Failed to compile %s shader.\n", name);
+    trace_info_log(id, false);
+
+    return id;
+}
+
+static GLuint compile_compute_shader_program(struct gl_runner *runner)
+{
+    GLuint program_id, cs_id;
+    ID3D10Blob *cs_blob;
+    GLint status;
+
+    reset_combined_samplers(runner);
+    if (!(cs_blob = compile_hlsl(&runner->r, SHADER_TYPE_CS)))
+        return 0;
+
+    cs_id = create_shader(runner, SHADER_TYPE_CS, cs_blob);
+    ID3D10Blob_Release(cs_blob);
+    if (!cs_id)
+        return 0;
 
     program_id = glCreateProgram();
     glAttachShader(program_id, cs_id);
@@ -815,6 +885,9 @@ static GLenum get_topology_gl(D3D_PRIMITIVE_TOPOLOGY topology)
             return GL_TRIANGLE_STRIP;
 
         default:
+            if (topology >= D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST
+                    && topology <= D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST)
+                return GL_PATCHES;
             fatal_error("Unhandled topology %#x.\n", topology);
     }
 }
@@ -884,11 +957,9 @@ static GLenum get_compare_op_gl(D3D12_COMPARISON_FUNC op)
 static GLuint compile_graphics_shader_program(struct gl_runner *runner, ID3D10Blob **vs_blob)
 {
     ID3D10Blob *fs_blob, *hs_blob = NULL, *ds_blob = NULL, *gs_blob = NULL;
-    struct vkd3d_shader_code vs_code, fs_code;
-    GLuint program_id, vs_id, fs_id;
-    const GLchar *source;
-    GLint status, size;
+    GLuint program_id, vs_id, fs_id, hs_id = 0, ds_id = 0;
     bool succeeded;
+    GLint status;
 
     reset_combined_samplers(runner);
 
@@ -913,93 +984,68 @@ static GLuint compile_graphics_shader_program(struct gl_runner *runner, ID3D10Bl
     }
 
     if (!succeeded)
-    {
-        if (*vs_blob)
-            ID3D10Blob_Release(*vs_blob);
-        if (fs_blob)
-            ID3D10Blob_Release(fs_blob);
-        if (hs_blob)
-            ID3D10Blob_Release(hs_blob);
-        if (ds_blob)
-            ID3D10Blob_Release(ds_blob);
-        if (gs_blob)
-            ID3D10Blob_Release(gs_blob);
-        return false;
-    }
+        goto fail;
 
-    if (!compile_shader(runner, *vs_blob, &vs_code))
-    {
-        ID3D10Blob_Release(fs_blob);
-        ID3D10Blob_Release(*vs_blob);
-        return false;
-    }
+    if (!(vs_id = create_shader(runner, SHADER_TYPE_VS, *vs_blob)))
+        goto fail;
 
-    if (!compile_shader(runner, fs_blob, &fs_code))
-    {
-        vkd3d_shader_free_shader_code(&vs_code);
-        ID3D10Blob_Release(fs_blob);
-        ID3D10Blob_Release(*vs_blob);
-        return false;
-    }
+    if (!(fs_id = create_shader(runner, SHADER_TYPE_PS, fs_blob)))
+        goto fail;
     ID3D10Blob_Release(fs_blob);
+    fs_blob = NULL;
 
-    /* TODO: compile and use the hs, ds and/or gs blobs too, but currently this
-     * point is not reached because compile_hlsl() fails on these. */
     if (hs_blob)
+    {
+        if (!(hs_id = create_shader(runner, SHADER_TYPE_HS, hs_blob)))
+            goto fail;
         ID3D10Blob_Release(hs_blob);
+        hs_blob = NULL;
+    }
+
     if (ds_blob)
+    {
+        if (!(ds_id = create_shader(runner, SHADER_TYPE_DS, ds_blob)))
+            goto fail;
         ID3D10Blob_Release(ds_blob);
+        ds_blob = NULL;
+    }
 
-    vs_id = glCreateShader(GL_VERTEX_SHADER);
-    if (runner->language == SPIR_V)
-    {
-        glShaderBinary(1, &vs_id, GL_SHADER_BINARY_FORMAT_SPIR_V, vs_code.code, vs_code.size);
-    }
-    else
-    {
-        source = vs_code.code;
-        size = vs_code.size;
-        glShaderSource(vs_id, 1, &source, &size);
-        glCompileShader(vs_id);
-    }
-    vkd3d_shader_free_shader_code(&vs_code);
-    if (runner->language == SPIR_V)
-        p_glSpecializeShader(vs_id, "main", 0, NULL, NULL);
-    glGetShaderiv(vs_id, GL_COMPILE_STATUS, &status);
-    ok(status, "Failed to compile vertex shader.\n");
-    trace_info_log(vs_id, false);
-
-    fs_id = glCreateShader(GL_FRAGMENT_SHADER);
-    if (runner->language == SPIR_V)
-    {
-        glShaderBinary(1, &fs_id, GL_SHADER_BINARY_FORMAT_SPIR_V, fs_code.code, fs_code.size);
-    }
-    else
-    {
-        source = fs_code.code;
-        size = fs_code.size;
-        glShaderSource(fs_id, 1, &source, &size);
-        glCompileShader(fs_id);
-    }
-    vkd3d_shader_free_shader_code(&fs_code);
-    if (runner->language == SPIR_V)
-        p_glSpecializeShader(fs_id, "main", 0, NULL, NULL);
-    glGetShaderiv(fs_id, GL_COMPILE_STATUS, &status);
-    ok(status, "Failed to compile fragment shader.\n");
-    trace_info_log(fs_id, false);
+    /* TODO: compile and use the gs blobs too, but currently this
+     * point is not reached because compile_hlsl() fails on these. */
 
     program_id = glCreateProgram();
     glAttachShader(program_id, vs_id);
     glAttachShader(program_id, fs_id);
+    if (hs_id)
+        glAttachShader(program_id, hs_id);
+    if (ds_id)
+        glAttachShader(program_id, ds_id);
     glLinkProgram(program_id);
     glGetProgramiv(program_id, GL_LINK_STATUS, &status);
     ok(status, "Failed to link program.\n");
     trace_info_log(program_id, true);
 
+    if (ds_id)
+        glDeleteShader(ds_id);
+    if (hs_id)
+        glDeleteShader(hs_id);
     glDeleteShader(fs_id);
     glDeleteShader(vs_id);
 
     return program_id;
+
+fail:
+    if (gs_blob)
+        ID3D10Blob_Release(gs_blob);
+    if (ds_blob)
+        ID3D10Blob_Release(ds_blob);
+    if (hs_blob)
+        ID3D10Blob_Release(hs_blob);
+    if (fs_blob)
+        ID3D10Blob_Release(fs_blob);
+    if (*vs_blob)
+        ID3D10Blob_Release(*vs_blob);
+    return 0;
 }
 
 static void gl_runner_clear(struct shader_runner *r, struct resource *res, const struct vec4 *clear_value)
@@ -1235,6 +1281,9 @@ static bool gl_runner_draw(struct shader_runner *r,
         if (map & 1)
             glDisableVertexAttribArray(attribute_idx);
     }
+
+    if (runner->r.shader_source[SHADER_TYPE_HS])
+        glPatchParameteri(GL_PATCH_VERTICES, max(topology - D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST + 1, 1));
 
     glDrawArraysInstanced(get_topology_gl(topology), 0, vertex_count, instance_count);
 

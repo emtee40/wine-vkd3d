@@ -501,6 +501,9 @@ static VkPrimitiveTopology vulkan_primitive_topology_from_d3d(D3D_PRIMITIVE_TOPO
     switch (topology)
     {
         default:
+            if (topology >= D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST
+                    && topology <= D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST)
+                return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
             fatal_error("Unhandled primitive topology %#x.\n", topology);
             /* fall through */
         case D3D_PRIMITIVE_TOPOLOGY_POINTLIST:
