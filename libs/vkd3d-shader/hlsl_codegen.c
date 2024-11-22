@@ -8867,6 +8867,395 @@ static bool sm4_generate_vsir_instr_resource_store(struct hlsl_ctx *ctx,
     return true;
 }
 
+static bool sm4_generate_vsir_validate_texel_offset_aoffimmi(const struct hlsl_ir_node *texel_offset)
+{
+    struct hlsl_ir_constant *offset;
+
+    VKD3D_ASSERT(texel_offset);
+    if (texel_offset->type != HLSL_IR_CONSTANT)
+        return false;
+    offset = hlsl_ir_constant(texel_offset);
+
+    if (offset->value.u[0].i < -8 || offset->value.u[0].i > 7)
+        return false;
+    if (offset->node.data_type->dimx > 1 && (offset->value.u[1].i < -8 || offset->value.u[1].i > 7))
+        return false;
+    if (offset->node.data_type->dimx > 2 && (offset->value.u[2].i < -8 || offset->value.u[2].i > 7))
+        return false;
+    return true;
+}
+
+static void sm4_generate_vsir_encode_texel_offset_as_aoffimmi(
+        struct vkd3d_shader_instruction *ins, const struct hlsl_ir_node *texel_offset)
+{
+    struct hlsl_ir_constant *offset;
+
+    if (!texel_offset)
+        return;
+    offset = hlsl_ir_constant(texel_offset);
+
+    ins->texel_offset.u = offset->value.u[0].i;
+    ins->texel_offset.v = 0;
+    ins->texel_offset.w = 0;
+    if (offset->node.data_type->dimx > 1)
+        ins->texel_offset.v = offset->value.u[1].i;
+    if (offset->node.data_type->dimx > 2)
+        ins->texel_offset.w = offset->value.u[2].i;
+}
+
+static bool sm4_generate_vsir_instr_ld(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_type *resource_type = hlsl_deref_get_type(ctx, &load->resource);
+    bool uav = (hlsl_deref_get_regset(ctx, &load->resource) == HLSL_REGSET_UAVS);
+    const struct vkd3d_shader_version *version = &program->shader_version;
+    bool raw = resource_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER;
+    const struct hlsl_ir_node *sample_index = load->sample_index.node;
+    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
+    const struct hlsl_ir_node *coords = load->coords.node;
+    unsigned int coords_writemask = VKD3DSP_WRITEMASK_ALL;
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_ir_node *instr = &load->node;
+    enum hlsl_sampler_dim dim = load->sampling_dim;
+    struct vkd3d_shader_instruction *ins;
+    enum vkd3d_shader_opcode opcode;
+    bool multisampled;
+
+    VKD3D_ASSERT(load->load_type == HLSL_RESOURCE_LOAD);
+
+    multisampled = resource_type->class == HLSL_CLASS_TEXTURE
+            && (resource_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+            || resource_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY);
+
+    if (uav)
+        opcode = VKD3DSIH_LD_UAV_TYPED;
+    else if (raw)
+        opcode = VKD3DSIH_LD_RAW;
+    else
+        opcode = multisampled ? VKD3DSIH_LD2DMS : VKD3DSIH_LD;
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, 2 + multisampled)))
+        return false;
+
+    if (texel_offset && !sm4_generate_vsir_validate_texel_offset_aoffimmi(texel_offset))
+    {
+        hlsl_error(ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
+                "Offset must resolve to integer literal in the range -8 to 7.");
+        return false;
+    }
+    sm4_generate_vsir_encode_texel_offset_as_aoffimmi(ins, texel_offset);
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    if (!uav)
+    {
+        /* Mipmap level is in the last component in the IR, but needs to be in the W
+         * component in the instruction. */
+        unsigned int dim_count = hlsl_sampler_dim_count(dim);
+
+        if (dim_count == 1)
+            coords_writemask = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_3;
+        if (dim_count == 2)
+            coords_writemask = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_1 | VKD3DSP_WRITEMASK_3;
+    }
+
+    vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, coords_writemask);
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[1], resource, ins->dst[0].write_mask, &instr->loc))
+        return false;
+
+    if (multisampled)
+    {
+        if (sample_index->type == HLSL_IR_CONSTANT)
+        {
+            vsir_src_from_hlsl_constant_value(&ins->src[2], ctx,
+                    &hlsl_ir_constant(sample_index)->value, VKD3D_DATA_INT, 1, 0);
+        }
+        else if (version->major == 4 && version->minor == 0)
+        {
+            hlsl_error(ctx, &sample_index->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "Expected literal sample index.");
+        }
+        else
+        {
+            vsir_src_from_hlsl_node(&ins->src[2], ctx, sample_index, VKD3DSP_WRITEMASK_ALL);
+        }
+    }
+    return true;
+}
+
+static bool sm4_generate_vsir_instr_sample(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_ir_node *instr = &load->node;
+    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
+    const struct hlsl_ir_node *coords = load->coords.node;
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_deref *sampler = &load->sampler;
+    struct vkd3d_shader_instruction *ins;
+    enum vkd3d_shader_opcode opcode;
+    unsigned int src_count;
+
+    switch (load->load_type)
+    {
+        case HLSL_RESOURCE_SAMPLE:
+            opcode = VKD3DSIH_SAMPLE;
+            src_count = 3;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_CMP:
+            opcode = VKD3DSIH_SAMPLE_C;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
+            opcode = VKD3DSIH_SAMPLE_C_LZ;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_LOD:
+            opcode = VKD3DSIH_SAMPLE_LOD;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
+            opcode = VKD3DSIH_SAMPLE_B;
+            src_count = 4;
+            break;
+
+        case HLSL_RESOURCE_SAMPLE_GRAD:
+            opcode = VKD3DSIH_SAMPLE_GRAD;
+            src_count = 5;
+            break;
+
+        default:
+            vkd3d_unreachable();
+    }
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, src_count)))
+        return false;
+
+    if (texel_offset && !sm4_generate_vsir_validate_texel_offset_aoffimmi(texel_offset))
+    {
+        hlsl_error(ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
+                "Offset must resolve to integer literal in the range -8 to 7.");
+        return false;
+    }
+    sm4_generate_vsir_encode_texel_offset_as_aoffimmi(ins, texel_offset);
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[1],
+            resource, ins->dst[0].write_mask, &instr->loc))
+        return false;
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[2],
+            sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+        return false;
+
+    if (opcode == VKD3DSIH_SAMPLE_LOD || opcode == VKD3DSIH_SAMPLE_B)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->lod.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    else if (opcode == VKD3DSIH_SAMPLE_C || opcode == VKD3DSIH_SAMPLE_C_LZ)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->cmp.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    else if (opcode == VKD3DSIH_SAMPLE_GRAD)
+    {
+        vsir_src_from_hlsl_node(&ins->src[3], ctx, load->ddx.node, VKD3DSP_WRITEMASK_ALL);
+        vsir_src_from_hlsl_node(&ins->src[4], ctx, load->ddy.node, VKD3DSP_WRITEMASK_ALL);
+    }
+    return true;
+}
+
+static bool sm4_generate_vsir_instr_gather(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load,
+        uint32_t swizzle)
+{
+    const struct vkd3d_shader_version *version = &program->shader_version;
+    const struct hlsl_ir_node *texel_offset = load->texel_offset.node;
+    const struct hlsl_ir_node *coords = load->coords.node;
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_deref *sampler = &load->sampler;
+    const struct hlsl_ir_node *instr = &load->node;
+    struct vkd3d_shader_instruction *ins;
+    enum vkd3d_shader_opcode opcode;
+
+    opcode = VKD3DSIH_GATHER4;
+    if (texel_offset)
+    {
+        if (!sm4_generate_vsir_validate_texel_offset_aoffimmi(texel_offset))
+        {
+            if (!vkd3d_shader_ver_ge(version, 5, 0))
+            {
+                hlsl_error(ctx, &texel_offset->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TEXEL_OFFSET,
+                    "Offset must resolve to integer literal in the range -8 to 7 for profiles < 5.");
+                return false;
+            }
+            opcode = VKD3DSIH_GATHER4_PO;
+        }
+    }
+
+    if (opcode == VKD3DSIH_GATHER4)
+    {
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, 3)))
+            return false;
+
+        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+        vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+        sm4_generate_vsir_encode_texel_offset_as_aoffimmi(ins, texel_offset);
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[1], resource, ins->dst[0].write_mask, &instr->loc))
+            return false;
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[2], sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+            return false;
+        ins->src[2].reg.dimension = VSIR_DIMENSION_VEC4;
+        ins->src[2].swizzle = swizzle;
+    }
+    else if (opcode == VKD3DSIH_GATHER4_PO)
+    {
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode, 1, 4)))
+            return false;
+
+        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+        vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_ALL);
+        vsir_src_from_hlsl_node(&ins->src[1], ctx, texel_offset, VKD3DSP_WRITEMASK_ALL);
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[2], resource, ins->dst[0].write_mask, &instr->loc))
+            return false;
+
+        if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program,
+                &ins->src[3], sampler, VKD3DSP_WRITEMASK_ALL, &instr->loc))
+            return false;
+        ins->src[3].reg.dimension = VSIR_DIMENSION_VEC4;
+        ins->src[3].swizzle = swizzle;
+    }
+    else
+    {
+        vkd3d_unreachable();
+    }
+    return true;
+}
+
+static bool sm4_generate_vsir_instr_sample_info(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_ir_node *instr = &load->node;
+    struct hlsl_type *type = instr->data_type;
+    struct vkd3d_shader_instruction *ins;
+
+    VKD3D_ASSERT(type->e.numeric.type == HLSL_TYPE_UINT || type->e.numeric.type == HLSL_TYPE_FLOAT);
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VKD3DSIH_SAMPLE_INFO, 1, 1)))
+        return false;
+
+    if (type->e.numeric.type == HLSL_TYPE_UINT)
+        ins->flags = VKD3DSI_SAMPLE_INFO_UINT;
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[0], resource, ins->dst[0].write_mask, &instr->loc);
+
+    return true;
+}
+
+static bool sm4_generate_vsir_instr_resinfo(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    const struct hlsl_deref *resource = &load->resource;
+    const struct hlsl_ir_node *instr = &load->node;
+    struct hlsl_type *type = instr->data_type;
+    struct vkd3d_shader_instruction *ins;
+
+    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
+            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+    {
+        hlsl_fixme(ctx, &load->node.loc, "resinfo for buffers.");
+        return false;
+    }
+
+    VKD3D_ASSERT(type->e.numeric.type == HLSL_TYPE_UINT || type->e.numeric.type == HLSL_TYPE_FLOAT);
+
+    if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VKD3DSIH_RESINFO, 1, 2)))
+        return false;
+
+    if (type->e.numeric.type == HLSL_TYPE_UINT)
+        ins->flags = VKD3DSI_RESINFO_UINT;
+
+    vsir_dst_from_hlsl_node(&ins->dst[0], ctx, instr);
+
+    vsir_src_from_hlsl_node(&ins->src[0], ctx, load->lod.node, VKD3DSP_WRITEMASK_ALL);
+
+    if (!sm4_generate_vsir_init_src_param_from_deref(ctx, program, &ins->src[1],
+            resource, ins->dst[0].write_mask, &instr->loc))
+        return false;
+
+    return true;
+}
+
+static bool sm4_generate_vsir_instr_resource_load(struct hlsl_ctx *ctx,
+        struct vsir_program *program, const struct hlsl_ir_resource_load *load)
+{
+    if (load->sampler.var && !load->sampler.var->is_uniform)
+    {
+        hlsl_fixme(ctx, &load->node.loc, "Sample using non-uniform sampler variable.");
+        return false;
+    }
+
+    if (!load->resource.var->is_uniform)
+    {
+        hlsl_fixme(ctx, &load->node.loc, "Load from non-uniform resource variable.");
+        return false;
+    }
+
+    switch (load->load_type)
+    {
+        case HLSL_RESOURCE_LOAD:
+            return sm4_generate_vsir_instr_ld(ctx, program, load);
+
+        case HLSL_RESOURCE_SAMPLE:
+        case HLSL_RESOURCE_SAMPLE_CMP:
+        case HLSL_RESOURCE_SAMPLE_CMP_LZ:
+        case HLSL_RESOURCE_SAMPLE_LOD:
+        case HLSL_RESOURCE_SAMPLE_LOD_BIAS:
+        case HLSL_RESOURCE_SAMPLE_GRAD:
+            /* Combined sample expressions were lowered. */
+            VKD3D_ASSERT(load->sampler.var);
+            return sm4_generate_vsir_instr_sample(ctx, program, load);
+
+        case HLSL_RESOURCE_GATHER_RED:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(X, X, X, X));
+
+        case HLSL_RESOURCE_GATHER_GREEN:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(Y, Y, Y, Y));
+
+        case HLSL_RESOURCE_GATHER_BLUE:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(Z, Z, Z, Z));
+
+        case HLSL_RESOURCE_GATHER_ALPHA:
+            return sm4_generate_vsir_instr_gather(ctx, program, load, VKD3D_SHADER_SWIZZLE(W, W, W, W));
+
+        case HLSL_RESOURCE_SAMPLE_INFO:
+            return sm4_generate_vsir_instr_sample_info(ctx, program, load);
+
+        case HLSL_RESOURCE_RESINFO:
+            return sm4_generate_vsir_instr_resinfo(ctx, program, load);
+
+        case HLSL_RESOURCE_SAMPLE_PROJ:
+            vkd3d_unreachable();
+
+        default:
+            return false;
+    }
+}
+
 static void sm4_generate_vsir_block(struct hlsl_ctx *ctx, struct hlsl_block *block, struct vsir_program *program)
 {
     struct vkd3d_string_buffer *dst_type_string;
@@ -8915,6 +9304,11 @@ static void sm4_generate_vsir_block(struct hlsl_ctx *ctx, struct hlsl_block *blo
 
             case HLSL_IR_LOOP:
                 sm4_generate_vsir_block(ctx, &hlsl_ir_loop(instr)->body, program);
+                break;
+
+            case HLSL_IR_RESOURCE_LOAD:
+                if (sm4_generate_vsir_instr_resource_load(ctx, program, hlsl_ir_resource_load(instr)))
+                    replace_instr_with_last_vsir_instr(ctx, program, instr);
                 break;
 
             case HLSL_IR_RESOURCE_STORE:
