@@ -176,6 +176,33 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
                     }
                     break;
 
+                case VSIR_DIMENSION_VEC4:
+                    switch (reg->data_type)
+                    {
+                        case VKD3D_DATA_INT:
+                            vkd3d_string_buffer_printf(buffer, "as_type<int4>(uint4(%#xu, %#xu, %#xu, %#xu))",
+                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+                            break;
+                        case VKD3D_DATA_UINT:
+                            vkd3d_string_buffer_printf(buffer, "uint4(%#xu, %#xu, %#xu, %#xu)",
+                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+                            vkd3d_string_buffer_printf(buffer, "%#xu", reg->u.immconst_u32[0]);
+                            break;
+                        case VKD3D_DATA_FLOAT:
+                            vkd3d_string_buffer_printf(buffer, "as_type<float4>(uint4(%#xu, %#xu, %#xu, %#xu))",
+                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+                            break;
+                        default:
+                            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                                    "Internal compiler error: Unhandled immconst datatype %#x.", reg->data_type);
+                            vkd3d_string_buffer_printf(buffer, "<unrecognised immconst datatype %#x>", reg->data_type);
+                            break;
+                    }
+                    break;
+
                 default:
                     vkd3d_string_buffer_printf(buffer, "<unhandled_dimension %#x>", reg->dimension);
                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
