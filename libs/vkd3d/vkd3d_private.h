@@ -58,6 +58,11 @@
 #define VKD3D_MAX_VK_SYNC_OBJECTS         4u
 #define VKD3D_MAX_DEVICE_BLOCKED_QUEUES  16u
 #define VKD3D_MAX_DESCRIPTOR_SETS        64u
+/* D3D12 binding tier 3 has a limit of "1,000,000+" CBVs, SRVs and UAVs. I am
+ * not sure of what the "+" is supposed to mean: it probably hints that
+ * implementations might have an even higher limit, but that's pretty obvious,
+ * that table is for guaranteed minimum limits. */
+#define VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS 1000000u
 /* D3D12 binding tier 3 has a limit of 2048 samplers. */
 #define VKD3D_MAX_DESCRIPTOR_SET_SAMPLERS 2048u
 /* The main limitation here is the simple descriptor pool recycling scheme

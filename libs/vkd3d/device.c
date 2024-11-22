@@ -1473,16 +1473,21 @@ static void vkd3d_device_vk_heaps_descriptor_limits_init(struct vkd3d_device_des
         uav_divisor = properties->maxDescriptorSetUpdateAfterBindSampledImages >= (3u << 20) ? 3 : 2;
     }
 
-    limits->uniform_buffer_max_descriptors = min(properties->maxDescriptorSetUpdateAfterBindUniformBuffers,
-            properties->maxPerStageDescriptorUpdateAfterBindUniformBuffers - root_provision);
-    limits->sampled_image_max_descriptors = min(properties->maxDescriptorSetUpdateAfterBindSampledImages,
-            properties->maxPerStageDescriptorUpdateAfterBindSampledImages / srv_divisor - root_provision);
-    limits->storage_buffer_max_descriptors = min(properties->maxDescriptorSetUpdateAfterBindStorageBuffers,
-            properties->maxPerStageDescriptorUpdateAfterBindStorageBuffers - root_provision);
-    limits->storage_image_max_descriptors = min(properties->maxDescriptorSetUpdateAfterBindStorageImages,
-            properties->maxPerStageDescriptorUpdateAfterBindStorageImages / uav_divisor - root_provision);
-    limits->sampler_max_descriptors = min(properties->maxDescriptorSetUpdateAfterBindSamplers,
-            properties->maxPerStageDescriptorUpdateAfterBindSamplers - root_provision);
+    limits->uniform_buffer_max_descriptors = min(min(properties->maxDescriptorSetUpdateAfterBindUniformBuffers,
+            properties->maxPerStageDescriptorUpdateAfterBindUniformBuffers - root_provision),
+            VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS);
+    limits->sampled_image_max_descriptors = min(min(properties->maxDescriptorSetUpdateAfterBindSampledImages,
+            properties->maxPerStageDescriptorUpdateAfterBindSampledImages / srv_divisor - root_provision),
+            VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS);
+    limits->storage_buffer_max_descriptors = min(min(properties->maxDescriptorSetUpdateAfterBindStorageBuffers,
+            properties->maxPerStageDescriptorUpdateAfterBindStorageBuffers - root_provision),
+            VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS);
+    limits->storage_image_max_descriptors = min(min(properties->maxDescriptorSetUpdateAfterBindStorageImages,
+            properties->maxPerStageDescriptorUpdateAfterBindStorageImages / uav_divisor - root_provision),
+            VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS);
+    limits->sampler_max_descriptors = min(min(properties->maxDescriptorSetUpdateAfterBindSamplers,
+            properties->maxPerStageDescriptorUpdateAfterBindSamplers - root_provision),
+            VKD3D_MAX_DESCRIPTOR_SET_CBVS_SRVS_UAVS);
     limits->sampler_max_descriptors = min(limits->sampler_max_descriptors, VKD3D_MAX_DESCRIPTOR_SET_SAMPLERS);
 }
 
