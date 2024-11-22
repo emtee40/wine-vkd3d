@@ -288,6 +288,7 @@ bool hlsl_type_is_shader(const struct hlsl_type *type)
         case HLSL_CLASS_CONSTANT_BUFFER:
         case HLSL_CLASS_BLEND_STATE:
         case HLSL_CLASS_STREAM_OUTPUT:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_VOID:
         case HLSL_CLASS_NULL:
             return false;
@@ -436,6 +437,7 @@ static void hlsl_type_calculate_reg_size(struct hlsl_ctx *ctx, struct hlsl_type 
         case HLSL_CLASS_GEOMETRY_SHADER:
         case HLSL_CLASS_BLEND_STATE:
         case HLSL_CLASS_STREAM_OUTPUT:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_NULL:
             break;
     }
@@ -521,6 +523,7 @@ static bool type_is_single_component(const struct hlsl_type *type)
         case HLSL_CLASS_STRUCT:
         case HLSL_CLASS_ARRAY:
         case HLSL_CLASS_CONSTANT_BUFFER:
+        case HLSL_CLASS_PATCH:
             return false;
 
         case HLSL_CLASS_EFFECT_GROUP:
@@ -682,6 +685,7 @@ unsigned int hlsl_type_get_component_offset(struct hlsl_ctx *ctx, struct hlsl_ty
             case HLSL_CLASS_VOID:
             case HLSL_CLASS_SCALAR:
             case HLSL_CLASS_CONSTANT_BUFFER:
+            case HLSL_CLASS_PATCH:
             case HLSL_CLASS_NULL:
             case HLSL_CLASS_STREAM_OUTPUT:
                 vkd3d_unreachable();
@@ -876,6 +880,9 @@ struct hlsl_type *hlsl_get_element_type_from_path_index(struct hlsl_ctx *ctx, co
             return type->e.record.fields[c->value.u[0].u].type;
         }
 
+        case HLSL_CLASS_PATCH:
+            return type->e.patch.type;
+
         default:
             vkd3d_unreachable();
     }
@@ -982,6 +989,25 @@ struct hlsl_type *hlsl_new_cb_type(struct hlsl_ctx *ctx, struct hlsl_type *forma
     type->class = HLSL_CLASS_CONSTANT_BUFFER;
     type->dimy = 1;
     type->e.resource.format = format;
+    hlsl_type_calculate_reg_size(ctx, type);
+    list_add_tail(&ctx->types, &type->entry);
+    return type;
+}
+
+struct hlsl_type *hlsl_new_patch_type(struct hlsl_ctx *ctx, enum hlsl_patch_kind kind,
+        struct hlsl_type *format, unsigned int control_points_count)
+{
+    struct hlsl_type *type;
+
+    if (!(type = hlsl_alloc(ctx, sizeof(*type))))
+        return NULL;
+    type->modifiers = HLSL_MODIFIER_CONST;
+    type->class = HLSL_CLASS_PATCH;
+    type->dimx = format->dimx;
+    type->dimy = format->dimy;
+    type->e.patch.kind = kind;
+    type->e.patch.type = format;
+    type->e.patch.control_points_count = control_points_count;
     hlsl_type_calculate_reg_size(ctx, type);
     list_add_tail(&ctx->types, &type->entry);
     return type;
@@ -1099,6 +1125,7 @@ unsigned int hlsl_type_component_count(const struct hlsl_type *type)
         case HLSL_CLASS_HULL_SHADER:
         case HLSL_CLASS_GEOMETRY_SHADER:
         case HLSL_CLASS_BLEND_STATE:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_NULL:
             return 1;
 
@@ -1171,6 +1198,10 @@ bool hlsl_types_are_equal(const struct hlsl_type *t1, const struct hlsl_type *t2
         case HLSL_CLASS_ARRAY:
             return t1->e.array.elements_count == t2->e.array.elements_count
                     && hlsl_types_are_equal(t1->e.array.type, t2->e.array.type);
+
+        case HLSL_CLASS_PATCH:
+            return t1->e.patch.control_points_count == t2->e.patch.control_points_count
+                    && hlsl_types_are_equal(t1->e.patch.type, t2->e.patch.type);
 
         case HLSL_CLASS_TECHNIQUE:
             return t1->e.version == t2->e.version;
@@ -1296,6 +1327,17 @@ struct hlsl_type *hlsl_type_clone(struct hlsl_ctx *ctx, struct hlsl_type *old,
 
         case HLSL_CLASS_TECHNIQUE:
             type->e.version = old->e.version;
+            break;
+
+        case HLSL_CLASS_PATCH:
+            if (!(type->e.patch.type = hlsl_type_clone(ctx, old->e.patch.type, default_majority, modifiers)))
+            {
+                vkd3d_free((void *)type->name);
+                vkd3d_free(type);
+                return NULL;
+            }
+            type->e.patch.control_points_count = old->e.patch.control_points_count;
+            type->e.patch.kind = old->e.patch.kind;
             break;
 
         default:
@@ -2872,6 +2914,18 @@ struct vkd3d_string_buffer *hlsl_type_to_string(struct hlsl_ctx *ctx, const stru
             if ((inner_string = hlsl_type_to_string(ctx, type->e.so.type)))
             {
                 vkd3d_string_buffer_printf(string, "<%s>", inner_string->buffer);
+                hlsl_release_string_buffer(ctx, inner_string);
+            }
+            return string;
+
+        case HLSL_CLASS_PATCH:
+            if (type->e.patch.kind == HLSL_PATCH_KIND_INPUT)
+                vkd3d_string_buffer_printf(string, "InputPatch");
+            else
+                vkd3d_string_buffer_printf(string, "OutputPatch");
+            if ((inner_string = hlsl_type_to_string(ctx, type->e.patch.type)))
+            {
+                vkd3d_string_buffer_printf(string, "<%s, %u>", inner_string->buffer, type->e.patch.control_points_count);
                 hlsl_release_string_buffer(ctx, inner_string);
             }
             return string;
@@ -4474,6 +4528,7 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, const struct vkd3d_shader_compil
     hlsl_block_add_instr(&ctx->static_initializers, ctx->error_instr);
 
     ctx->domain = VKD3D_TESSELLATOR_DOMAIN_INVALID;
+    ctx->input_control_point_count = 1;
     ctx->output_control_point_count = UINT_MAX;
     ctx->output_primitive = 0;
     ctx->partitioning = 0;

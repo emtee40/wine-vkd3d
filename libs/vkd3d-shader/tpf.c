@@ -3333,6 +3333,7 @@ static D3D_SHADER_VARIABLE_CLASS sm4_class(const struct hlsl_type *type)
         case HLSL_CLASS_GEOMETRY_SHADER:
         case HLSL_CLASS_BLEND_STATE:
         case HLSL_CLASS_STREAM_OUTPUT:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_NULL:
             break;
     }
@@ -5772,7 +5773,7 @@ static void tpf_write_shdr(struct tpf_compiler *tpf, struct hlsl_ir_function_dec
     {
         tpf_write_hs_decls(tpf);
 
-        tpf_write_dcl_input_control_point_count(tpf, 1); /* TODO: Obtain from InputPatch */
+        tpf_write_dcl_input_control_point_count(tpf, ctx->input_control_point_count);
         tpf_write_dcl_output_control_point_count(tpf, ctx->output_control_point_count);
         tpf_write_dcl_tessellator_domain(tpf, ctx->domain);
         tpf_write_dcl_tessellator_partitioning(tpf, ctx->partitioning);
@@ -5780,7 +5781,7 @@ static void tpf_write_shdr(struct tpf_compiler *tpf, struct hlsl_ir_function_dec
     }
     else if (version->type == VKD3D_SHADER_TYPE_DOMAIN)
     {
-        tpf_write_dcl_input_control_point_count(tpf, 0); /* TODO: Obtain from OutputPatch */
+        tpf_write_dcl_input_control_point_count(tpf, ctx->input_control_point_count);
         tpf_write_dcl_tessellator_domain(tpf, ctx->domain);
     }
 
