@@ -640,6 +640,30 @@ static void append_output_var_copy(struct hlsl_ctx *ctx, struct hlsl_ir_function
     append_output_copy_recurse(ctx, func, load, var->storage_modifiers, &var->semantic, var->semantic.index, false);
 }
 
+static void add_patch_vars(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *func, struct hlsl_ir_var *var)
+{
+    struct hlsl_type *type = var->data_type;
+
+    VKD3D_ASSERT(type->e.patch.control_points_count > 0);
+
+    if (ctx->input_control_point_count)
+    {
+        if (type->e.patch.control_points_count != ctx->input_control_point_count
+                || !hlsl_types_are_equal(type->e.patch.type, ctx->input_control_point_type))
+        {
+            hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "Patch type mismatch.");
+            return;
+        }
+    }
+    else
+    {
+        ctx->input_control_point_count = type->e.patch.control_points_count;
+        ctx->input_control_point_type = type->e.patch.type;
+    }
+
+    /* TODO: Generate semantic variables from patch definition. */
+}
+
 bool hlsl_transform_ir(struct hlsl_ctx *ctx, bool (*func)(struct hlsl_ctx *ctx, struct hlsl_ir_node *, void *),
         struct hlsl_block *block, void *context)
 {
@@ -9410,8 +9434,10 @@ static void process_entry_function(struct hlsl_ctx *ctx,
     const struct hlsl_profile_info *profile = ctx->profile;
     struct hlsl_block static_initializers, global_uniforms;
     struct hlsl_block *const body = &entry_func->body;
+    bool is_patch_constant_func = entry_func == ctx->patch_constant_func;
     struct recursive_call_ctx recursive_call_ctx;
     struct hlsl_ir_var *var;
+    bool found_inputpatch, found_outputpatch;
     unsigned int i;
 
     if (!hlsl_clone_block(ctx, &static_initializers, &ctx->static_initializers))
@@ -9444,6 +9470,7 @@ static void process_entry_function(struct hlsl_ctx *ctx,
     lower_ir(ctx, lower_matrix_swizzles, body);
     lower_ir(ctx, lower_index_loads, body);
 
+    found_inputpatch = found_outputpatch = false;
     for (i = 0; i < entry_func->parameters.count; ++i)
     {
         var = entry_func->parameters.vars[i];
@@ -9454,11 +9481,64 @@ static void process_entry_function(struct hlsl_ctx *ctx,
         }
         else if ((var->storage_modifiers & HLSL_STORAGE_UNIFORM))
         {
-            if (ctx->profile->type == VKD3D_SHADER_TYPE_HULL && entry_func == ctx->patch_constant_func)
+            if (ctx->profile->type == VKD3D_SHADER_TYPE_HULL && is_patch_constant_func)
                 hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Patch constant function parameter \"%s\" cannot be uniform.", var->name);
             else
                 prepend_uniform_copy(ctx, body, var);
+        }
+        else if (hlsl_get_multiarray_element_type(var->data_type)->class == HLSL_CLASS_PATCH)
+        {
+            if (var->data_type->e.patch.kind == HLSL_PATCH_KIND_INPUT)
+            {
+                if (found_inputpatch)
+                {
+                    hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_DUPLICATE_PATCH,
+                            "Duplicate InputPatch parameter.");
+                    continue;
+                }
+                found_inputpatch = true;
+
+                if (profile->type != VKD3D_SHADER_TYPE_HULL && profile->type != VKD3D_SHADER_TYPE_GEOMETRY)
+                {
+                    hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                            "InputPatch parameters are only supported in hull shaders and geometry shaders.");
+                    continue;
+                }
+
+                if (profile->type == VKD3D_SHADER_TYPE_GEOMETRY)
+                {
+                    hlsl_fixme(ctx, &var->loc, "InputPatch parameter in geometry shaders.");
+                    continue;
+                }
+
+                add_patch_vars(ctx, entry_func, var);
+            }
+            else /* HLSL_PATCH_KIND_OUTPUT */
+            {
+                if (found_outputpatch)
+                {
+                    hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_DUPLICATE_PATCH,
+                            "Duplicate OutputPatch parameter.");
+                    continue;
+                }
+                found_outputpatch = true;
+
+                if (!is_patch_constant_func && profile->type != VKD3D_SHADER_TYPE_DOMAIN)
+                {
+                    hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                            "OutputPatch parameters are only supported in patch constant functions and domain shaders.");
+                    continue;
+                }
+
+                if (is_patch_constant_func)
+                {
+                    hlsl_fixme(ctx, &var->loc, "OutputPatch parameter in patch constant functions.");
+                    continue;
+                }
+
+                add_patch_vars(ctx, entry_func, var);
+            }
         }
         else
         {
