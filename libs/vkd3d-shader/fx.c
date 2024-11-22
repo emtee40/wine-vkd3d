@@ -2967,7 +2967,7 @@ static void VKD3D_PRINTF_FUNC(3, 4) fx_parser_error(struct fx_parser *parser, en
 
 static int fx_2_parse(struct fx_parser *parser)
 {
-    fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_NOT_IMPLEMENTED, "Parsing fx_2_0 binaries is not implemented.\n");
+    fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_NOT_IMPLEMENTED, "Parsing fx_2_0 binaries is not implemented.");
 
     return -1;
 }
@@ -3136,7 +3136,7 @@ static void fx_parse_fx_4_annotations(struct fx_parser *parser)
         else
         {
             fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA,
-                    "Only numeric and string types are supported in annotations.\n");
+                    "Only numeric and string types are supported in annotations.");
         }
 
         if (type.element_count)
@@ -3259,7 +3259,7 @@ static void fx_4_parse_shader_blob(struct fx_parser *parser, unsigned int object
     if ((ret = vkd3d_shader_compile(&info, &output, NULL)) < 0)
     {
         fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA,
-                "Failed to disassemble shader blob.\n");
+                "Failed to disassemble shader blob.");
         return;
     }
     parse_fx_print_indent(parser);
@@ -3410,7 +3410,7 @@ static void fx_4_parse_state_object_initializer(struct fx_parser *parser, uint32
         if (!(state = bsearch(&entry.id, fx_4_states, ARRAY_SIZE(fx_4_states),
                 sizeof(*fx_4_states), fx_4_state_id_compare)))
         {
-            fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA, "Unrecognized state id %#x.\n", entry.id);
+            fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA, "Unrecognized state id %#x.", entry.id);
             break;
         }
 
@@ -3527,7 +3527,7 @@ static void fx_4_parse_state_object_initializer(struct fx_parser *parser, uint32
             }
             default:
                 fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_NOT_IMPLEMENTED,
-                        "Unsupported assignment type %u.\n", entry.type);
+                        "Unsupported assignment type %u.", entry.type);
         }
         vkd3d_string_buffer_printf(&parser->buffer, ";\n");
     }
