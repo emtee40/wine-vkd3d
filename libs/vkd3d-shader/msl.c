@@ -153,6 +153,37 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
             msl_print_register_datatype(buffer, gen, reg->data_type);
             break;
 
+        case VKD3DSPR_IMMCONST:
+            switch (reg->dimension)
+            {
+                case VSIR_DIMENSION_SCALAR:
+                    switch (reg->data_type)
+                    {
+                        case VKD3D_DATA_INT:
+                            vkd3d_string_buffer_printf(buffer, "as_type<int>(%#xu)", reg->u.immconst_u32[0]);
+                            break;
+                        case VKD3D_DATA_UINT:
+                            vkd3d_string_buffer_printf(buffer, "%#xu", reg->u.immconst_u32[0]);
+                            break;
+                        case VKD3D_DATA_FLOAT:
+                            vkd3d_string_buffer_printf(buffer, "as_type<float>(%#xu)", reg->u.immconst_u32[0]);
+                            break;
+                        default:
+                            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                                    "Internal compiler error: Unhandled immconst datatype %#x.", reg->data_type);
+                            vkd3d_string_buffer_printf(buffer, "<unrecognised immconst datatype %#x>", reg->data_type);
+                            break;
+                    }
+                    break;
+
+                default:
+                    vkd3d_string_buffer_printf(buffer, "<unhandled_dimension %#x>", reg->dimension);
+                    msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                            "Internal compiler error: Unhandled dimension %#x.", reg->dimension);
+                    break;
+            }
+            break;
+
         case VKD3DSPR_CONSTBUFFER:
             if (reg->idx_count != 3)
             {
