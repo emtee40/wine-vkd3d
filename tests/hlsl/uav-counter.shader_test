@@ -34,3 +34,54 @@ void main()
 [test]
 todo(sm<6) dispatch 3 1 1
 probe uav 1 (0) ri (-12)
+
+
+[require]
+shader model >= 5.1
+
+[uav 2]
+stride 4
+size (buffer, 1)
+0
+
+[uav 3]
+size (counter_buffer, 1)
+0
+
+[compute shader todo]
+RWStructuredBuffer<uint> u[2] : register(u2);
+
+    [numthreads(4, 1, 1)]
+void main()
+{
+    u[1].IncrementCounter();
+}
+
+[test]
+% Crashes on warp, which would require support for a 'broken(warp)'
+% tag, but it doesn't seem worth adding because if the dynamic test
+% below passes, so should the static test.
+%
+% todo(sm<6) dispatch 3 1 1
+% probe uav 3 (0) ri (12)
+
+
+[uav 3]
+size (counter_buffer, 1)
+0
+
+[compute shader todo]
+uniform uint i;
+
+RWStructuredBuffer<uint> u[2] : register(u2);
+
+    [numthreads(4, 1, 1)]
+void main()
+{
+    u[i - 1].IncrementCounter();
+}
+
+[test]
+uniform 0 uint 2
+todo(sm<6) dispatch 3 1 1
+probe uav 3 (0) ri (12)
