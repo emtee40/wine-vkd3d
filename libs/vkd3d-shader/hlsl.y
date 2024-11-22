@@ -6517,6 +6517,21 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
     hlsl_release_string_buffer(ctx, string);
 }
 
+static void validate_structured_buffer_type(struct hlsl_ctx *ctx, struct hlsl_type *format,
+        const struct vkd3d_shader_location *loc)
+{
+    struct vkd3d_string_buffer *string = hlsl_type_to_string(ctx, format);
+
+    if (!type_contains_only_numerics(format))
+    {
+        if (string)
+            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                    "Structured buffer type %s is not numeric.", string->buffer);
+    }
+
+    hlsl_release_string_buffer(ctx, string);
+}
+
 }
 
 %locations
@@ -6642,6 +6657,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
 %token KW_STATIC
 %token KW_STRING
 %token KW_STRUCT
+%token KW_STRUCTUREDBUFFER
 %token KW_SWITCH
 %token KW_TBUFFER
 %token KW_TECHNIQUE
@@ -7957,6 +7973,11 @@ type_no_void:
     | KW_BYTEADDRESSBUFFER
         {
             $$ = hlsl_new_texture_type(ctx, HLSL_SAMPLER_DIM_RAW_BUFFER, hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), 0);
+        }
+    | KW_STRUCTUREDBUFFER '<' resource_format '>'
+        {
+            validate_structured_buffer_type(ctx, $3, &@3);
+            $$ = hlsl_new_texture_type(ctx, HLSL_SAMPLER_DIM_STRUCTURED_BUFFER, $3, 0);
         }
     | uav_type '<' resource_format '>'
         {
