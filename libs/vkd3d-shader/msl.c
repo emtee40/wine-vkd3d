@@ -388,6 +388,9 @@ static void msl_handle_instruction(struct msl_generator *gen, const struct vkd3d
         case VKD3DSIH_ADD:
             msl_binop(gen, ins, "+");
             break;
+        case VKD3DSIH_AND:
+            msl_binop(gen, ins, "&");
+            break;
         case VKD3DSIH_DCL_INPUT:
         case VKD3DSIH_DCL_OUTPUT:
         case VKD3DSIH_DCL_OUTPUT_SIV:
