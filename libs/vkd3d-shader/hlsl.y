@@ -475,7 +475,11 @@ static bool add_explicit_conversion(struct hlsl_ctx *ctx, struct hlsl_block *blo
     for (i = 0; i < arrays->count; ++i)
     {
         if (arrays->sizes[i] == HLSL_ARRAY_ELEMENTS_COUNT_IMPLICIT)
+        {
             hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "Implicit size arrays not allowed in casts.");
+            dst_type = ctx->builtin_types.error;
+            break;
+        }
         dst_type = hlsl_new_array_type(ctx, dst_type, arrays->sizes[i]);
     }
 
@@ -1192,6 +1196,8 @@ static bool gen_struct_fields(struct hlsl_ctx *ctx, struct parse_fields *fields,
                 {
                     hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                             "Implicit size arrays not allowed in struct fields.");
+                    field->type = ctx->builtin_types.error;
+                    break;
                 }
 
                 field->type = hlsl_new_array_type(ctx, field->type, v->arrays.sizes[k]);
@@ -1282,6 +1288,8 @@ static bool add_typedef(struct hlsl_ctx *ctx, struct hlsl_type *const orig_type,
             {
                 hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                         "Implicit size arrays not allowed in typedefs.");
+                type = ctx->builtin_types.error;
+                break;
             }
 
             if (!(type = hlsl_new_array_type(ctx, type, v->arrays.sizes[i])))
@@ -2670,26 +2678,30 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
                 {
                     hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                             "Only innermost array size can be implicit.");
-                    v->initializer.args_count = 0;
+                    type = ctx->builtin_types.error;
+                    break;
                 }
                 else if (elem_components == 0)
                 {
                     hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                             "Cannot declare an implicit size array of a size 0 type.");
-                    v->initializer.args_count = 0;
+                    type = ctx->builtin_types.error;
+                    break;
                 }
                 else if (size == 0)
                 {
                     hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                             "Implicit size arrays need to be initialized.");
-                    v->initializer.args_count = 0;
+                    type = ctx->builtin_types.error;
+                    break;
                 }
                 else if (size % elem_components != 0)
                 {
                     hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
                             "Cannot initialize implicit size array with %u components, expected a multiple of %u.",
                             size, elem_components);
-                    v->initializer.args_count = 0;
+                    type = ctx->builtin_types.error;
+                    break;
                 }
                 else
                 {
@@ -2908,7 +2920,8 @@ static struct hlsl_block *initialize_vars(struct hlsl_ctx *ctx, struct list *var
                 v->initializer.args[0] = node_from_block(v->initializer.instrs);
             }
 
-            initialize_var(ctx, var, &v->initializer, is_default_values_initializer);
+            if (var->data_type->class != HLSL_CLASS_ERROR)
+                initialize_var(ctx, var, &v->initializer, is_default_values_initializer);
 
             if (is_default_values_initializer)
             {
@@ -5447,6 +5460,17 @@ static struct hlsl_block *add_constructor(struct hlsl_ctx *ctx, struct hlsl_type
     struct hlsl_ir_load *load;
     struct hlsl_ir_var *var;
 
+    if (!hlsl_is_numeric_type(type))
+    {
+        struct vkd3d_string_buffer *string;
+
+        if ((string = hlsl_type_to_string(ctx, type)))
+            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                    "Constructor data type %s is not numeric.", string->buffer);
+        hlsl_release_string_buffer(ctx, string);
+        return NULL;
+    }
+
     if (!(var = hlsl_new_synthetic_var(ctx, "constructor", type, loc)))
         return NULL;
 
@@ -7690,7 +7714,10 @@ parameter_decl:
                 {
                     hlsl_error(ctx, &@3, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
                             "Implicit size arrays not allowed in function parameters.");
+                    type = ctx->builtin_types.error;
+                    break;
                 }
+
                 type = hlsl_new_array_type(ctx, type, $4.sizes[i]);
             }
             vkd3d_free($4.sizes);
@@ -8112,14 +8139,9 @@ typedef:
             }
 
             if (modifiers)
-            {
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Storage modifiers are not allowed on typedefs.");
-                LIST_FOR_EACH_ENTRY_SAFE(v, v_next, $4, struct parse_variable_def, entry)
-                    vkd3d_free(v);
-                vkd3d_free($4);
-                YYABORT;
-            }
+
             if (!add_typedef(ctx, type, $4))
                 YYABORT;
         }
@@ -9003,17 +9025,23 @@ primary_expr:
             struct hlsl_ir_load *load;
             struct hlsl_ir_var *var;
 
-            if (!(var = hlsl_get_var(ctx->cur_scope, $1)))
+            if ((var = hlsl_get_var(ctx->cur_scope, $1)))
+            {
+                if (!(load = hlsl_new_var_load(ctx, var, &@1)))
+                    YYABORT;
+                if (!($$ = make_block(ctx, &load->node)))
+                    YYABORT;
+            }
+            else
             {
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_NOT_DEFINED, "Variable \"%s\" is not defined.", $1);
                 vkd3d_free($1);
-                YYABORT;
+
+                if (!($$ = make_empty_block(ctx)))
+                    YYABORT;
+                $$->value = ctx->error_instr;
             }
             vkd3d_free($1);
-            if (!(load = hlsl_new_var_load(ctx, var, &@1)))
-                YYABORT;
-            if (!($$ = make_block(ctx, &load->node)))
-                YYABORT;
         }
     | '(' expr ')'
         {
@@ -9173,23 +9201,8 @@ postfix_expr:
     | var_modifiers type '(' initializer_expr_list ')'
         {
             if ($1)
-            {
                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on constructors.");
-                free_parse_initializer(&$4);
-                YYABORT;
-            }
-            if (!hlsl_is_numeric_type($2))
-            {
-                struct vkd3d_string_buffer *string;
-
-                if ((string = hlsl_type_to_string(ctx, $2)))
-                    hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
-                            "Constructor data type %s is not numeric.", string->buffer);
-                hlsl_release_string_buffer(ctx, string);
-                free_parse_initializer(&$4);
-                YYABORT;
-            }
 
             if (!($$ = add_constructor(ctx, $2, &$4, &@2)))
             {
@@ -9257,11 +9270,8 @@ unary_expr:
     | '(' var_modifiers type arrays ')' unary_expr
         {
             if ($2)
-            {
                 hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
                         "Modifiers are not allowed on casts.");
-                YYABORT;
-            }
 
             if (!add_explicit_conversion(ctx, $6, $3, &$4, &@3))
             {
@@ -9405,10 +9415,7 @@ assignment_expr:
             struct hlsl_ir_node *lhs = node_from_block($1), *rhs = node_from_block($3);
 
             if (lhs->data_type->modifiers & HLSL_MODIFIER_CONST)
-            {
                 hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_MODIFIES_CONST, "Statement modifies a const expression.");
-                YYABORT;
-            }
             hlsl_block_add_block($3, $1);
             destroy_block($1);
             if (!add_assignment(ctx, $3, lhs, $2, rhs))
