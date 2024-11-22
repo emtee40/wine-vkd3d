@@ -358,6 +358,30 @@ static void msl_binop(struct msl_generator *gen,
     msl_dst_cleanup(&dst, &gen->string_buffers);
 }
 
+static void msl_relop(struct msl_generator *gen,
+        const struct vkd3d_shader_instruction *ins, const char *op)
+{
+    unsigned int mask_size;
+    struct msl_src src[2];
+    struct msl_dst dst;
+    uint32_t mask;
+
+    mask = msl_dst_init(&dst, gen, ins, &ins->dst[0]);
+    msl_src_init(&src[0], gen, &ins->src[0], mask);
+    msl_src_init(&src[1], gen, &ins->src[1], mask);
+
+    if ((mask_size = vsir_write_mask_component_count(mask)) > 1)
+        msl_print_assignment(gen, &dst, "select(uint%u(0u), uint%u(0xffffffffu), bool%u(%s %s %s))",
+                mask_size, mask_size, mask_size,src[0].str->buffer, op, src[1].str->buffer);
+    else
+        msl_print_assignment(gen, &dst, "%s %s %s ? 0xffffffffu : 0u",
+                src[0].str->buffer, op, src[1].str->buffer);
+
+    msl_src_cleanup(&src[1], &gen->string_buffers);
+    msl_src_cleanup(&src[0], &gen->string_buffers);
+    msl_dst_cleanup(&dst, &gen->string_buffers);
+}
+
 static void msl_mov(struct msl_generator *gen, const struct vkd3d_shader_instruction *ins)
 {
     struct msl_src src;
@@ -395,6 +419,9 @@ static void msl_handle_instruction(struct msl_generator *gen, const struct vkd3d
         case VKD3DSIH_DCL_OUTPUT:
         case VKD3DSIH_DCL_OUTPUT_SIV:
         case VKD3DSIH_NOP:
+            break;
+        case VKD3DSIH_NEU:
+            msl_relop(gen, ins, "!=");
             break;
         case VKD3DSIH_MOV:
             msl_mov(gen, ins);
