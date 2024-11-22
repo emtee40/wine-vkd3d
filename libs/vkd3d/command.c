@@ -1964,7 +1964,7 @@ static void d3d12_command_list_end_current_render_pass(struct d3d12_command_list
 
     if (list->xfb_enabled)
     {
-        VK_CALL(vkCmdEndTransformFeedbackEXT(list->vk_command_buffer, 0, ARRAY_SIZE(list->so_counter_buffers),
+        VK_CALL(vkCmdEndTransformFeedbackEXT(list->vk_command_buffer, 0, list->so_counter_buffer_count,
                 list->so_counter_buffers, list->so_counter_buffer_offsets));
     }
 
@@ -2499,6 +2499,7 @@ static void d3d12_command_list_reset_state(struct d3d12_command_list *list,
 
     list->state = NULL;
 
+    list->so_counter_buffer_count = 0;
     memset(list->so_counter_buffers, 0, sizeof(list->so_counter_buffers));
     memset(list->so_counter_buffer_offsets, 0, sizeof(list->so_counter_buffer_offsets));
 
@@ -3352,7 +3353,7 @@ static bool d3d12_command_list_begin_render_pass(struct d3d12_command_list *list
     graphics = &list->state->u.graphics;
     if (graphics->xfb_enabled)
     {
-        VK_CALL(vkCmdBeginTransformFeedbackEXT(list->vk_command_buffer, 0, ARRAY_SIZE(list->so_counter_buffers),
+        VK_CALL(vkCmdBeginTransformFeedbackEXT(list->vk_command_buffer, 0, list->so_counter_buffer_count,
                 list->so_counter_buffers, list->so_counter_buffer_offsets));
 
         list->xfb_enabled = true;
@@ -4919,7 +4920,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsComm
         else
         {
             if (count)
+            {
                 VK_CALL(vkCmdBindTransformFeedbackBuffersEXT(list->vk_command_buffer, first, count, buffers, offsets, sizes));
+                list->so_counter_buffer_count += count;
+            }
             count = 0;
             first = start_slot + i + 1;
 
@@ -4931,7 +4935,10 @@ static void STDMETHODCALLTYPE d3d12_command_list_SOSetTargets(ID3D12GraphicsComm
     }
 
     if (count)
+    {
         VK_CALL(vkCmdBindTransformFeedbackBuffersEXT(list->vk_command_buffer, first, count, buffers, offsets, sizes));
+        list->so_counter_buffer_count += count;
+    }
 }
 
 static void STDMETHODCALLTYPE d3d12_command_list_OMSetRenderTargets(ID3D12GraphicsCommandList6 *iface,
