@@ -752,6 +752,15 @@ static void set_uniforms(struct shader_runner *runner, size_t offset, size_t cou
     memcpy(runner->uniforms + offset, uniforms, count * sizeof(*runner->uniforms));
 }
 
+static void clear_input_layout(struct shader_runner *runner)
+{
+    unsigned int i;
+
+    for (i = 0; i < runner->input_element_count; ++i)
+        free(runner->input_elements[i].name);
+    runner->input_element_count = 0;
+}
+
 static void read_int(const char **line, int *i, bool is_uniform)
 {
     char *rest;
@@ -997,8 +1006,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
 
         set_default_target(runner);
 
-        for (i = 0; i < runner->input_element_count; ++i)
-            free(runner->input_elements[i].name);
+        clear_input_layout(runner);
 
         vkd3d_array_reserve((void **)&runner->input_elements, &runner->input_element_capacity,
                 1, sizeof(*runner->input_elements));
@@ -1009,6 +1017,7 @@ static void parse_test_directive(struct shader_runner *runner, const char *line)
         element->texel_size = sizeof(*quad);
         element->index = 0;
         runner->input_element_count = 1;
+        runner->clear_input_elements_after_test = true;
 
         memset(&params, 0, sizeof(params));
         params.desc.slot = 0;
@@ -1906,6 +1915,11 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
                 case STATE_TEST:
                     if (test_action == TEST_ACTION_SKIP_EXECUTION)
                         vkd3d_test_skip(line_number, "Missing capabilities.\n");
+                    if (runner->clear_input_elements_after_test)
+                    {
+                        clear_input_layout(runner);
+                        runner->clear_input_elements_after_test = false;
+                    }
                     break;
 
                 case STATE_REQUIRE:
@@ -2247,10 +2261,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
             else if (!strcmp(line, "[input layout]\n"))
             {
                 state = STATE_INPUT_LAYOUT;
-
-                for (i = 0; i < runner->input_element_count; ++i)
-                    free(runner->input_elements[i].name);
-                runner->input_element_count = 0;
+                clear_input_layout(runner);
             }
         }
         else if (line[0] != '%' && line[0] != '\n')
@@ -2317,8 +2328,7 @@ void run_shader_tests(struct shader_runner *runner, const struct shader_runner_c
     /* Pop line_number context. */
     vkd3d_test_pop_context();
 
-    for (i = 0; i < runner->input_element_count; ++i)
-        free(runner->input_elements[i].name);
+    clear_input_layout(runner);
     free(runner->input_elements);
     for (i = 0; i < SHADER_TYPE_COUNT; ++i)
         free(runner->shader_source[i]);

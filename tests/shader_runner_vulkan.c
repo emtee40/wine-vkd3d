@@ -644,6 +644,8 @@ static VkPipeline create_graphics_pipeline(struct vulkan_shader_runner *runner, 
         signature_element = vkd3d_shader_find_signature_element(
                 &runner->signatures[SHADER_TYPE_VS].input, element->name, element->index, 0);
         ok(signature_element, "Cannot find signature element %s%u.\n", element->name, element->index);
+        if (!signature_element)
+            continue;
 
         attribute->location = signature_element->register_index;
         attribute->binding = element->slot;

@@ -206,6 +206,7 @@ struct shader_runner
 
     struct input_element *input_elements;
     size_t input_element_count, input_element_capacity;
+    bool clear_input_elements_after_test;
 
     IDxcCompiler3 *dxc_compiler;
 
