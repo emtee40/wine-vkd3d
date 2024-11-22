@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#define INITGUID
+#include "vulkan_utils.h"
 #include "vkd3d_test.h"
 #include "utils.h"
 #include <vkd3d_shader.h>
@@ -2108,6 +2110,349 @@ static void test_parameters(void)
 #endif
 }
 
+static void test_uav_buffer_type(void)
+{
+    VkDescriptorSetLayoutCreateInfo set_desc = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    VkComputePipelineCreateInfo pipeline_desc = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    VkDeviceQueueCreateInfo queue_desc = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptor_indexing_features
+            = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT};
+    VkDeviceCreateInfo device_desc = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    struct vulkan_test_context test_context, *context = &test_context;
+    enum vkd3d_shader_compile_option_typed_uav typed_uav;
+    struct vkd3d_shader_resource_binding target_binding;
+    struct vkd3d_shader_spirv_target_info target_info;
+    struct vkd3d_shader_interface_info interface_info;
+    VkDescriptorBufferInfo buffer_infos[2];
+    VkPhysicalDeviceProperties properties;
+    struct vkd3d_shader_compile_info info;
+    VkDescriptorSetLayoutBinding binding;
+    VkPhysicalDeviceFeatures2 features2;
+    VkBufferView typed_buffer_views[2];
+    VkDescriptorSetLayout set_layout;
+    VkDescriptorSet descriptor_set;
+    struct vkd3d_shader_code spirv;
+    VkBufferView buffer_views[2];
+    IDxcCompiler3 *dxc_compiler;
+    VkCommandBuffer cmd_buffer;
+    VkDeviceMemory memory;
+    VkPipeline pipeline;
+    unsigned int i, j;
+    VkDevice device;
+    VkBuffer buffer;
+    void *mapping;
+    int32_t *rb;
+    VkResult vr;
+    HRESULT hr;
+    bool b;
+    int rc;
+
+    static const char *instance_extensions[] =
+    {
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+    };
+    static const char *device_extensions[] =
+    {
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE_3_EXTENSION_NAME,
+    };
+    static const enum vkd3d_shader_spirv_extension spirv_extensions[] =
+    {
+        VKD3D_SHADER_SPIRV_EXTENSION_EXT_DESCRIPTOR_INDEXING,
+    };
+
+    static const char cs_raw_source[] =
+        "RWByteAddressBuffer u0[2] : register(u0);\n"
+        "\n"
+        "[numthreads(1, 1, 1)]\n"
+        "void main()\n"
+        "{\n"
+        "    int i = u0[0].Load(0);\n"
+        "    u0[0].Store(4, i + 1);\n"
+        "    i = u0[0].Load(8);\n"
+        "    u0[0].Store(12, i + 1);\n"
+        "    i = u0[1].Load(4);\n"
+        "    u0[1].Store(0, i + 1);\n"
+        "    i = u0[1].Load(12);\n"
+        "    u0[1].Store(8, i + 1);\n"
+        "}";
+
+    static const char cs_struct_source[] =
+        "RWStructuredBuffer<int> u0[2] : register(u0);\n"
+        "\n"
+        "[numthreads(1, 1, 1)]\n"
+        "void main()\n"
+        "{\n"
+        "    u0[0][1] = u0[0][0] + 1;\n"
+        "    u0[0][3] = u0[0][2] + 1;\n"
+        "    u0[1][0] = u0[1][1] + 1;\n"
+        "    u0[1][2] = u0[1][3] + 1;\n"
+        "}";
+
+    static const char cs_typed_source[] =
+        "RWBuffer<float4> u0[2] : register(u0);\n"
+        "\n"
+        "[numthreads(1, 1, 1)]\n"
+        "void main()\n"
+        "{\n"
+        "    u0[0][1] = u0[0][0] + 0.125;\n"
+        "    u0[1][0] = u0[1][1] + 0.125;\n"
+        "}";
+
+    static const struct
+    {
+        const char *source;
+        enum vkd3d_shader_compile_option_buffer_uav buffer_uav;
+        VkDescriptorType descriptor_type;
+        bool is_todo;
+    }
+    tests[] =
+    {
+#define STORAGE_TEXEL_BUFFER VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_TEXEL_BUFFER
+#define STORAGE_BUFFER VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV_STORAGE_BUFFER
+        {cs_raw_source, STORAGE_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER},
+        {cs_raw_source, STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, true},
+        {cs_struct_source, STORAGE_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER},
+        {cs_struct_source, STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, true},
+        {cs_typed_source, STORAGE_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER},
+        /* Storage buffers must not be used for typed buffers, so the STORAGE_BUFFER option must have no effect. */
+        {cs_typed_source, STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, true},
+#undef STORAGE_TEXEL_BUFFER
+#undef STORAGE_BUFFER
+    };
+    static const int32_t typed_data[] =     {0xbf7f0040,         -1, -1, -1, -1,         -1, 0xdf9f6020, -1, -1, -1};
+    static const int32_t typed_expected[] = {0xbf7f0040, 0xdf9f2060, -1, -1, -1, 0xffbf8040, 0xdf9f6020, -1, -1, -1};
+    static const int32_t data[]     = {1, -1, 3, -1, -1, -1, 5, -1, 7, -1};
+    static const int32_t expected[] = {1,  2, 3,  4, -1,  6, 5,  8, 7, -1};
+    static const size_t buffer_size = 40, view1_offset = buffer_size / 2;
+    static const float queue_priority = 1.0f;
+
+    if (!(dxc_compiler = dxcompiler_create()))
+    {
+        /* TODO: use the vkd3d HLSL compiler when buffer UAV support is added. */
+        skip("DXC compiler is not available.\n");
+        return;
+    }
+
+    if (!vulkan_test_context_init_instance(context, instance_extensions, ARRAY_SIZE(instance_extensions)))
+        goto out_release_compiler;
+
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &descriptor_indexing_features;
+    VK_CALL(vkGetPhysicalDeviceFeatures2KHR(context->phys_device, &features2));
+
+    if (!descriptor_indexing_features.runtimeDescriptorArray)
+    {
+        skip("Runtime descriptor arrays are not supported.\n");
+        goto out_destroy_context;
+    }
+
+    VK_CALL(vkGetPhysicalDeviceProperties(context->phys_device, &properties));
+    if (properties.limits.minStorageBufferOffsetAlignment > 4)
+    {
+        /* TODO: Nvidia drivers support an alignment of 4 for scalar access,
+         * so we could potentially check the driver id. */
+        skip("Device min storage buffer alignment %"PRIu64" is greater than 4.\n",
+                properties.limits.minStorageBufferOffsetAlignment);
+        goto out_destroy_context;
+    }
+
+    b = get_vulkan_queue_index(context, VK_QUEUE_COMPUTE_BIT, &queue_desc.queueFamilyIndex);
+    ok(b, "Failed to get compute queue index.\n");
+
+    queue_desc.queueCount = 1;
+    queue_desc.pQueuePriorities = &queue_priority;
+
+    device_desc.pNext = &descriptor_indexing_features;
+    device_desc.pQueueCreateInfos = &queue_desc;
+    device_desc.queueCreateInfoCount = 1;
+    device_desc.ppEnabledExtensionNames = device_extensions;
+    device_desc.enabledExtensionCount = ARRAY_SIZE(device_extensions);
+    device_desc.pEnabledFeatures = &features2.features;
+    if (!vulkan_test_context_init_device(context, &device_desc, queue_desc.queueFamilyIndex, 2, 0))
+        goto out_destroy_context;
+
+    cmd_buffer = context->cmd_buffer;
+    device = context->device;
+
+    binding.binding = 0;
+    binding.descriptorCount = 2;
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binding.pImmutableSamplers = NULL;
+
+    set_desc.bindingCount = 1;
+    set_desc.pBindings = &binding;
+
+    buffer = create_vulkan_buffer(context, buffer_size,
+            VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &memory);
+    ok(buffer, "Failed to create buffer.\n");
+
+    for (i = 0; i < ARRAY_SIZE(buffer_views); ++i)
+    {
+        buffer_views[i] = create_vulkan_buffer_view(context, buffer, VK_FORMAT_R32_UINT, i * view1_offset);
+        ok(buffer_views[i], "Failed to create buffer view.\n");
+        /* Test an R8G8B8A8 typed buffer to check for correct 32-bit -> 8-bit conversion. */
+        typed_buffer_views[i] = create_vulkan_buffer_view(context, buffer, VK_FORMAT_R8G8B8A8_UNORM, i * view1_offset);
+        ok(typed_buffer_views[i], "Failed to create buffer view.\n");
+    }
+
+    info.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO;
+    info.next = &interface_info;
+    info.source_type = VKD3D_SHADER_SOURCE_DXBC_DXIL;
+    info.target_type = VKD3D_SHADER_TARGET_SPIRV_BINARY;
+    info.options = NULL;
+    info.option_count = 0;
+    info.log_level = VKD3D_SHADER_LOG_WARNING;
+    info.source_name = NULL;
+
+    target_binding.type = VKD3D_SHADER_DESCRIPTOR_TYPE_UAV;
+    target_binding.register_space = 0;
+    target_binding.register_index = 0;
+    target_binding.shader_visibility = VKD3D_SHADER_VISIBILITY_COMPUTE;
+    target_binding.flags = VKD3D_SHADER_BINDING_FLAG_BUFFER;
+    target_binding.binding.set = 0;
+    target_binding.binding.binding = 0;
+    target_binding.binding.count = 2;
+
+    memset(&interface_info, 0, sizeof(interface_info));
+    interface_info.next = &target_info;
+    interface_info.type = VKD3D_SHADER_STRUCTURE_TYPE_INTERFACE_INFO;
+    interface_info.bindings = &target_binding;
+    interface_info.binding_count = 1;
+
+    memset(&target_info, 0, sizeof(target_info));
+    target_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SPIRV_TARGET_INFO;
+    target_info.environment = VKD3D_SHADER_SPIRV_ENVIRONMENT_VULKAN_1_0;
+    target_info.extensions = spirv_extensions;
+    target_info.extension_count = ARRAY_SIZE(spirv_extensions);
+
+    typed_uav = features2.features.shaderStorageImageReadWithoutFormat
+            ? VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV_READ_FORMAT_UNKNOWN
+            : VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV_READ_FORMAT_R32;
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        const struct vkd3d_shader_compile_option options[] =
+        {
+            {
+                .name = VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV,
+                .value = tests[i].buffer_uav,
+            },
+            {
+                .name = VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV,
+                .value = typed_uav,
+            },
+        };
+        bool is_typed = tests[i].source == cs_typed_source;
+
+        vkd3d_test_push_context("test %u", i);
+
+        if (is_typed && !features2.features.shaderStorageImageWriteWithoutFormat)
+        {
+            skip("Storage image write without format is not supported.\n");
+            goto skip_test;
+        }
+
+        hr = dxc_compile(dxc_compiler, L"cs_6_0", 0, tests[i].source, &info.source);
+        ok(SUCCEEDED(hr), "Failed to compile shader, hr %#x.\n", hr);
+
+        info.options = options;
+        info.option_count = ARRAY_SIZE(options);
+        rc = vkd3d_shader_compile(&info, &spirv, NULL);
+        todo_if(tests[i].is_todo)
+        ok(rc == VKD3D_OK, "Got unexpected error code %d.\n", rc);
+
+        vkd3d_shader_free_shader_code(&info.source);
+
+        if (rc < 0)
+            goto skip_test;
+
+        vr = VK_CALL(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapping));
+        ok(vr == VK_SUCCESS, "Failed to map memory, vr %d.\n", vr);
+        memcpy(mapping, is_typed ? typed_data : data, sizeof(data));
+        VK_CALL(vkUnmapMemory(device, memory));
+
+        binding.descriptorType = tests[i].descriptor_type;
+
+        vr = VK_CALL(vkCreateDescriptorSetLayout(device, &set_desc, NULL, &set_layout));
+        ok(vr == VK_SUCCESS, "Failed to create descriptor set layout, vr %d.\n", vr);
+
+        pipeline_desc.layout = create_vulkan_pipeline_layout(context, set_layout, 0);
+
+        create_vulkan_shader_stage(context, &pipeline_desc.stage, VK_SHADER_STAGE_COMPUTE_BIT, spirv.size, spirv.code);
+        vkd3d_shader_free_shader_code(&spirv);
+
+        vr = VK_CALL(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_desc, NULL, &pipeline));
+        ok(vr == VK_SUCCESS, "Failed to create pipeline, vr %d.\n", vr);
+        VK_CALL(vkDestroyShaderModule(device, pipeline_desc.stage.module, NULL));
+
+        descriptor_set = create_vulkan_descriptor_set(context, context->descriptor_pool, set_layout);
+
+        begin_command_buffer(context);
+
+        write.dstSet = descriptor_set;
+        write.dstBinding = 0;
+        write.dstArrayElement = 0;
+        write.descriptorCount = 2;
+        write.descriptorType = binding.descriptorType;
+        if (binding.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER)
+        {
+            write.pTexelBufferView = is_typed ? typed_buffer_views : buffer_views;
+        }
+        else
+        {
+            for (j = 0; j < ARRAY_SIZE(buffer_infos); ++j)
+            {
+                buffer_infos[j].buffer = buffer;
+                buffer_infos[j].offset = j * view1_offset;
+                buffer_infos[j].range = VK_WHOLE_SIZE;
+            }
+            write.pBufferInfo = buffer_infos;
+        }
+
+        VK_CALL(vkCmdBindPipeline(cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline));
+        VK_CALL(vkUpdateDescriptorSets(device, 1, &write, 0, NULL));
+        VK_CALL(vkCmdBindDescriptorSets(cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_desc.layout,
+                0, 1, &descriptor_set, 0, NULL));
+        VK_CALL(vkCmdDispatch(cmd_buffer, 1, 1, 1));
+
+        end_command_buffer(context);
+
+        VK_CALL(vkDestroyPipeline(device, pipeline, NULL));
+        vr = VK_CALL(vkResetDescriptorPool(device, context->descriptor_pool, 0));
+        ok(vr == VK_SUCCESS, "Failed to reset descriptor pool, vr %d.\n", vr);
+        VK_CALL(vkDestroyPipelineLayout(device, pipeline_desc.layout, NULL));
+        VK_CALL(vkDestroyDescriptorSetLayout(device, set_layout, NULL));
+
+        vr = VK_CALL(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapping));
+        ok(vr == VK_SUCCESS, "Failed to map memory, vr %d.\n", vr);
+        rb = mapping;
+        for (j = 0; j < ARRAY_SIZE(expected); ++j)
+        {
+            uint32_t u = is_typed ? typed_expected[j] : expected[j];
+            ok(rb[j] == u, "Got %#x, expected %#x at %u.\n", rb[j], u, j);
+        }
+        VK_CALL(vkUnmapMemory(device, memory));
+
+skip_test:
+        vkd3d_test_pop_context();
+    }
+
+    for (i = 0; i < ARRAY_SIZE(buffer_views); ++i)
+    {
+        VK_CALL(vkDestroyBufferView(device, buffer_views[i], NULL));
+        VK_CALL(vkDestroyBufferView(device, typed_buffer_views[i], NULL));
+    }
+    VK_CALL(vkDestroyBuffer(device, buffer, NULL));
+    VK_CALL(vkFreeMemory(device, memory, NULL));
+out_destroy_context:
+    vulkan_test_context_destroy(context);
+out_release_compiler:
+    IDxcCompiler3_Release(dxc_compiler);
+}
+
 START_TEST(vkd3d_shader_api)
 {
     setlocale(LC_ALL, "");
@@ -2124,4 +2469,5 @@ START_TEST(vkd3d_shader_api)
     run_test(test_emit_signature);
     run_test(test_warning_options);
     run_test(test_parameters);
+    run_test(test_uav_buffer_type);
 }
