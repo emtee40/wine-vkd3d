@@ -1072,6 +1072,8 @@ static bool add_array_access(struct hlsl_ctx *ctx, struct hlsl_block *block, str
     {
         if (expr_type->class == HLSL_CLASS_SCALAR)
             hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_INDEX, "Scalar expressions cannot be array-indexed.");
+        else if (expr_type->class == HLSL_CLASS_PATCH)
+            hlsl_fixme(ctx, loc, "Patch array access.");
         else
             hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_INDEX, "Expression cannot be array-indexed.");
         return false;
@@ -2743,6 +2745,12 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
         if (var->reg_reservation.offset_type)
             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
                     "packoffset() is only allowed inside constant buffer declarations.");
+    }
+
+    if (type->class == HLSL_CLASS_PATCH && !v->initializer.args_count)
+    {
+        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_MISSING_INITIALIZER,
+            "Patch variable \"%s\" is missing an initializer.", var->name);
     }
 
     if (ctx->cur_scope == ctx->globals)
@@ -6554,6 +6562,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
     enum hlsl_buffer_type buffer_type;
     enum hlsl_sampler_dim sampler_dim;
     enum hlsl_so_object_type so_type;
+    enum hlsl_patch_kind patch_kind;
     struct hlsl_attribute *attr;
     struct parse_attribute_list attr_list;
     struct hlsl_ir_switch_case *switch_case;
@@ -6596,6 +6605,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
 %token KW_IN
 %token KW_INLINE
 %token KW_INOUT
+%token KW_INPUTPATCH
 %token KW_LINEAR
 %token KW_LINESTREAM
 %token KW_MATRIX
@@ -6604,6 +6614,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
 %token KW_NOPERSPECTIVE
 %token KW_NULL
 %token KW_OUT
+%token KW_OUTPUTPATCH
 %token KW_PACKOFFSET
 %token KW_PASS
 %token KW_PIXELSHADER
@@ -6785,6 +6796,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
 %type <reg_reservation> packoffset_reservation
 
 %type <sampler_dim> texture_type texture_ms_type uav_type rov_type
+%type <patch_kind> patch_type
 
 %type <semantic> semantic
 
@@ -7834,6 +7846,16 @@ resource_format:
                 YYABORT;
         }
 
+patch_type:
+      KW_INPUTPATCH
+        {
+            $$ = HLSL_PATCH_KIND_INPUT;
+        }
+    | KW_OUTPUTPATCH
+        {
+            $$ = HLSL_PATCH_KIND_OUTPUT;
+        }
+
 type_no_void:
       KW_VECTOR '<' type ',' C_INTEGER '>'
         {
@@ -7971,6 +7993,17 @@ type_no_void:
     | so_type '<' type '>'
         {
             $$ = hlsl_new_stream_output_type(ctx, $1, $3);
+        }
+    | patch_type '<' type ',' C_INTEGER '>'
+        {
+            if ($5 < 1)
+            {
+                hlsl_error(ctx, &@5, VKD3D_SHADER_ERROR_HLSL_INVALID_SIZE,
+                        "Control point size %d is not positive.", $5);
+                YYABORT;
+            }
+
+            $$ = hlsl_new_patch_type(ctx, $1, $3, $5);
         }
     | KW_RWBYTEADDRESSBUFFER
         {

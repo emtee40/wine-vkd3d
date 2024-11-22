@@ -160,9 +160,9 @@ static bool replace_deref_path_with_offset(struct hlsl_ctx *ctx, struct hlsl_der
 
     type = hlsl_deref_get_type(ctx, deref);
 
-    /* Instructions that directly refer to structs or arrays (instead of single-register components)
+    /* Instructions that directly refer to structs, arrays or patches (instead of single-register components)
      * are removed later by dce. So it is not a problem to just cleanup their derefs. */
-    if (type->class == HLSL_CLASS_STRUCT || type->class == HLSL_CLASS_ARRAY)
+    if (type->class == HLSL_CLASS_STRUCT || type->class == HLSL_CLASS_ARRAY || type->class == HLSL_CLASS_PATCH)
     {
         hlsl_cleanup_deref(deref);
         return true;
@@ -1680,6 +1680,7 @@ static bool copy_propagation_transform_load(struct hlsl_ctx *ctx,
         case HLSL_CLASS_GEOMETRY_SHADER:
         case HLSL_CLASS_BLEND_STATE:
         case HLSL_CLASS_STREAM_OUTPUT:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_NULL:
             break;
 

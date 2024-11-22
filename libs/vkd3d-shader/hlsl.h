@@ -105,6 +105,7 @@ enum hlsl_type_class
     HLSL_CLASS_CONSTANT_BUFFER,
     HLSL_CLASS_BLEND_STATE,
     HLSL_CLASS_STREAM_OUTPUT,
+    HLSL_CLASS_PATCH,
     HLSL_CLASS_VOID,
     HLSL_CLASS_NULL,
     HLSL_CLASS_ERROR,
@@ -147,6 +148,12 @@ enum hlsl_so_object_type
     HLSL_STREAM_OUTPUT_POINT_STREAM,
     HLSL_STREAM_OUTPUT_LINE_STREAM,
     HLSL_STREAM_OUTPUT_TRIANGLE_STREAM,
+};
+
+enum hlsl_patch_kind
+{
+    HLSL_PATCH_KIND_INPUT,
+    HLSL_PATCH_KIND_OUTPUT,
 };
 
 enum hlsl_regset
@@ -225,6 +232,13 @@ struct hlsl_type
             /* The type is a rasteriser-ordered view. */
             bool rasteriser_ordered;
         } resource;
+        /* Additional information if type is HLSL_CLASS_PATCH. */
+        struct
+        {
+            enum hlsl_patch_kind kind;
+            struct hlsl_type *type;
+            unsigned int control_points_count;
+        } patch;
         /* Additional field to distinguish object types. Currently used only for technique types. */
         unsigned int version;
         /* Additional information if type is HLSL_CLASS_STREAM_OUTPUT. */
@@ -1590,6 +1604,8 @@ struct hlsl_type *hlsl_new_texture_type(struct hlsl_ctx *ctx, enum hlsl_sampler_
 struct hlsl_type *hlsl_new_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
         struct hlsl_type *format, bool rasteriser_ordered);
 struct hlsl_type *hlsl_new_cb_type(struct hlsl_ctx *ctx, struct hlsl_type *format);
+struct hlsl_type *hlsl_new_patch_type(struct hlsl_ctx *ctx,  enum hlsl_patch_kind kind, struct hlsl_type *format,
+        unsigned int control_points_count);
 struct hlsl_ir_node *hlsl_new_uint_constant(struct hlsl_ctx *ctx, unsigned int n,
         const struct vkd3d_shader_location *loc);
 struct hlsl_ir_node *hlsl_new_null_constant(struct hlsl_ctx *ctx, const struct vkd3d_shader_location *loc);

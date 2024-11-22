@@ -3333,6 +3333,7 @@ static D3D_SHADER_VARIABLE_CLASS sm4_class(const struct hlsl_type *type)
         case HLSL_CLASS_GEOMETRY_SHADER:
         case HLSL_CLASS_BLEND_STATE:
         case HLSL_CLASS_STREAM_OUTPUT:
+        case HLSL_CLASS_PATCH:
         case HLSL_CLASS_NULL:
             break;
     }
