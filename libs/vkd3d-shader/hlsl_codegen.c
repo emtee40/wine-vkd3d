@@ -1359,8 +1359,10 @@ struct copy_propagation_var_def
 
 struct copy_propagation_state
 {
-    struct rb_tree var_defs;
-    struct copy_propagation_state *parent;
+    struct rb_tree *scope_var_defs;
+    size_t scopes_len, scopes_capacity;
+    struct hlsl_ir_node *stop;
+    bool stopped;
 };
 
 static int copy_propagation_var_def_compare(const void *key, const struct rb_entry *entry)
@@ -1382,6 +1384,40 @@ static void copy_propagation_var_def_destroy(struct rb_entry *entry, void *conte
     vkd3d_free(var_def);
 }
 
+static size_t copy_propagation_push_scope(struct hlsl_ctx *ctx, struct copy_propagation_state *state)
+{
+    state->scopes_len++;
+
+    if (!(hlsl_array_reserve(ctx, (void **) &state->scope_var_defs, &state->scopes_capacity, state->scopes_len, sizeof(struct rb_tree))))
+        return false;
+
+    rb_init(&state->scope_var_defs[state->scopes_len - 1], copy_propagation_var_def_compare);
+
+    return state->scopes_len;
+}
+
+static size_t copy_propagation_pop_scope(struct copy_propagation_state *state)
+{
+    state->scopes_len--;
+    rb_destroy(&state->scope_var_defs[state->scopes_len], copy_propagation_var_def_destroy, NULL);
+
+    return state->scopes_len;
+}
+
+static bool copy_propagation_state_init(struct hlsl_ctx *ctx, struct copy_propagation_state *state)
+{
+    memset(state, 0, sizeof(*state));
+
+    return copy_propagation_push_scope(ctx, state);
+}
+
+static void copy_propagation_state_destroy(struct copy_propagation_state *state)
+{
+    while (copy_propagation_pop_scope(state));
+
+    vkd3d_free(state->scope_var_defs);
+}
+
 static struct copy_propagation_value *copy_propagation_get_value_at_time(
         struct copy_propagation_component_trace *trace, unsigned int time)
 {
@@ -1399,9 +1435,10 @@ static struct copy_propagation_value *copy_propagation_get_value_at_time(
 static struct copy_propagation_value *copy_propagation_get_value(const struct copy_propagation_state *state,
         const struct hlsl_ir_var *var, unsigned int component, unsigned int time)
 {
-    for (; state; state = state->parent)
+    for (size_t i = state->scopes_len - 1; i < state->scopes_len; i--)
     {
-        struct rb_entry *entry = rb_get(&state->var_defs, var);
+        struct rb_tree *tree = &state->scope_var_defs[i];
+        struct rb_entry *entry = rb_get(tree, var);
         if (entry)
         {
             struct copy_propagation_var_def *var_def = RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
@@ -1427,7 +1464,8 @@ static struct copy_propagation_value *copy_propagation_get_value(const struct co
 static struct copy_propagation_var_def *copy_propagation_create_var_def(struct hlsl_ctx *ctx,
         struct copy_propagation_state *state, struct hlsl_ir_var *var)
 {
-    struct rb_entry *entry = rb_get(&state->var_defs, var);
+    struct rb_tree *tree = &state->scope_var_defs[state->scopes_len - 1];
+    struct rb_entry *entry = rb_get(tree, var);
     struct copy_propagation_var_def *var_def;
     unsigned int component_count = hlsl_type_component_count(var->data_type);
     int res;
@@ -1440,7 +1478,7 @@ static struct copy_propagation_var_def *copy_propagation_create_var_def(struct h
 
     var_def->var = var;
 
-    res = rb_put(&state->var_defs, var, &var_def->entry);
+    res = rb_put(tree, var, &var_def->entry);
     VKD3D_ASSERT(!res);
 
     return var_def;
@@ -1820,18 +1858,6 @@ static void copy_propagation_record_store(struct hlsl_ctx *ctx, struct hlsl_ir_s
     }
 }
 
-static void copy_propagation_state_init(struct hlsl_ctx *ctx, struct copy_propagation_state *state,
-        struct copy_propagation_state *parent)
-{
-    rb_init(&state->var_defs, copy_propagation_var_def_compare);
-    state->parent = parent;
-}
-
-static void copy_propagation_state_destroy(struct copy_propagation_state *state)
-{
-    rb_destroy(&state->var_defs, copy_propagation_var_def_destroy, NULL);
-}
-
 static void copy_propagation_invalidate_from_block(struct hlsl_ctx *ctx, struct copy_propagation_state *state,
         struct hlsl_block *block, unsigned int time)
 {
@@ -1900,16 +1926,19 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
 static bool copy_propagation_process_if(struct hlsl_ctx *ctx, struct hlsl_ir_if *iff,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     bool progress = false;
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &iff->then_block, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &iff->then_block, state);
+    if (state->stopped)
+        return progress;
+    copy_propagation_pop_scope(state);
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &iff->else_block, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &iff->else_block, state);
+    if (state->stopped)
+        return progress;
+    copy_propagation_pop_scope(state);
 
     /* Ideally we'd invalidate the outer state looking at what was
      * touched in the two inner states, but this doesn't work for
@@ -1924,14 +1953,16 @@ static bool copy_propagation_process_if(struct hlsl_ctx *ctx, struct hlsl_ir_if 
 static bool copy_propagation_process_loop(struct hlsl_ctx *ctx, struct hlsl_ir_loop *loop,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     bool progress = false;
 
     copy_propagation_invalidate_from_block(ctx, state, &loop->body, loop->node.index);
+    copy_propagation_invalidate_from_block(ctx, state, &loop->iter, loop->node.index);
 
-    copy_propagation_state_init(ctx, &inner_state, state);
-    progress |= copy_propagation_transform_block(ctx, &loop->body, &inner_state);
-    copy_propagation_state_destroy(&inner_state);
+    copy_propagation_push_scope(ctx, state);
+    progress |= copy_propagation_transform_block(ctx, &loop->body, state);
+    if (state->stopped)
+        return progress;
+    copy_propagation_pop_scope(state);
 
     return progress;
 }
@@ -1939,15 +1970,16 @@ static bool copy_propagation_process_loop(struct hlsl_ctx *ctx, struct hlsl_ir_l
 static bool copy_propagation_process_switch(struct hlsl_ctx *ctx, struct hlsl_ir_switch *s,
         struct copy_propagation_state *state)
 {
-    struct copy_propagation_state inner_state;
     struct hlsl_ir_switch_case *c;
     bool progress = false;
 
     LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
     {
-        copy_propagation_state_init(ctx, &inner_state, state);
-        progress |= copy_propagation_transform_block(ctx, &c->body, &inner_state);
-        copy_propagation_state_destroy(&inner_state);
+        copy_propagation_push_scope(ctx, state);
+        progress |= copy_propagation_transform_block(ctx, &c->body, state);
+        if (state->stopped)
+            return progress;
+        copy_propagation_pop_scope(state);
     }
 
     LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
@@ -1966,6 +1998,12 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
 
     LIST_FOR_EACH_ENTRY_SAFE(instr, next, &block->instrs, struct hlsl_ir_node, entry)
     {
+        if (instr == state->stop)
+        {
+            state->stopped = true;
+            return progress;
+        }
+
         switch (instr->type)
         {
             case HLSL_IR_LOAD:
@@ -2003,6 +2041,9 @@ static bool copy_propagation_transform_block(struct hlsl_ctx *ctx, struct hlsl_b
             default:
                 break;
         }
+
+        if (state->stopped)
+            return progress;
     }
 
     return progress;
@@ -2015,7 +2056,7 @@ bool hlsl_copy_propagation_execute(struct hlsl_ctx *ctx, struct hlsl_block *bloc
 
     index_instructions(block, 2);
 
-    copy_propagation_state_init(ctx, &state, NULL);
+    copy_propagation_state_init(ctx, &state);
 
     progress = copy_propagation_transform_block(ctx, block, &state);
 
@@ -6392,41 +6433,63 @@ void hlsl_lower_index_loads(struct hlsl_ctx *ctx, struct hlsl_block *body)
     lower_ir(ctx, lower_index_loads, body);
 }
 
-void hlsl_run_const_passes(struct hlsl_ctx *ctx, struct hlsl_block *body)
+static void run_const_passes_with_state(struct hlsl_ctx *ctx, struct hlsl_block *block,
+        struct copy_propagation_state *state, unsigned int *index)
 {
+    unsigned int current_index;
+    size_t scopes_depth;
     bool progress;
 
-    lower_ir(ctx, lower_matrix_swizzles, body);
+    lower_ir(ctx, lower_matrix_swizzles, block);
 
-    lower_ir(ctx, lower_broadcasts, body);
-    while (hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL));
+    lower_ir(ctx, lower_broadcasts, block);
+    while (hlsl_transform_ir(ctx, fold_redundant_casts, block, NULL));
     do
     {
-        progress = hlsl_transform_ir(ctx, split_array_copies, body, NULL);
-        progress |= hlsl_transform_ir(ctx, split_struct_copies, body, NULL);
-    }
-    while (progress);
-    hlsl_transform_ir(ctx, split_matrix_copies, body, NULL);
-
-    lower_ir(ctx, lower_narrowing_casts, body);
-    lower_ir(ctx, lower_int_dot, body);
-    lower_ir(ctx, lower_int_division, body);
-    lower_ir(ctx, lower_int_modulus, body);
-    lower_ir(ctx, lower_int_abs, body);
-    lower_ir(ctx, lower_casts_to_bool, body);
-    lower_ir(ctx, lower_float_modulus, body);
-    hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL);
-
-    do
-    {
-        progress = hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, body, NULL);
-        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_identities, body, NULL);
-        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_swizzles, body, NULL);
-        progress |= hlsl_copy_propagation_execute(ctx, body);
-        progress |= hlsl_transform_ir(ctx, fold_swizzle_chains, body, NULL);
-        progress |= hlsl_transform_ir(ctx, remove_trivial_swizzles, body, NULL);
-        progress |= hlsl_transform_ir(ctx, remove_trivial_conditional_branches, body, NULL);
+        progress = hlsl_transform_ir(ctx, split_array_copies, block, NULL);
+        progress |= hlsl_transform_ir(ctx, split_struct_copies, block, NULL);
     } while (progress);
+    hlsl_transform_ir(ctx, split_matrix_copies, block, NULL);
+
+    lower_ir(ctx, lower_narrowing_casts, block);
+    lower_ir(ctx, lower_int_dot, block);
+    lower_ir(ctx, lower_int_division, block);
+    lower_ir(ctx, lower_int_modulus, block);
+    lower_ir(ctx, lower_int_abs, block);
+    lower_ir(ctx, lower_casts_to_bool, block);
+    lower_ir(ctx, lower_float_modulus, block);
+    hlsl_transform_ir(ctx, fold_redundant_casts, block, NULL);
+
+    scopes_depth = state->scopes_len - 1;
+    do
+    {
+        state->stopped = false;
+        for (size_t i = state->scopes_len; scopes_depth < i; --i)
+            copy_propagation_pop_scope(state);
+        copy_propagation_push_scope(ctx, state);
+
+        progress = hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, block, NULL);
+        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_identities, block, NULL);
+        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_swizzles, block, NULL);
+
+        current_index = index_instructions(block, *index);
+        progress |= copy_propagation_transform_block(ctx, block, state);
+
+        progress |= hlsl_transform_ir(ctx, fold_swizzle_chains, block, NULL);
+        progress |= hlsl_transform_ir(ctx, remove_trivial_swizzles, block, NULL);
+        progress |= hlsl_transform_ir(ctx, remove_trivial_conditional_branches, block, NULL);
+    } while (progress);
+
+    *index = current_index;
+}
+
+void hlsl_run_const_passes(struct hlsl_ctx *ctx, struct hlsl_block *body)
+{
+    struct copy_propagation_state state;
+    unsigned int index = 2;
+    copy_propagation_state_init(ctx, &state);
+    run_const_passes_with_state(ctx, body, &state, &index);
+    copy_propagation_state_destroy(&state);
 }
 
 static void generate_vsir_signature_entry(struct hlsl_ctx *ctx, struct vsir_program *program,
@@ -9031,39 +9094,126 @@ static void sm4_generate_vsir(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl
         sm4_generate_vsir_add_function(ctx, ctx->patch_constant_func, config_flags, program);
 }
 
-static struct hlsl_ir_jump *loop_unrolling_find_jump(struct hlsl_block *block, struct hlsl_ir_node *stop_point,
-        struct hlsl_block **found_block)
+static bool loop_unrolling_generate_const_bool_store(struct hlsl_ctx *ctx,
+        struct hlsl_ir_var *var, bool val, struct hlsl_block *block, struct vkd3d_shader_location *loc)
 {
-    struct hlsl_ir_node *node;
+    struct hlsl_ir_node *const_node, *store;
 
-    LIST_FOR_EACH_ENTRY(node, &block->instrs, struct hlsl_ir_node, entry)
+    if (!(const_node = hlsl_new_bool_constant(ctx, val, loc)))
+        return false;
+    hlsl_block_add_instr(block, const_node);
+
+    if (!(store = hlsl_new_simple_store(ctx, var, const_node)))
+        return false;
+    hlsl_block_add_instr(block, store);
+
+    return true;
+}
+
+static bool loop_unrolling_remove_jumps_recurse(struct hlsl_ctx *ctx,
+        struct hlsl_block *block, struct hlsl_ir_var *loop_broken, struct hlsl_ir_var *loop_continued);
+
+static bool loop_unrolling_remove_jumps_visit(struct hlsl_ctx *ctx,
+        struct hlsl_ir_node *node, struct hlsl_ir_var *loop_broken, struct hlsl_ir_var *loop_continued)
+{
+    if (node->type == HLSL_IR_IF)
     {
-        if (node == stop_point)
-            return NULL;
+        struct hlsl_ir_if *iff = hlsl_ir_if(node);
+        if (loop_unrolling_remove_jumps_recurse(ctx, &iff->then_block, loop_broken, loop_continued))
+            return true;
 
-        if (node->type == HLSL_IR_IF)
+        if (loop_unrolling_remove_jumps_recurse(ctx, &iff->else_block, loop_broken, loop_continued))
+            return true;
+    }
+    else if (node->type == HLSL_IR_JUMP)
+    {
+        struct hlsl_ir_jump *jump = hlsl_ir_jump(node);
+
+        if (jump->type == HLSL_IR_JUMP_UNRESOLVED_CONTINUE || jump->type == HLSL_IR_JUMP_BREAK)
         {
-            struct hlsl_ir_if *iff = hlsl_ir_if(node);
-            struct hlsl_ir_jump *jump = NULL;
+            struct hlsl_block draft;
+            struct hlsl_ir_var *var;
+            hlsl_block_init(&draft);
 
-            if ((jump = loop_unrolling_find_jump(&iff->then_block, stop_point, found_block)))
-                return jump;
-            if ((jump = loop_unrolling_find_jump(&iff->else_block, stop_point, found_block)))
-                return jump;
-        }
-        else if (node->type == HLSL_IR_JUMP)
-        {
-            struct hlsl_ir_jump *jump = hlsl_ir_jump(node);
+            if (jump->type == HLSL_IR_JUMP_UNRESOLVED_CONTINUE)
+                var = loop_continued;
+            else
+                var = loop_broken;
 
-            if (jump->type == HLSL_IR_JUMP_BREAK || jump->type == HLSL_IR_JUMP_CONTINUE)
-            {
-                *found_block = block;
-                return jump;
-            }
+            if (!loop_unrolling_generate_const_bool_store(ctx, var, true, &draft, &jump->node.loc))
+                return false;
+
+            list_move_before(&jump->node.entry, &draft.instrs);
+            list_remove(&jump->node.entry);
+            hlsl_free_instr(&jump->node);
+
+            return true;
         }
     }
 
-    return NULL;
+    return false;
+}
+
+static struct hlsl_ir_if *loop_unrolling_generate_var_check(struct hlsl_ctx *ctx,
+        struct hlsl_block *dst, struct hlsl_ir_var *var, struct vkd3d_shader_location *loc)
+{
+    struct hlsl_ir_node *cond, *iff;
+    struct hlsl_block then_block;
+    struct hlsl_ir_load *load;
+
+    hlsl_block_init(&then_block);
+
+    if (!(load = hlsl_new_var_load(ctx, var, loc)))
+        return NULL;
+    hlsl_block_add_instr(dst, &load->node);
+
+    if (!(cond = hlsl_new_unary_expr(ctx, HLSL_OP1_LOGIC_NOT, &load->node, loc)))
+        return NULL;
+    hlsl_block_add_instr(dst, cond);
+
+    if (!(iff = hlsl_new_if(ctx, cond, &then_block, NULL, loc)))
+        return NULL;
+    hlsl_block_add_instr(dst, iff);
+
+    return hlsl_ir_if(iff);
+}
+
+static bool loop_unrolling_remove_jumps_recurse(struct hlsl_ctx *ctx,
+        struct hlsl_block *block, struct hlsl_ir_var *loop_broken, struct hlsl_ir_var *loop_continued)
+{
+    struct hlsl_ir_node *node, *next;
+
+    LIST_FOR_EACH_ENTRY_SAFE(node, next, &block->instrs, struct hlsl_ir_node, entry)
+    {
+        struct hlsl_ir_if *broken_check, *continued_check;
+        struct hlsl_block draft;
+
+        if (!loop_unrolling_remove_jumps_visit(ctx, node, loop_broken, loop_continued))
+            continue;
+
+        if (&next->entry == &block->instrs)
+            return true;
+
+        hlsl_block_init(&draft);
+
+        broken_check = loop_unrolling_generate_var_check(ctx, &draft, loop_broken, &next->loc);
+        continued_check = loop_unrolling_generate_var_check(ctx, &broken_check->then_block,
+                loop_continued, &next->loc);
+
+        list_move_before(&next->entry, &draft.instrs);
+
+        list_move_slice_tail(&continued_check->then_block.instrs, &next->entry, list_tail(&block->instrs));
+
+        return true;
+    }
+
+    return false;
+}
+
+static void loop_unrolling_remove_jumps(struct hlsl_ctx *ctx,
+        struct hlsl_block *block, struct hlsl_ir_var *loop_broken, struct hlsl_ir_var *loop_continued)
+{
+    while (loop_unrolling_remove_jumps_recurse(ctx, block, loop_broken, loop_continued));
 }
 
 static unsigned int loop_unrolling_get_max_iterations(struct hlsl_ctx *ctx, struct hlsl_ir_loop *loop)
@@ -9084,44 +9234,94 @@ static unsigned int loop_unrolling_get_max_iterations(struct hlsl_ctx *ctx, stru
     return 1024;
 }
 
-static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
-        struct hlsl_block *loop_parent, struct hlsl_ir_loop *loop)
+static bool loop_unrolling_check_val(struct copy_propagation_state *state, struct hlsl_ir_var *var)
 {
-    unsigned int max_iterations, i;
+    struct copy_propagation_value *val;
+
+    if ((val = copy_propagation_get_value(state, var, 0, (unsigned int) -1)) &&
+            val->node->type == HLSL_IR_CONSTANT)
+    {
+        struct hlsl_ir_constant *const_val = hlsl_ir_constant(val->node);
+        if (const_val->value.u[0].u)
+            return true;
+    }
+
+    return false;
+}
+
+static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_loop *loop)
+{
+    struct hlsl_block draft, tmp_dst, loop_body;
+    struct hlsl_ir_var *broken, *continued;
+    unsigned int max_iterations, i, index;
+    struct copy_propagation_state state;
+    struct hlsl_ir_if *target_if;
+
+    if (!(broken = hlsl_new_synthetic_var(ctx, "broken",
+            hlsl_get_scalar_type(ctx, HLSL_TYPE_BOOL), &loop->node.loc)))
+        goto fail;
+
+    if (!(continued = hlsl_new_synthetic_var(ctx, "continued",
+            hlsl_get_scalar_type(ctx, HLSL_TYPE_BOOL), &loop->node.loc)))
+        goto fail;
+
+    hlsl_block_init(&draft);
+    hlsl_block_init(&tmp_dst);
 
     max_iterations = loop_unrolling_get_max_iterations(ctx, loop);
+    copy_propagation_state_init(ctx, &state);
+    index = 2;
+    state.stop = &loop->node;
+    run_const_passes_with_state(ctx, block, &state, &index);
+    state.stopped = false;
+    index = loop->node.index;
+
+    if (!loop_unrolling_generate_const_bool_store(ctx, broken, false, &tmp_dst, &loop->node.loc))
+        goto fail;
+    hlsl_block_add_block(&draft, &tmp_dst);
+
+    if (!loop_unrolling_generate_const_bool_store(ctx, continued, false, &tmp_dst, &loop->node.loc))
+        goto fail;
+    hlsl_block_add_block(&draft, &tmp_dst);
+
+    if (!(target_if = loop_unrolling_generate_var_check(ctx, &tmp_dst, broken, &loop->node.loc)))
+        goto fail;
+    state.stop = LIST_ENTRY(list_head(&tmp_dst.instrs), struct hlsl_ir_node, entry);
+    hlsl_block_add_block(&draft, &tmp_dst);
+
+    copy_propagation_push_scope(ctx, &state);
+    run_const_passes_with_state(ctx, &draft, &state, &index);
+
+    /* As an optimization, we only remove jumps from the loop's body once. */
+    if (!hlsl_clone_block(ctx, &loop_body, &loop->body))
+        goto fail;
+    loop_unrolling_remove_jumps(ctx, &loop_body, broken, continued);
 
     for (i = 0; i < max_iterations; ++i)
     {
-        struct hlsl_block tmp_dst, *jump_block;
-        struct hlsl_ir_jump *jump = NULL;
+        copy_propagation_push_scope(ctx, &state);
 
-        if (!hlsl_clone_block(ctx, &tmp_dst, &loop->body))
-            return false;
-        list_move_before(&loop->node.entry, &tmp_dst.instrs);
-        hlsl_block_cleanup(&tmp_dst);
+        if (!loop_unrolling_generate_const_bool_store(ctx, continued, false, &tmp_dst, &loop->node.loc))
+            goto fail;
+        hlsl_block_add_block(&target_if->then_block, &tmp_dst);
 
-        hlsl_run_const_passes(ctx, block);
+        if (!hlsl_clone_block(ctx, &tmp_dst, &loop_body))
+            goto fail;
+        hlsl_block_add_block(&target_if->then_block, &tmp_dst);
 
-        if ((jump = loop_unrolling_find_jump(loop_parent, &loop->node, &jump_block)))
-        {
-            enum hlsl_ir_jump_type type = jump->type;
+        run_const_passes_with_state(ctx, &target_if->then_block, &state, &index);
 
-            if (jump_block != loop_parent)
-            {
-                if (loop->unroll_type == HLSL_IR_LOOP_FORCE_UNROLL)
-                    hlsl_error(ctx, &jump->node.loc, VKD3D_SHADER_ERROR_HLSL_FAILED_FORCED_UNROLL,
-                        "Unable to unroll loop, unrolling loops with conditional jumps is currently not supported.");
-                return false;
-            }
+        if (loop_unrolling_check_val(&state, broken))
+            break;
 
-            list_move_slice_tail(&tmp_dst.instrs, &jump->node.entry, list_prev(&loop_parent->instrs, &loop->node.entry));
-            hlsl_block_cleanup(&tmp_dst);
+        if (!(target_if = loop_unrolling_generate_var_check(ctx, &tmp_dst, broken, &loop->node.loc)))
+            goto fail;
+        hlsl_block_add_block(&draft, &tmp_dst);
 
-            if (type == HLSL_IR_JUMP_BREAK)
-                break;
-        }
-    }
+        if (!hlsl_clone_block(ctx, &tmp_dst, &loop->iter))
+            goto fail;
+        hlsl_block_add_block(&target_if->then_block, &tmp_dst);
+   }
 
     /* Native will not emit an error if max_iterations has been reached with an
      * explicit limit. It also will not insert a loop if there are iterations left
@@ -9131,119 +9331,117 @@ static bool loop_unrolling_unroll_loop(struct hlsl_ctx *ctx, struct hlsl_block *
         if (loop->unroll_type == HLSL_IR_LOOP_FORCE_UNROLL)
             hlsl_error(ctx, &loop->node.loc, VKD3D_SHADER_ERROR_HLSL_FAILED_FORCED_UNROLL,
                 "Unable to unroll loop, maximum iterations reached (%u).", max_iterations);
-        return false;
+        goto fail;
     }
 
+    hlsl_block_cleanup(&loop_body);
+    copy_propagation_state_destroy(&state);
+
+    list_move_before(&loop->node.entry, &draft.instrs);
+    hlsl_block_cleanup(&draft);
     list_remove(&loop->node.entry);
     hlsl_free_instr(&loop->node);
 
     return true;
+
+fail:
+    hlsl_block_cleanup(&loop_body);
+    copy_propagation_state_destroy(&state);
+    hlsl_block_cleanup(&draft);
+
+    return false;
 }
 
-/*
- * loop_unrolling_find_unrollable_loop() is not the normal way to do things;
- * normal passes simply iterate over the whole block and apply a transformation
- * to every relevant instruction. However, loop unrolling can fail, and we want
- * to leave the loop in its previous state in that case. That isn't a problem by
- * itself, except that loop unrolling needs copy-prop in order to work properly,
- * and copy-prop state at the time of the loop depends on the rest of the program
- * up to that point. This means we need to clone the whole program, and at that
- * point we have to search it again anyway to find the clone of the loop we were
- * going to unroll.
- *
- * FIXME: Ideally we wouldn't clone the whole program; instead we would run copyprop
- * up until the loop instruction, clone just that loop, then use copyprop again
- * with the saved state after unrolling. However, copyprop currently isn't built
- * for that yet [notably, it still relies on indices]. Note also this still doesn't
- * really let us use transform_ir() anyway [since we don't have a good way to say
- * "copyprop from the beginning of the program up to the instruction we're
- * currently processing" from the callback]; we'd have to use a dedicated
- * recursive function instead. */
-static struct hlsl_ir_loop *loop_unrolling_find_unrollable_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
-        struct hlsl_block **containing_block)
+static bool unroll_loops(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, void *context)
 {
-    struct hlsl_ir_node *instr;
+    struct hlsl_ir_loop *loop;
+    struct hlsl_block *block = context;
 
-    LIST_FOR_EACH_ENTRY(instr, &block->instrs, struct hlsl_ir_node, entry)
+    if (node->type != HLSL_IR_LOOP)
+        return true;
+
+    loop = hlsl_ir_loop(node);
+
+    if (loop->unroll_type != HLSL_IR_LOOP_UNROLL && loop->unroll_type != HLSL_IR_LOOP_FORCE_UNROLL)
+        return true;
+
+    if (!loop_unrolling_unroll_loop(ctx, block, loop))
+        loop->unroll_type = HLSL_IR_LOOP_FORCE_LOOP;
+
+    return true;
+}
+
+static bool resolve_loops(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, void *context)
+{
+    struct hlsl_ir_loop *loop;
+
+    if (node->type != HLSL_IR_LOOP)
+        return true;
+
+    loop = hlsl_ir_loop(node);
+
+    hlsl_block_add_block(&loop->body, &loop->iter);
+    return true;
+}
+
+static void resolve_continues(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_loop *last_loop)
+{
+    struct hlsl_ir_node *node;
+
+    LIST_FOR_EACH_ENTRY(node, &block->instrs, struct hlsl_ir_node, entry)
     {
-        switch (instr->type)
+        switch (node->type)
         {
             case HLSL_IR_LOOP:
             {
-                struct hlsl_ir_loop *nested_loop;
-                struct hlsl_ir_loop *loop = hlsl_ir_loop(instr);
+                struct hlsl_ir_loop *loop = hlsl_ir_loop(node);
 
-                if ((nested_loop = loop_unrolling_find_unrollable_loop(ctx, &loop->body, containing_block)))
-                    return nested_loop;
-
-                if (loop->unroll_type == HLSL_IR_LOOP_UNROLL || loop->unroll_type == HLSL_IR_LOOP_FORCE_UNROLL)
-                {
-                    *containing_block = block;
-                    return loop;
-                }
-
+                resolve_continues(ctx, &loop->body, loop);
                 break;
             }
             case HLSL_IR_IF:
             {
-                struct hlsl_ir_loop *loop;
-                struct hlsl_ir_if *iff = hlsl_ir_if(instr);
-
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->then_block, containing_block)))
-                    return loop;
-                if ((loop = loop_unrolling_find_unrollable_loop(ctx, &iff->else_block, containing_block)))
-                    return loop;
-
+                struct hlsl_ir_if *iff = hlsl_ir_if(node);
+                resolve_continues(ctx, &iff->then_block, last_loop);
+                resolve_continues(ctx, &iff->else_block, last_loop);
                 break;
             }
             case HLSL_IR_SWITCH:
             {
-                struct hlsl_ir_switch *s = hlsl_ir_switch(instr);
+                struct hlsl_ir_switch *s = hlsl_ir_switch(node);
                 struct hlsl_ir_switch_case *c;
-                struct hlsl_ir_loop *loop;
 
                 LIST_FOR_EACH_ENTRY(c, &s->cases, struct hlsl_ir_switch_case, entry)
                 {
-                    if ((loop = loop_unrolling_find_unrollable_loop(ctx, &c->body, containing_block)))
-                        return loop;
+                    resolve_continues(ctx, &c->body, last_loop);
                 }
 
+                break;
+            }
+            case HLSL_IR_JUMP:
+            {
+                struct hlsl_ir_jump *jump = hlsl_ir_jump(node);
+
+                if (jump->type != HLSL_IR_JUMP_UNRESOLVED_CONTINUE)
+                    break;
+
+                if (last_loop->type == HLSL_IR_LOOP_FOR)
+                {
+                    struct hlsl_block draft;
+
+                    if (!hlsl_clone_block(ctx, &draft, &last_loop->iter))
+                        return;
+
+                    list_move_before(&node->entry, &draft.instrs);
+                    hlsl_block_cleanup(&draft);
+                }
+
+                jump->type = HLSL_IR_JUMP_CONTINUE;
                 break;
             }
             default:
                 break;
         }
-    }
-
-    return NULL;
-}
-
-static void transform_unroll_loops(struct hlsl_ctx *ctx, struct hlsl_block *block)
-{
-    while (true)
-    {
-        struct hlsl_block clone, *containing_block;
-        struct hlsl_ir_loop *loop, *cloned_loop;
-
-        if (!(loop = loop_unrolling_find_unrollable_loop(ctx, block, &containing_block)))
-            return;
-
-        if (!hlsl_clone_block(ctx, &clone, block))
-            return;
-
-        cloned_loop = loop_unrolling_find_unrollable_loop(ctx, &clone, &containing_block);
-        VKD3D_ASSERT(cloned_loop);
-
-        if (!loop_unrolling_unroll_loop(ctx, &clone, containing_block, cloned_loop))
-        {
-            hlsl_block_cleanup(&clone);
-            loop->unroll_type = HLSL_IR_LOOP_FORCE_LOOP;
-            continue;
-        }
-
-        hlsl_block_cleanup(block);
-        hlsl_block_init(block);
-        hlsl_block_add_block(block, &clone);
     }
 }
 
@@ -9493,7 +9691,9 @@ static void process_entry_function(struct hlsl_ctx *ctx,
         hlsl_transform_ir(ctx, lower_discard_nz, body, NULL);
     }
 
-    transform_unroll_loops(ctx, body);
+    hlsl_transform_ir(ctx, unroll_loops, body, body);
+    resolve_continues(ctx, body, NULL);
+    hlsl_transform_ir(ctx, resolve_loops, body, NULL);
     hlsl_run_const_passes(ctx, body);
 
     remove_unreachable_code(ctx, body);
